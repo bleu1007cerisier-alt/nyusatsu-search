@@ -1,15 +1,19 @@
 """
-スクレイパー：主要官公庁の入札・プロポーザル情報を収集する
-フェーズ1対象：
-  - 調達ポータル（chotatsu.gpo.go.jp）
-  - e-Gov 電子調達（一部）
-  - 国土交通省
+スクレイパー：官公庁・公的機関の入札・公募情報を収集する。
+
+設計方針:
+  - 文字コードは自動判定（日本語の官公庁サイトは Shift_JIS が多い）
+  - 静的HTMLで一覧を公開している、確実に取得できるソースのみを対象とする
+  - 取得に失敗した場合のみサンプルデータにフォールバックする
+
+現在の対象:
+  - NEDO（新エネルギー・産業技術総合開発機構）公募情報
 """
 
 import aiohttp
 import asyncio
+import re
 from bs4 import BeautifulSoup
-from datetime import datetime
 from typing import List, Dict
 import logging
 
@@ -17,127 +21,124 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (compatible; NyusatsuSearch/1.0; +https://nyusatsu-search.example.com/bot)"
+    "User-Agent": "Mozilla/5.0 (compatible; NyusatsuSearch/1.0; +https://nyusatsu-search.onrender.com/)"
 }
 
 
-async def fetch_html(session: aiohttp.ClientSession, url: str) -> str:
+def _decode(raw: bytes, content_type: str = "") -> str:
+    """バイト列を適切な文字コードでデコードする（Shift_JIS / UTF-8 / EUC-JP を自動判定）。"""
+    # 1) HTTPヘッダのcharset
+    ct = (content_type or "").lower()
+    # 2) HTML先頭のmeta charset
+    head = raw[:3000].decode("ascii", "ignore").lower()
+    blob = ct + " " + head
+    if "shift_jis" in blob or "shift-jis" in blob or "x-sjis" in blob:
+        enc = "cp932"  # cp932 は Shift_JIS の上位互換
+    elif "euc-jp" in blob or "euc_jp" in blob:
+        enc = "euc-jp"
+    else:
+        enc = "utf-8"
     try:
-        await asyncio.sleep(2)  # サーバー負荷対策：2秒待機
+        return raw.decode(enc, "replace")
+    except LookupError:
+        return raw.decode("utf-8", "replace")
+
+
+async def fetch_bytes(session: aiohttp.ClientSession, url: str):
+    """URLを取得して (本文バイト列, Content-Type) を返す。失敗時は (b"", "")。"""
+    try:
+        await asyncio.sleep(1.5)  # サーバー負荷対策
         async with session.get(url, headers=HEADERS, timeout=aiohttp.ClientTimeout(total=30)) as resp:
             resp.raise_for_status()
-            return await resp.text(encoding="utf-8", errors="replace")
+            raw = await resp.read()
+            return raw, resp.headers.get("Content-Type", "")
     except Exception as e:
         logger.error(f"取得失敗 {url}: {e}")
+        return b"", ""
+
+
+def _normalize_date(text: str) -> str:
+    """'2026年6月25日' や '2026/6/25' を 'YYYY-MM-DD' に正規化する。"""
+    m = re.search(r"(20\d\d)\D{0,2}(\d{1,2})\D{0,2}(\d{1,2})", text)
+    if not m:
         return ""
+    y, mo, d = m.group(1), int(m.group(2)), int(m.group(3))
+    return f"{y}-{mo:02d}-{d:02d}"
 
 
-async def scrape_chotatsu_portal() -> List[Dict]:
-    """調達ポータル（GPO）から入札公告を取得"""
-    results = []
-    url = "https://www.chotatsu.gpo.go.jp/ppi/eppi031Action.do"
+async def scrape_nedo() -> List[Dict]:
+    """NEDO 公募情報一覧を取得する。
+
+    一覧は各案件が <li> に「日付 分野 状態 タイトル」を持ち、
+    リンクは /koubo/XXXX.html 形式。
+    """
+    results: List[Dict] = []
+    url = "https://www.nedo.go.jp/koubo/index.html"
+    base = "https://www.nedo.go.jp"
 
     async with aiohttp.ClientSession() as session:
-        html = await fetch_html(session, url)
-        if not html:
+        raw, ct = await fetch_bytes(session, url)
+        if not raw:
             return results
+        html = _decode(raw, ct)
+        soup = BeautifulSoup(html, "html.parser")
 
-        soup = BeautifulSoup(html, "lxml")
-        rows = soup.select("table.listTable tr")
-
-        for row in rows[1:]:  # ヘッダー行をスキップ
-            cols = row.find_all("td")
-            if len(cols) < 4:
+        seen = set()
+        for a in soup.find_all("a", href=re.compile(r"^/koubo/.*\.html$")):
+            li = a.find_parent("li")
+            if not li:
                 continue
-            link = cols[0].find("a")
+            full_text = li.get_text(" ", strip=True)
+            if len(full_text) < 12:
+                continue
+
+            href = a.get("href", "")
+            link_text = a.get_text(strip=True)
+
+            # 「日付 分野 状態 …」を分解
+            m = re.match(
+                r"(20\d\d年\d{1,2}月\d{1,2}日)\s*(\S+)?\s*(本公募|公募予告|予告|公募|決定|採択)?\s*(.*)",
+                full_text,
+            )
+            if not m:
+                continue
+            date_raw, field, status, _ = m.groups()
+            field = field or ""
+            status = status or ""
+
+            # タイトルはリンクのテキストを優先（より正確）
+            title = link_text or (m.group(4) or "").strip()
+            if not title or len(title) < 6:
+                continue
+
+            # 公募の「結果・決定」は応募できる案件ではないため除外
+            if status in ("決定", "採択") or "の決定について" in title or "実施体制の決定" in title or "採択" in title:
+                continue
+
+            full_url = base + href
+            if full_url in seen:
+                continue
+            seen.add(full_url)
+
+            summary_parts = [p for p in [field, status] if p]
             results.append({
-                "title": link.text.strip() if link else cols[0].text.strip(),
-                "category": "入札",
-                "organization": cols[1].text.strip() if len(cols) > 1 else "",
-                "deadline": cols[2].text.strip() if len(cols) > 2 else "",
-                "published_at": cols[3].text.strip() if len(cols) > 3 else "",
-                "url": "https://www.chotatsu.gpo.go.jp" + link["href"] if link and link.get("href") else url,
+                "title": title,
+                "category": "プロポーザル",  # NEDOは公募（プロポーザル型）
+                "organization": "NEDO（新エネルギー・産業技術総合開発機構）",
+                "deadline": "",  # 一覧には締切が無い（詳細ページ参照）
+                "published_at": _normalize_date(date_raw),
+                "url": full_url,
                 "prefecture": "国",
-                "source": "調達ポータル",
+                "source": "NEDO",
                 "amount": "",
-                "summary": "",
+                "summary": " / ".join(summary_parts),
             })
 
-    logger.info(f"調達ポータル: {len(results)}件取得")
+    logger.info(f"NEDO: {len(results)}件取得")
     return results
 
 
-async def scrape_mlit() -> List[Dict]:
-    """国土交通省の入札公告を取得"""
-    results = []
-    url = "https://www.mlit.go.jp/chotatsu/index.html"
-
-    async with aiohttp.ClientSession() as session:
-        html = await fetch_html(session, url)
-        if not html:
-            return results
-
-        soup = BeautifulSoup(html, "lxml")
-        for a in soup.select("div.content a"):
-            title = a.text.strip()
-            href = a.get("href", "")
-            if not title or len(title) < 5:
-                continue
-            if any(kw in title for kw in ["入札", "公募", "プロポーザル", "調達", "競争"]):
-                full_url = href if href.startswith("http") else "https://www.mlit.go.jp" + href
-                results.append({
-                    "title": title,
-                    "category": "プロポーザル" if "プロポーザル" in title or "公募" in title else "入札",
-                    "organization": "国土交通省",
-                    "deadline": "",
-                    "published_at": "",
-                    "url": full_url,
-                    "prefecture": "国",
-                    "source": "国土交通省",
-                    "amount": "",
-                    "summary": "",
-                })
-
-    logger.info(f"国土交通省: {len(results)}件取得")
-    return results
-
-
-async def scrape_soumu() -> List[Dict]:
-    """総務省の調達情報を取得"""
-    results = []
-    url = "https://www.soumu.go.jp/menu_sinsei/cyoutatsu/index.html"
-
-    async with aiohttp.ClientSession() as session:
-        html = await fetch_html(session, url)
-        if not html:
-            return results
-
-        soup = BeautifulSoup(html, "lxml")
-        for a in soup.select("div#contentsArea a, div.contents a"):
-            title = a.text.strip()
-            href = a.get("href", "")
-            if not title or len(title) < 5:
-                continue
-            if any(kw in title for kw in ["入札", "公募", "プロポーザル", "調達", "競争", "委託"]):
-                full_url = href if href.startswith("http") else "https://www.soumu.go.jp" + href
-                results.append({
-                    "title": title,
-                    "category": "プロポーザル" if "プロポーザル" in title or "公募" in title else "入札",
-                    "organization": "総務省",
-                    "deadline": "",
-                    "published_at": "",
-                    "url": full_url,
-                    "prefecture": "国",
-                    "source": "総務省",
-                    "amount": "",
-                    "summary": "",
-                })
-
-    logger.info(f"総務省: {len(results)}件取得")
-    return results
-
-
-# デモ用サンプルデータ（スクレイピングが失敗した場合のフォールバック）
+# デモ用サンプルデータ（全スクレイピングが失敗した場合のフォールバック）
 SAMPLE_DATA = [
     {
         "title": "令和7年度 情報システム最適化業務委託",
@@ -164,18 +165,6 @@ SAMPLE_DATA = [
         "summary": "一般競争入札（電子）",
     },
     {
-        "title": "令和7年度 地域おこし協力隊支援業務",
-        "category": "プロポーザル",
-        "organization": "総務省",
-        "deadline": "2026-07-20",
-        "published_at": "2026-06-22",
-        "url": "https://www.soumu.go.jp/menu_sinsei/cyoutatsu/",
-        "prefecture": "国",
-        "source": "総務省",
-        "amount": "800万円",
-        "summary": "地域おこし協力隊の活動支援・研修等に係る業務",
-    },
-    {
         "title": "東京都 DX推進コンサルティング業務",
         "category": "プロポーザル",
         "organization": "東京都 デジタルサービス局",
@@ -187,76 +176,28 @@ SAMPLE_DATA = [
         "amount": "3,000万円",
         "summary": "都庁内DX推進に向けたコンサルティング及び伴走支援",
     },
-    {
-        "title": "大阪府 庁舎清掃業務委託",
-        "category": "入札",
-        "organization": "大阪府 総務部",
-        "deadline": "2026-07-08",
-        "published_at": "2026-06-17",
-        "url": "https://www.pref.osaka.lg.jp/",
-        "prefecture": "大阪府",
-        "source": "大阪府",
-        "amount": "500万円",
-        "summary": "一般競争入札",
-    },
-    {
-        "title": "愛知県 産業振興計画策定支援業務",
-        "category": "プロポーザル",
-        "organization": "愛知県 経済産業局",
-        "deadline": "2026-07-25",
-        "published_at": "2026-06-24",
-        "url": "https://www.pref.aichi.jp/",
-        "prefecture": "愛知県",
-        "source": "愛知県",
-        "amount": "1,500万円",
-        "summary": "次期産業振興計画の策定支援及び調査分析業務",
-    },
-    {
-        "title": "文部科学省 教育ICT推進事業委託",
-        "category": "プロポーザル",
-        "organization": "文部科学省",
-        "deadline": "2026-07-30",
-        "published_at": "2026-06-25",
-        "url": "https://www.mext.go.jp/",
-        "prefecture": "国",
-        "source": "文部科学省",
-        "amount": "2,000万円",
-        "summary": "GIGAスクール構想推進のためのICT活用支援事業",
-    },
-    {
-        "title": "北海道 除雪業務委託（道央圏）",
-        "category": "入札",
-        "organization": "北海道 建設部",
-        "deadline": "2026-09-01",
-        "published_at": "2026-06-25",
-        "url": "https://www.pref.hokkaido.lg.jp/",
-        "prefecture": "北海道",
-        "source": "北海道",
-        "amount": "8,000万円",
-        "summary": "令和7年度冬期道路除雪業務（一般競争入札）",
-    },
 ]
 
 
 async def run_all_scrapers() -> List[Dict]:
-    """全スクレイパーを実行してデータを返す"""
-    all_results = []
+    """全スクレイパーを実行してデータを返す。"""
+    all_results: List[Dict] = []
 
     tasks = [
-        scrape_chotatsu_portal(),
-        scrape_mlit(),
-        scrape_soumu(),
+        scrape_nedo(),
     ]
 
     scraped = await asyncio.gather(*tasks, return_exceptions=True)
-
     for result in scraped:
         if isinstance(result, list):
             all_results.extend(result)
+        elif isinstance(result, Exception):
+            logger.error(f"スクレイパーで例外: {result}")
 
-    # スクレイピング結果が少ない場合はサンプルデータを追加
-    if len(all_results) < 3:
-        logger.info("スクレイピング結果が少ないためサンプルデータを使用")
+    # 実データが1件も取れなかった場合のみサンプルデータを使用
+    if not all_results:
+        logger.info("スクレイピング結果が0件のためサンプルデータを使用")
         all_results.extend(SAMPLE_DATA)
 
+    logger.info(f"合計 {len(all_results)}件")
     return all_results
