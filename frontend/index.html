@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>入札・プロポーザル検索</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    .badge-nyusatsu { background:#dbeafe; color:#1d4ed8; }
+    .badge-proposal { background:#fce7f3; color:#9d174d; }
+    .deadline-near { color:#dc2626; font-weight:600; }
+  </style>
+</head>
+<body class="bg-gray-50 min-h-screen">
+
+  <!-- ヘッダー -->
+  <header class="bg-blue-700 text-white shadow">
+    <div class="max-w-6xl mx-auto px-4 py-4 flex items-center justify-between">
+      <div>
+        <h1 class="text-2xl font-bold">🏛️ 入札・プロポーザル検索</h1>
+        <p class="text-blue-200 text-sm mt-0.5">日本全国の官公庁・自治体の公募情報を一元検索</p>
+      </div>
+      <div id="stats-badge" class="text-right text-sm text-blue-100"></div>
+    </div>
+  </header>
+
+  <!-- 検索エリア -->
+  <div class="bg-white border-b shadow-sm">
+    <div class="max-w-6xl mx-auto px-4 py-4">
+      <div class="flex flex-wrap gap-3">
+        <!-- キーワード -->
+        <input id="q" type="text" placeholder="キーワード（例：システム開発、道路工事、委託）"
+          class="flex-1 min-w-60 border rounded-lg px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+          onkeydown="if(event.key==='Enter') search()">
+
+        <!-- 種別 -->
+        <select id="category" class="border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400">
+          <option value="">すべての種別</option>
+          <option value="入札">入札</option>
+          <option value="プロポーザル">プロポーザル</option>
+        </select>
+
+        <!-- 都道府県 -->
+        <select id="prefecture" class="border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400">
+          <option value="">すべての地域</option>
+          <option value="国">国（省庁）</option>
+          <option value="北海道">北海道</option>
+          <option value="青森県">青森県</option>
+          <option value="岩手県">岩手県</option>
+          <option value="宮城県">宮城県</option>
+          <option value="秋田県">秋田県</option>
+          <option value="山形県">山形県</option>
+          <option value="福島県">福島県</option>
+          <option value="茨城県">茨城県</option>
+          <option value="栃木県">栃木県</option>
+          <option value="群馬県">群馬県</option>
+          <option value="埼玉県">埼玉県</option>
+          <option value="千葉県">千葉県</option>
+          <option value="東京都">東京都</option>
+          <option value="神奈川県">神奈川県</option>
+          <option value="新潟県">新潟県</option>
+          <option value="富山県">富山県</option>
+          <option value="石川県">石川県</option>
+          <option value="福井県">福井県</option>
+          <option value="山梨県">山梨県</option>
+          <option value="長野県">長野県</option>
+          <option value="岐阜県">岐阜県</option>
+          <option value="静岡県">静岡県</option>
+          <option value="愛知県">愛知県</option>
+          <option value="三重県">三重県</option>
+          <option value="滋賀県">滋賀県</option>
+          <option value="京都府">京都府</option>
+          <option value="大阪府">大阪府</option>
+          <option value="兵庫県">兵庫県</option>
+          <option value="奈良県">奈良県</option>
+          <option value="和歌山県">和歌山県</option>
+          <option value="鳥取県">鳥取県</option>
+          <option value="島根県">島根県</option>
+          <option value="岡山県">岡山県</option>
+          <option value="広島県">広島県</option>
+          <option value="山口県">山口県</option>
+          <option value="徳島県">徳島県</option>
+          <option value="香川県">香川県</option>
+          <option value="愛媛県">愛媛県</option>
+          <option value="高知県">高知県</option>
+          <option value="福岡県">福岡県</option>
+          <option value="佐賀県">佐賀県</option>
+          <option value="長崎県">長崎県</option>
+          <option value="熊本県">熊本県</option>
+          <option value="大分県">大分県</option>
+          <option value="宮崎県">宮崎県</option>
+          <option value="鹿児島県">鹿児島県</option>
+          <option value="沖縄県">沖縄県</option>
+        </select>
+
+        <!-- 検索ボタン -->
+        <button onclick="search()"
+          class="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg text-sm font-medium transition">
+          🔍 検索
+        </button>
+
+        <!-- リセット -->
+        <button onclick="reset()"
+          class="border border-gray-300 hover:bg-gray-100 text-gray-600 px-4 py-2 rounded-lg text-sm transition">
+          リセット
+        </button>
+
+        <!-- 更新 -->
+        <button onclick="refreshData()"
+          class="border border-blue-300 hover:bg-blue-50 text-blue-600 px-4 py-2 rounded-lg text-sm transition">
+          🔄 最新データ取得
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 結果エリア -->
+  <main class="max-w-6xl mx-auto px-4 py-6">
+    <div id="result-summary" class="text-sm text-gray-500 mb-4"></div>
+    <div id="results" class="space-y-3"></div>
+    <div id="loading" class="hidden text-center py-10 text-gray-400">読み込み中...</div>
+    <div id="no-results" class="hidden text-center py-10 text-gray-400">
+      <p class="text-4xl mb-2">📭</p>
+      <p>該当する案件が見つかりませんでした</p>
+    </div>
+
+    <!-- ページネーション -->
+    <div id="pagination" class="flex justify-center gap-2 mt-8"></div>
+  </main>
+
+  <script>
+    let currentPage = 0;
+    const PAGE_SIZE = 20;
+
+    async function loadStats() {
+      const res = await fetch('/api/stats');
+      const data = await res.json();
+      document.getElementById('stats-badge').innerHTML =
+        `<div>総件数: <strong>${data.total.toLocaleString()}</strong>件</div>
+         <div class="text-xs mt-0.5">入札 ${data.nyusatsu}件 ／ プロポーザル ${data.proposal}件</div>`;
+    }
+
+    async function search(page = 0) {
+      currentPage = page;
+      const q = document.getElementById('q').value;
+      const category = document.getElementById('category').value;
+      const prefecture = document.getElementById('prefecture').value;
+
+      const params = new URLSearchParams({
+        skip: page * PAGE_SIZE,
+        limit: PAGE_SIZE,
+      });
+      if (q) params.append('q', q);
+      if (category) params.append('category', category);
+      if (prefecture) params.append('prefecture', prefecture);
+
+      document.getElementById('loading').classList.remove('hidden');
+      document.getElementById('results').innerHTML = '';
+      document.getElementById('no-results').classList.add('hidden');
+
+      const res = await fetch('/api/tenders?' + params);
+      const data = await res.json();
+
+      document.getElementById('loading').classList.add('hidden');
+
+      if (data.items.length === 0) {
+        document.getElementById('no-results').classList.remove('hidden');
+        document.getElementById('result-summary').textContent = '';
+        document.getElementById('pagination').innerHTML = '';
+        return;
+      }
+
+      document.getElementById('result-summary').textContent =
+        `${data.total.toLocaleString()}件中 ${page * PAGE_SIZE + 1}〜${Math.min((page + 1) * PAGE_SIZE, data.total)}件を表示`;
+
+      const container = document.getElementById('results');
+      container.innerHTML = data.items.map(t => renderCard(t)).join('');
+
+      renderPagination(data.total, page);
+    }
+
+    function renderCard(t) {
+      const badgeClass = t.category === '入札' ? 'badge-nyusatsu' : 'badge-proposal';
+      const deadlineHtml = t.deadline
+        ? `<span class="text-xs text-gray-500">締切: <strong>${t.deadline}</strong></span>`
+        : '';
+      const amountHtml = t.amount
+        ? `<span class="text-xs text-gray-500 ml-3">予定価格: ${t.amount}</span>`
+        : '';
+
+      return `
+        <div class="bg-white border rounded-xl p-4 hover:shadow-md transition">
+          <div class="flex items-start gap-3">
+            <span class="inline-block text-xs font-medium px-2 py-0.5 rounded-full mt-0.5 ${badgeClass} whitespace-nowrap">${t.category}</span>
+            <div class="flex-1 min-w-0">
+              <a href="${t.url}" target="_blank" rel="noopener"
+                class="text-blue-700 hover:underline font-medium text-sm leading-snug block">
+                ${t.title}
+              </a>
+              <div class="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 items-center">
+                <span class="text-xs text-gray-600">🏢 ${t.organization || '—'}</span>
+                <span class="text-xs text-gray-400">${t.prefecture || ''}</span>
+                ${deadlineHtml}
+                ${amountHtml}
+              </div>
+              ${t.summary ? `<p class="text-xs text-gray-500 mt-1.5 line-clamp-2">${t.summary}</p>` : ''}
+              <div class="mt-1.5">
+                <span class="text-xs text-gray-300">出典: ${t.source}</span>
+              </div>
+            </div>
+          </div>
+        </div>`;
+    }
+
+    function renderPagination(total, currentPage) {
+      const totalPages = Math.ceil(total / PAGE_SIZE);
+      if (totalPages <= 1) { document.getElementById('pagination').innerHTML = ''; return; }
+
+      let html = '';
+      const start = Math.max(0, currentPage - 2);
+      const end = Math.min(totalPages - 1, currentPage + 2);
+
+      if (currentPage > 0)
+        html += `<button onclick="search(${currentPage - 1})" class="px-3 py-1 border rounded text-sm hover:bg-gray-100">‹ 前</button>`;
+
+      for (let i = start; i <= end; i++) {
+        const active = i === currentPage ? 'bg-blue-600 text-white' : 'hover:bg-gray-100';
+        html += `<button onclick="search(${i})" class="px-3 py-1 border rounded text-sm ${active}">${i + 1}</button>`;
+      }
+
+      if (currentPage < totalPages - 1)
+        html += `<button onclick="search(${currentPage + 1})" class="px-3 py-1 border rounded text-sm hover:bg-gray-100">次 ›</button>`;
+
+      document.getElementById('pagination').innerHTML = html;
+    }
+
+    function reset() {
+      document.getElementById('q').value = '';
+      document.getElementById('category').value = '';
+      document.getElementById('prefecture').value = '';
+      search();
+    }
+
+    async function refreshData() {
+      const btn = event.target;
+      btn.disabled = true;
+      btn.textContent = '取得中...';
+      await fetch('/api/refresh', { method: 'POST' });
+      setTimeout(async () => {
+        await search();
+        await loadStats();
+        btn.disabled = false;
+        btn.textContent = '🔄 最新データ取得';
+      }, 3000);
+    }
+
+    // 初期表示
+    loadStats();
+    search();
+  </script>
+</body>
+</html>
