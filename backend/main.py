@@ -185,24 +185,24 @@ def get_tender(tender_id: int, db: Session = Depends(get_db)):
     data = _item_dict(t, today)
     data["detail"] = t.detail
 
-    # 同一プロジェクト（事業コード）の経過
+    # 同じ事業名（正式名称が一致するもの）の公募回をまとめる。
+    # ※ 事業コードは予算番号で別テーマの公募も含むため、正式名称で厳密に同一案件のみを束ねる。
     related = []
-    if (t.project_code or "").strip():
-        siblings = db.query(Tender).filter(
-            Tender.project_code == t.project_code
-        ).all()
-        for s in siblings:
-            related.append({
-                "id": s.id,
-                "title": s.title,
-                "status": compute_status(s, today),
-                "published_at": s.published_at,
-                "deadline": s.deadline,
-                "result_date": s.result_date,
-                "is_current": s.id == t.id,
-            })
-        # 公示日（なければ締切）で時系列に並べる
-        related.sort(key=lambda r: r["published_at"] or r["deadline"] or "")
+    if (t.title or "").strip():
+        siblings = db.query(Tender).filter(Tender.title == t.title).all()
+        if len(siblings) > 1:
+            for s in siblings:
+                related.append({
+                    "id": s.id,
+                    "title": s.title,
+                    "status": compute_status(s, today),
+                    "published_at": s.published_at,
+                    "deadline": s.deadline,
+                    "result_date": s.result_date,
+                    "is_current": s.id == t.id,
+                })
+            # 公示日（なければ締切）で時系列に並べる
+            related.sort(key=lambda r: r["published_at"] or r["deadline"] or "")
     data["related"] = related
     return data
 
