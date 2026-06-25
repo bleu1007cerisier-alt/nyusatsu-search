@@ -131,14 +131,17 @@
       }
 
       const ds = deadlineStatus(t.deadline);
-      const resultMeta = t.result_date
-        ? `<div>🏆 <span class="text-gray-500">事業者決定日</span><br><span class="text-purple-700 font-medium">${esc(t.result_date)}</span></div>`
-        : `<div>💰 <span class="text-gray-500">予定価格</span><br><span class="text-gray-800">${esc(t.amount) || '記載なし'}</span></div>`;
-      document.getElementById('meta').innerHTML = `
-        <div>🏢 <span class="text-gray-500">発注機関</span><br><span class="text-gray-800">${esc(t.organization) || '—'}</span></div>
-        <div>📅 <span class="text-gray-500">公示日（掲載日）</span><br><span class="text-gray-800">${esc(t.published_at) || '—'}</span></div>
-        <div>⏰ <span class="text-gray-500">締切日</span><br><span class="${ds.cls}">${esc(ds.text)}${ds.badge}</span></div>
-        ${resultMeta}`;
+      const cells = [
+        `<div>🏢 <span class="text-gray-500">発注機関</span><br><span class="text-gray-800">${esc(t.organization) || '—'}</span></div>`,
+        `<div>📅 <span class="text-gray-500">公示日（掲載日）</span><br><span class="text-gray-800">${esc(t.published_at) || '—'}</span></div>`,
+        `<div>⏰ <span class="text-gray-500">締切日</span><br><span class="${ds.cls}">${esc(ds.text)}${ds.badge}</span></div>`,
+        `<div>💰 <span class="text-gray-500">予算規模</span><br><span class="text-gray-800">${esc(t.amount) || '記載なし'}</span></div>`,
+      ];
+      if (t.result_date)
+        cells.push(`<div>📆 <span class="text-gray-500">事業者決定日</span><br><span class="text-purple-700 font-medium">${esc(t.result_date)}</span></div>`);
+      if (t.awardee)
+        cells.push(`<div class="sm:col-span-2">🏆 <span class="text-gray-500">決定事業者</span><br><span class="text-purple-700 font-semibold">${esc(t.awardee)}</span></div>`);
+      document.getElementById('meta').innerHTML = cells.join('');
 
       const tags = t.tags || [];
       document.getElementById('tags-wrap').style.display = tags.length ? '' : 'none';

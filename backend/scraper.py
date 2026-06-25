@@ -158,6 +158,54 @@ def _extract_overview(soup: BeautifulSoup) -> str:
     return "\n\n".join(paras)[:1500]
 
 
+def _extract_budget(text: str) -> str:
+    """公募詳細ページから「予算規模」を抽出する（例：1億5千万円未満（税込））。"""
+    flat = re.sub(r"\s+", "", text)
+    m = re.search(
+        r"予算規模[：:]?[はを]?([0-9０-９,，\.億万千百円以内未満程度税込（）\(\)約\-―~～／/件]{2,45})",
+        flat,
+    )
+    if not m:
+        return ""
+    val = m.group(1).strip("／/-")
+    if "円" not in val:
+        return ""
+    # 末尾の余分な文字（次項目の番号など）を除き、金額表現で区切る
+    m2 = re.match(r".*?円(?:以内|未満|程度|以下|台|規模|未満)?(?:（税込）|（税抜）|\(税込\)|\(税抜\))?", val)
+    return m2.group(0) if m2 else val
+
+
+# 会社・機関名の判定パターン（接頭辞型と接尾辞型）。長音ー・中黒・々等も許容。
+_ORG_NAME = r"[一-龥々〇ぁ-んァ-ヴーｱ-ﾝ・＆&’'\-Ａ-Ｚａ-ｚ０-９A-Za-z0-9]{2,28}"
+_ORG_RE = (
+    r"(?:株式会社|有限会社|合同会社|国立大学法人|公立大学法人|国立研究開発法人|"
+    r"一般社団法人|公益財団法人|一般財団法人|公益社団法人)" + _ORG_NAME
+    + r"|" + _ORG_NAME + r"(?:株式会社|有限会社|大学|高等専門学校|研究所|機構|協同組合)"
+)
+
+
+def _extract_awardee(text: str) -> str:
+    """結果（実施体制の決定）ページから決定事業者（実施予定先）を抽出する。
+
+    「実施予定先」ラベルの直後が会社・機関名で始まる箇所のみ採用する。
+    会社名が添付資料にしか無いページでは空文字を返す（HTMLに無いものは取得しない）。
+    """
+    flat = re.sub(r"\s+", "", text)
+    for m in re.finditer(r"(?:実施予定先|委託予定先|委託先|採択予定先|採択先|代表機関)[：:]?", flat):
+        seg = flat[m.end():m.end() + 160]
+        # ラベル直後が会社・機関名で始まる箇所のみ採用（説明文や添付参照を除外）
+        if not re.match(_ORG_RE, seg):
+            continue
+        # 次の節（番号付き見出し等）までを決定事業者の記載とみなす
+        seg = re.split(r"\d[．.]|事業期間|募集要項|技術・事業分野|お問|（法人番号|採択審査|なお[、，]", seg)[0]
+        seg = seg.strip("、，・。.（）()　 ")
+        if "新エネルギー・産業技術総合開発機構" in seg:
+            continue
+        if 2 <= len(seg) <= 120:
+            return seg
+    return ""
+
+
 NEDO_BASE = "https://www.nedo.go.jp"
 # 取得対象の年度別一覧（現行年度のみ。過去年度を足せば件数を増やせる）
 NEDO_YEAR_LISTS = ["/koubo/2026_list.html"]
@@ -226,7 +274,8 @@ async def scrape_nedo() -> List[Dict]:
                 # 公募詳細リンクは「公募開始日」列、結果リンクは「結果」列
                 call_a = tds[2].find("a", href=_DETAIL_HREF)
                 result_a = tds[4].find("a", href=_DETAIL_HREF) if len(tds) > 4 else None
-                url = _abs(call_a["href"]) if call_a else (_abs(result_a["href"]) if result_a else "")
+                result_url = _abs(result_a["href"]) if result_a else ""
+                url = _abs(call_a["href"]) if call_a else result_url
 
                 # 行を一意に識別（同一事業の各回を区別）
                 key = (title, kaishi, shimekiri, kekka)
@@ -242,7 +291,9 @@ async def scrape_nedo() -> List[Dict]:
                     "deadline": shimekiri,
                     "published_at": kaishi or yokoku,
                     "result_date": kekka,
+                    "result_url": result_url,
                     "project_code": _project_code(title),
+                    "awardee": "",
                     "url": url,
                     "prefecture": "国",
                     "source": "NEDO",
@@ -256,8 +307,7 @@ async def scrape_nedo() -> List[Dict]:
     return results
 
 
-def fetch_nedo_detail(url: str) -> Dict[str, str]:
-    """NEDO詳細ページを同期取得し、概要を返す（データ蓄積時に使用）。"""
+def _fetch_soup(url: str):
     import urllib.request
     try:
         req = urllib.request.Request(url, headers=HEADERS)
@@ -265,10 +315,27 @@ def fetch_nedo_detail(url: str) -> Dict[str, str]:
             raw = resp.read()
             ct = resp.headers.get("Content-Type", "")
     except Exception as e:
-        logger.error(f"詳細取得失敗 {url}: {e}")
+        logger.error(f"取得失敗 {url}: {e}")
+        return None
+    return BeautifulSoup(_decode(raw, ct), "html.parser")
+
+
+def fetch_nedo_detail(url: str) -> Dict[str, str]:
+    """NEDO公募詳細ページを同期取得し、概要と予算規模を返す（データ蓄積時に使用）。"""
+    soup = _fetch_soup(url)
+    if soup is None:
         return {}
-    soup = BeautifulSoup(_decode(raw, ct), "html.parser")
-    return {"detail": _extract_overview(soup)}
+    text = soup.get_text("\n", strip=True)
+    return {"detail": _extract_overview(soup), "budget": _extract_budget(text)}
+
+
+def fetch_nedo_result(url: str) -> Dict[str, str]:
+    """NEDO結果（実施体制の決定）ページから決定事業者を返す。"""
+    soup = _fetch_soup(url)
+    if soup is None:
+        return {}
+    text = soup.get_text("\n", strip=True)
+    return {"awardee": _extract_awardee(text)}
 
 
 async def run_all_scrapers() -> List[Dict]:
