@@ -1,0 +1,13 @@
+# Render.com デプロイ設定（Blueprint）
+# この設定を使うと、Renderの「Blueprint」から自動でWeb Serviceが作成されます。
+# 手動でWeb Serviceを作成する場合は、下記の startCommand を
+# Renderダッシュボードの「Start Command」欄にそのままコピーしてください。
+services:
+  - type: web
+    name: nyusatsu-search
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    # Renderは公開ポートを環境変数 $PORT で渡すため、8000固定にしないこと
+    startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+    autoDeploy: true
