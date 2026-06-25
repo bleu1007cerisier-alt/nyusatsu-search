@@ -270,10 +270,12 @@
         ? `<span class="text-xs text-gray-500">掲載日: ${t.published_at}</span>` : '';
       // 締切表示（事業者決定の場合は結果日も併記）
       const resultHtml = (t.status === '事業者決定' && t.result_date)
-        ? `<span class="text-xs text-purple-600">事業者決定: ${t.result_date}</span>` : '';
+        ? `<span class="text-xs text-purple-600">決定: ${t.result_date}</span>` : '';
+      const awardeeHtml = t.awardee
+        ? `<span class="text-xs text-purple-700">🏆 決定事業者: ${esc(t.awardee)}</span>` : '';
       const dlHtml = `<span class="text-xs ${ds.cls}">${ds.label}${ds.badge}</span>`;
       const amountHtml = t.amount
-        ? `<span class="text-xs text-gray-500">予定価格: ${esc(t.amount)}</span>` : '';
+        ? `<span class="text-xs text-gray-500">予算規模: ${esc(t.amount)}</span>` : '';
       const tagsHtml = (t.tags && t.tags.length)
         ? `<div class="mt-2 flex flex-wrap gap-1.5">${t.tags.map(tag =>
             `<span onclick="event.stopPropagation(); filterByTag('${esc(tag)}')"
@@ -297,6 +299,7 @@
                 ${dlHtml}
                 ${resultHtml}
                 ${amountHtml}
+                ${awardeeHtml}
               </div>
               ${t.summary ? `<p class="text-xs text-gray-500 mt-1.5 line-clamp-2">${esc(t.summary)}</p>` : ''}
               ${tagsHtml}

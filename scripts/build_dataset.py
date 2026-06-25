@@ -23,19 +23,19 @@ from datetime import date
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "backend"))
 
-from scraper import run_all_scrapers, fetch_nedo_detail  # noqa: E402
+from scraper import run_all_scrapers, fetch_nedo_detail, fetch_nedo_result  # noqa: E402
 
 DATASET_DIR = os.path.join(ROOT, "dataset")
 CSV_PATH = os.path.join(DATASET_DIR, "tenders.csv")
 
 FIELDNAMES = [
     "id", "title", "category", "organization", "prefecture",
-    "published_at", "deadline", "result_date", "project_code",
+    "published_at", "deadline", "result_date", "project_code", "awardee",
     "amount", "url", "summary", "detail", "tags", "source",
     "first_seen", "last_seen",
 ]
 
-# 1回の実行で詳細ページを取得する最大件数（負荷・実行時間対策。未取得分を順次埋める）
+# 1回の実行で詳細/結果ページを取得する最大件数（負荷・実行時間対策。未取得分を順次埋める）
 MAX_DETAIL_PER_RUN = 200
 DETAIL_SLEEP = 0.4
 
@@ -118,7 +118,7 @@ def main():
 
     print(f"新規: {new_count}件 / 更新: {update_count}件 / 合計: {len(merged)}件")
 
-    # 概要(detail)が未取得のものを補完（NEDOのみ・URLあり）
+    # 概要(detail)・予算規模(amount)が未取得のものを補完（NEDOのみ・URLあり）
     targets = [
         r for r in merged.values()
         if r.get("source") == "NEDO" and r.get("url") and not (r.get("detail") or "").strip()
@@ -128,7 +128,26 @@ def main():
         info = fetch_nedo_detail(r["url"])
         if info.get("detail"):
             r["detail"] = info["detail"]
+        if info.get("budget") and not (r.get("amount") or "").strip():
+            r["amount"] = info["budget"]
         time.sleep(DETAIL_SLEEP)
+
+    # 決定事業者(awardee)を補完：結果日があり、結果ページURLが取れる案件のみ
+    aw_count = 0
+    for item in scraped:
+        if aw_count >= MAX_DETAIL_PER_RUN:
+            break
+        if not item.get("result_date") or not item.get("result_url"):
+            continue
+        row = merged.get(_row_key(item))
+        if not row or (row.get("awardee") or "").strip():
+            continue
+        info = fetch_nedo_result(item["result_url"])
+        if info.get("awardee"):
+            row["awardee"] = info["awardee"]
+        aw_count += 1
+        time.sleep(DETAIL_SLEEP)
+    print(f"決定事業者を取得した件数: {aw_count}")
 
     # ID順に並べて書き出し
     rows = sorted(merged.values(), key=lambda r: int(r.get("id") or 0))

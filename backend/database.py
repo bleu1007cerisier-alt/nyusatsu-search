@@ -29,7 +29,8 @@ class Tender(Base):
     published_at = Column(String(50))    # 公募開始日（公示日）
     result_date = Column(String(50))     # 結果（事業者決定）の日付。あれば事業者決定済み
     project_code = Column(String(100))   # 事業コード（同一プロジェクト追跡用）
-    amount = Column(String(100))         # 予定価格
+    awardee = Column(String(300))        # 決定事業者（実施予定先）。分かる場合のみ
+    amount = Column(String(100))         # 予算規模 / 予定価格
     url = Column(String(1000))           # 元URLリンク
     summary = Column(Text)               # 概要（短い説明・分野名）
     detail = Column(Text)                # 詳細本文（アプリ内詳細表示用）
@@ -55,6 +56,7 @@ def init_db():
             ("tags", "ALTER TABLE tenders ADD COLUMN tags VARCHAR(500)"),
             ("result_date", "ALTER TABLE tenders ADD COLUMN result_date VARCHAR(50)"),
             ("project_code", "ALTER TABLE tenders ADD COLUMN project_code VARCHAR(100)"),
+            ("awardee", "ALTER TABLE tenders ADD COLUMN awardee VARCHAR(300)"),
         ]
         for col, ddl in migrations:
             if col not in existing:
