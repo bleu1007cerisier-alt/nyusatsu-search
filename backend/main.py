@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, Query, BackgroundTasks
+from fastapi import FastAPI, Depends, Query, BackgroundTasks, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -53,12 +53,17 @@ async def fetch_and_store():
     return len(results)
 
 
+def _tag_list(t: Tender):
+    return [x for x in (t.tags or "").split(",") if x]
+
+
 @app.get("/api/tenders")
 def search_tenders(
     q: Optional[str] = Query(None, description="キーワード検索"),
     category: Optional[str] = Query(None, description="入札 or プロポーザル"),
     prefecture: Optional[str] = Query(None, description="都道府県"),
     source: Optional[str] = Query(None, description="データソース"),
+    tag: Optional[str] = Query(None, description="タグ"),
     skip: int = 0,
     limit: int = 50,
     db: Session = Depends(get_db),
@@ -71,6 +76,8 @@ def search_tenders(
                 Tender.title.contains(q),
                 Tender.organization.contains(q),
                 Tender.summary.contains(q),
+                Tender.detail.contains(q),
+                Tender.tags.contains(q),
             )
         )
     if category:
@@ -79,9 +86,12 @@ def search_tenders(
         query = query.filter(Tender.prefecture == prefecture)
     if source:
         query = query.filter(Tender.source == source)
+    if tag:
+        query = query.filter(Tender.tags.contains(tag))
 
     total = query.count()
-    items = query.order_by(Tender.deadline).offset(skip).limit(limit).all()
+    # 締切が空のものは末尾に来るよう、空文字を大きい値として扱う
+    items = query.order_by(Tender.deadline == "", Tender.deadline).offset(skip).limit(limit).all()
 
     return {
         "total": total,
@@ -98,9 +108,33 @@ def search_tenders(
                 "url": t.url,
                 "summary": t.summary,
                 "source": t.source,
+                "tags": _tag_list(t),
             }
             for t in items
         ],
+    }
+
+
+@app.get("/api/tenders/{tender_id}")
+def get_tender(tender_id: int, db: Session = Depends(get_db)):
+    """1件の詳細を返す（アプリ内詳細表示用）。"""
+    t = db.query(Tender).filter(Tender.id == tender_id).first()
+    if not t:
+        raise HTTPException(status_code=404, detail="該当する案件が見つかりません")
+    return {
+        "id": t.id,
+        "title": t.title,
+        "category": t.category,
+        "organization": t.organization,
+        "prefecture": t.prefecture,
+        "deadline": t.deadline,
+        "published_at": t.published_at,
+        "amount": t.amount,
+        "url": t.url,
+        "summary": t.summary,
+        "detail": t.detail,
+        "source": t.source,
+        "tags": _tag_list(t),
     }
 
 
@@ -112,12 +146,22 @@ def get_stats(db: Session = Depends(get_db)):
     sources = db.query(Tender.source).distinct().all()
     prefectures = db.query(Tender.prefecture).distinct().all()
 
+    # タグを集計（件数の多い順）
+    tag_counts: dict = {}
+    for (tags_str,) in db.query(Tender.tags).all():
+        for tag in (tags_str or "").split(","):
+            tag = tag.strip()
+            if tag:
+                tag_counts[tag] = tag_counts.get(tag, 0) + 1
+    top_tags = sorted(tag_counts.items(), key=lambda kv: kv[1], reverse=True)
+
     return {
         "total": total,
         "nyusatsu": nyusatsu,
         "proposal": proposal,
         "sources": [s[0] for s in sources if s[0]],
         "prefectures": [p[0] for p in prefectures if p[0]],
+        "tags": [{"name": name, "count": cnt} for name, cnt in top_tags],
     }
 
 

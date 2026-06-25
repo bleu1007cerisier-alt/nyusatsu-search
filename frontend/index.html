@@ -114,6 +114,12 @@
     </div>
   </div>
 
+  <!-- タグバー -->
+  <div class="max-w-6xl mx-auto px-4 pt-4">
+    <div id="tag-bar" class="flex flex-wrap gap-2"></div>
+    <div id="active-tag" class="hidden mt-2 text-sm"></div>
+  </div>
+
   <!-- 結果エリア -->
   <main class="max-w-6xl mx-auto px-4 py-6">
     <div id="result-summary" class="text-sm text-gray-500 mb-4"></div>
@@ -128,9 +134,58 @@
     <div id="pagination" class="flex justify-center gap-2 mt-8"></div>
   </main>
 
+  <!-- 詳細モーダル -->
+  <div id="detail-modal" class="hidden fixed inset-0 z-50 flex items-start justify-center bg-black/50 p-4 overflow-y-auto"
+       onclick="if(event.target===this) closeDetail()">
+    <div class="bg-white rounded-2xl shadow-xl max-w-3xl w-full my-8">
+      <div class="flex items-start justify-between gap-4 p-5 border-b sticky top-0 bg-white rounded-t-2xl">
+        <h2 id="m-title" class="text-lg font-bold leading-snug text-gray-800"></h2>
+        <button onclick="closeDetail()" class="text-gray-400 hover:text-gray-700 text-2xl leading-none shrink-0">×</button>
+      </div>
+      <div class="p-5 space-y-4">
+        <div id="m-badges" class="flex flex-wrap gap-2"></div>
+        <div id="m-meta" class="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm"></div>
+        <div id="m-tags" class="flex flex-wrap gap-1.5"></div>
+        <div>
+          <h3 class="text-sm font-semibold text-gray-700 mb-1">📋 概要</h3>
+          <p id="m-detail" class="text-sm text-gray-600 whitespace-pre-wrap leading-relaxed"></p>
+        </div>
+        <div class="pt-2 border-t flex flex-wrap gap-3 items-center">
+          <a id="m-link" href="#" target="_blank" rel="noopener"
+             class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition">
+            🔗 公式ページで原文を見る
+          </a>
+          <span class="text-xs text-gray-400">出典: <span id="m-source"></span></span>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script>
     let currentPage = 0;
+    let currentTag = '';
     const PAGE_SIZE = 20;
+
+    function esc(s) {
+      return (s == null ? '' : String(s))
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+
+    // 締切日の状態を返す（受付終了 / 締切間近 / 通常）
+    function deadlineStatus(deadline) {
+      if (!deadline) return { label: '締切: 未定', cls: 'text-gray-400', badge: '' };
+      const today = new Date(); today.setHours(0, 0, 0, 0);
+      const d = new Date(deadline + 'T00:00:00');
+      const days = Math.round((d - today) / 86400000);
+      if (days < 0) return { label: `締切: ${deadline}`, cls: 'text-gray-400', badge: '<span class="text-xs px-1.5 py-0.5 rounded bg-gray-200 text-gray-500 ml-1">受付終了</span>' };
+      if (days <= 7) return { label: `締切: ${deadline}`, cls: 'text-red-600 font-semibold', badge: `<span class="text-xs px-1.5 py-0.5 rounded bg-red-100 text-red-700 ml-1">あと${days}日</span>` };
+      return { label: `締切: ${deadline}`, cls: 'text-gray-700', badge: '' };
+    }
+
+    function tagChip(name, onclick) {
+      return `<button onclick="${onclick}" class="text-xs px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-100 transition">#${esc(name)}</button>`;
+    }
 
     async function loadStats() {
       const res = await fetch('/api/stats');
@@ -138,6 +193,27 @@
       document.getElementById('stats-badge').innerHTML =
         `<div>総件数: <strong>${data.total.toLocaleString()}</strong>件</div>
          <div class="text-xs mt-0.5">入札 ${data.nyusatsu}件 ／ プロポーザル ${data.proposal}件</div>`;
+
+      // タグバー（件数の多い上位を表示）
+      const bar = document.getElementById('tag-bar');
+      const tags = (data.tags || []).slice(0, 20);
+      bar.innerHTML = tags.length
+        ? `<span class="text-xs text-gray-400 self-center mr-1">タグで絞り込み:</span>` +
+          tags.map(t => `<button onclick="filterByTag('${esc(t.name)}')" class="text-xs px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-100 transition">#${esc(t.name)} <span class="text-indigo-400">${t.count}</span></button>`).join('')
+        : '';
+    }
+
+    function filterByTag(name) {
+      currentTag = (currentTag === name) ? '' : name;
+      const at = document.getElementById('active-tag');
+      if (currentTag) {
+        at.classList.remove('hidden');
+        at.innerHTML = `絞り込み中: <span class="font-semibold text-indigo-700">#${esc(currentTag)}</span> <button onclick="filterByTag('${esc(currentTag)}')" class="ml-1 text-gray-400 hover:text-gray-700 underline">解除</button>`;
+      } else {
+        at.classList.add('hidden');
+        at.innerHTML = '';
+      }
+      search(0);
     }
 
     async function search(page = 0) {
@@ -153,6 +229,7 @@
       if (q) params.append('q', q);
       if (category) params.append('category', category);
       if (prefecture) params.append('prefecture', prefecture);
+      if (currentTag) params.append('tag', currentTag);
 
       document.getElementById('loading').classList.remove('hidden');
       document.getElementById('results').innerHTML = '';
@@ -181,36 +258,79 @@
 
     function renderCard(t) {
       const badgeClass = t.category === '入札' ? 'badge-nyusatsu' : 'badge-proposal';
-      const deadlineHtml = t.deadline
-        ? `<span class="text-xs text-gray-500">締切: <strong>${t.deadline}</strong></span>`
-        : '';
+      const ds = deadlineStatus(t.deadline);
+      const pubHtml = t.published_at
+        ? `<span class="text-xs text-gray-500">掲載日: ${t.published_at}</span>` : '';
+      const dlHtml = `<span class="text-xs ${ds.cls}">${ds.label}${ds.badge}</span>`;
       const amountHtml = t.amount
-        ? `<span class="text-xs text-gray-500 ml-3">予定価格: ${t.amount}</span>`
+        ? `<span class="text-xs text-gray-500">予定価格: ${esc(t.amount)}</span>` : '';
+      const tagsHtml = (t.tags && t.tags.length)
+        ? `<div class="mt-2 flex flex-wrap gap-1.5">${t.tags.map(tag =>
+            `<span onclick="event.stopPropagation(); filterByTag('${esc(tag)}')"
+                   class="cursor-pointer text-xs px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-100">#${esc(tag)}</span>`).join('')}</div>`
         : '';
 
       return `
-        <div class="bg-white border rounded-xl p-4 hover:shadow-md transition">
+        <div onclick="openDetail(${t.id})"
+             class="bg-white border rounded-xl p-4 hover:shadow-md hover:border-blue-300 transition cursor-pointer">
           <div class="flex items-start gap-3">
-            <span class="inline-block text-xs font-medium px-2 py-0.5 rounded-full mt-0.5 ${badgeClass} whitespace-nowrap">${t.category}</span>
+            <span class="inline-block text-xs font-medium px-2 py-0.5 rounded-full mt-0.5 ${badgeClass} whitespace-nowrap">${esc(t.category)}</span>
             <div class="flex-1 min-w-0">
-              <a href="${t.url}" target="_blank" rel="noopener"
-                class="text-blue-700 hover:underline font-medium text-sm leading-snug block">
-                ${t.title}
-              </a>
+              <p class="text-blue-700 font-medium text-sm leading-snug">${esc(t.title)}</p>
               <div class="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 items-center">
-                <span class="text-xs text-gray-600">🏢 ${t.organization || '—'}</span>
-                <span class="text-xs text-gray-400">${t.prefecture || ''}</span>
-                ${deadlineHtml}
+                <span class="text-xs text-gray-600">🏢 ${esc(t.organization) || '—'}</span>
+                <span class="text-xs text-gray-400">${esc(t.prefecture) || ''}</span>
+                ${pubHtml}
+                ${dlHtml}
                 ${amountHtml}
               </div>
-              ${t.summary ? `<p class="text-xs text-gray-500 mt-1.5 line-clamp-2">${t.summary}</p>` : ''}
+              ${t.summary ? `<p class="text-xs text-gray-500 mt-1.5 line-clamp-2">${esc(t.summary)}</p>` : ''}
+              ${tagsHtml}
               <div class="mt-1.5">
-                <span class="text-xs text-gray-300">出典: ${t.source}</span>
+                <span class="text-xs text-gray-300">出典: ${esc(t.source)} ・ クリックで詳細</span>
               </div>
             </div>
           </div>
         </div>`;
     }
+
+    async function openDetail(id) {
+      const modal = document.getElementById('detail-modal');
+      document.getElementById('m-title').textContent = '読み込み中...';
+      document.getElementById('m-detail').textContent = '';
+      document.getElementById('m-badges').innerHTML = '';
+      document.getElementById('m-meta').innerHTML = '';
+      document.getElementById('m-tags').innerHTML = '';
+      modal.classList.remove('hidden');
+      document.body.style.overflow = 'hidden';
+
+      const res = await fetch('/api/tenders/' + id);
+      if (!res.ok) { document.getElementById('m-title').textContent = '詳細を取得できませんでした'; return; }
+      const t = await res.json();
+
+      document.getElementById('m-title').textContent = t.title;
+      const ds = deadlineStatus(t.deadline);
+      const badgeClass = t.category === '入札' ? 'badge-nyusatsu' : 'badge-proposal';
+      document.getElementById('m-badges').innerHTML =
+        `<span class="text-xs font-medium px-2 py-0.5 rounded-full ${badgeClass}">${esc(t.category)}</span>` +
+        `<span class="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-600">${esc(t.prefecture) || '—'}</span>`;
+      document.getElementById('m-meta').innerHTML = `
+        <div class="text-gray-600">🏢 発注機関: <span class="text-gray-800">${esc(t.organization) || '—'}</span></div>
+        <div class="text-gray-600">📅 掲載日: <span class="text-gray-800">${esc(t.published_at) || '—'}</span></div>
+        <div class="${ds.cls}">⏰ ${ds.label.replace('締切: ', '締切日: ')}${ds.badge}</div>
+        <div class="text-gray-600">💰 予定価格: <span class="text-gray-800">${esc(t.amount) || '記載なし'}</span></div>`;
+      document.getElementById('m-tags').innerHTML = (t.tags || [])
+        .map(tag => `<span onclick="closeDetail(); filterByTag('${esc(tag)}')" class="cursor-pointer text-xs px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-100">#${esc(tag)}</span>`).join('');
+      document.getElementById('m-detail').textContent = t.detail || '（概要は公式ページをご確認ください）';
+      document.getElementById('m-link').href = t.url;
+      document.getElementById('m-source').textContent = t.source || '';
+    }
+
+    function closeDetail() {
+      document.getElementById('detail-modal').classList.add('hidden');
+      document.body.style.overflow = '';
+    }
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') closeDetail(); });
 
     function renderPagination(total, currentPage) {
       const totalPages = Math.ceil(total / PAGE_SIZE);

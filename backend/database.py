@@ -29,7 +29,9 @@ class Tender(Base):
     published_at = Column(String(50))    # 公告日
     amount = Column(String(100))         # 予定価格
     url = Column(String(1000))           # 元URLリンク
-    summary = Column(Text)               # 概要
+    summary = Column(Text)               # 概要（短い説明）
+    detail = Column(Text)                # 詳細本文（アプリ内詳細表示用）
+    tags = Column(String(500))           # タグ（カンマ区切り）
     source = Column(String(100))         # データソース名
     fetched_at = Column(DateTime, default=datetime.now)
 
@@ -42,6 +44,17 @@ class Tender(Base):
 
 def init_db():
     Base.metadata.create_all(bind=engine)
+    # 既存DBに新カラムが無い場合は追加する（簡易マイグレーション）
+    with engine.connect() as conn:
+        existing = [row[1] for row in conn.exec_driver_sql("PRAGMA table_info(tenders)").fetchall()]
+        migrations = [
+            ("detail", "ALTER TABLE tenders ADD COLUMN detail TEXT"),
+            ("tags", "ALTER TABLE tenders ADD COLUMN tags VARCHAR(500)"),
+        ]
+        for col, ddl in migrations:
+            if col not in existing:
+                conn.exec_driver_sql(ddl)
+        conn.commit()
 
 
 def get_db():
