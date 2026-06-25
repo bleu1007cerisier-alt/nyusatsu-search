@@ -1,0 +1,41 @@
+name: データ更新（スクレイピング）
+
+# 毎日定期実行＋手動実行。ここでのみスクレイピングし、結果CSVをコミットする。
+# CSVが更新されると Render が自動で再デプロイし、サイトに反映される。
+on:
+  schedule:
+    - cron: "0 22 * * *"   # 毎日 22:00 UTC = 翌07:00 JST
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: チェックアウト
+        uses: actions/checkout@v4
+
+      - name: Python セットアップ
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 依存インストール
+        run: pip install -r requirements.txt
+
+      - name: データ蓄積（スクレイピング）
+        run: python scripts/build_dataset.py
+
+      - name: 変更があればコミット
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add dataset/tenders.csv
+          if git diff --staged --quiet; then
+            echo "更新なし"
+          else
+            git commit -m "データ自動更新 $(date -u +%Y-%m-%d)"
+            git push
+          fi
