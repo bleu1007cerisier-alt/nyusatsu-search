@@ -25,11 +25,13 @@ class Tender(Base):
     category = Column(String(50))        # 入札 or プロポーザル
     organization = Column(String(200))   # 発注機関
     prefecture = Column(String(20))      # 都道府県
-    deadline = Column(String(50))        # 締切日
-    published_at = Column(String(50))    # 公告日
+    deadline = Column(String(50))        # 公募締切日
+    published_at = Column(String(50))    # 公募開始日（公示日）
+    result_date = Column(String(50))     # 結果（事業者決定）の日付。あれば事業者決定済み
+    project_code = Column(String(100))   # 事業コード（同一プロジェクト追跡用）
     amount = Column(String(100))         # 予定価格
     url = Column(String(1000))           # 元URLリンク
-    summary = Column(Text)               # 概要（短い説明）
+    summary = Column(Text)               # 概要（短い説明・分野名）
     detail = Column(Text)                # 詳細本文（アプリ内詳細表示用）
     tags = Column(String(500))           # タグ（カンマ区切り）
     source = Column(String(100))         # データソース名
@@ -39,6 +41,7 @@ class Tender(Base):
         Index("idx_category", "category"),
         Index("idx_prefecture", "prefecture"),
         Index("idx_deadline", "deadline"),
+        Index("idx_project_code", "project_code"),
     )
 
 
@@ -50,6 +53,8 @@ def init_db():
         migrations = [
             ("detail", "ALTER TABLE tenders ADD COLUMN detail TEXT"),
             ("tags", "ALTER TABLE tenders ADD COLUMN tags VARCHAR(500)"),
+            ("result_date", "ALTER TABLE tenders ADD COLUMN result_date VARCHAR(50)"),
+            ("project_code", "ALTER TABLE tenders ADD COLUMN project_code VARCHAR(100)"),
         ]
         for col, ddl in migrations:
             if col not in existing:
