@@ -33,6 +33,11 @@
 
       <div id="meta" class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm bg-gray-50 rounded-xl p-4 mb-5"></div>
 
+      <div id="timeline-wrap" class="mb-6 hidden">
+        <h2 class="text-sm font-semibold text-gray-700 mb-2">🔄 このプロジェクトの経過（公募→受付終了→事業者決定）</h2>
+        <ol id="timeline" class="space-y-2"></ol>
+      </div>
+
       <div id="tags-wrap" class="mb-5">
         <h2 class="text-sm font-semibold text-gray-700 mb-2">🏷️ タグ</h2>
         <div id="tags" class="flex flex-wrap gap-2"></div>
@@ -64,9 +69,18 @@
       const today = new Date(); today.setHours(0,0,0,0);
       const d = new Date(deadline + 'T00:00:00');
       const days = Math.round((d - today) / 86400000);
-      if (days < 0) return { text: deadline, cls: 'text-gray-500', badge: '<span class="text-xs px-1.5 py-0.5 rounded bg-gray-200 text-gray-500 ml-1">受付終了</span>' };
+      if (days < 0) return { text: deadline, cls: 'text-gray-500', badge: '' };
       if (days <= 7) return { text: deadline, cls: 'text-red-600 font-semibold', badge: `<span class="text-xs px-1.5 py-0.5 rounded bg-red-100 text-red-700 ml-1">あと${days}日</span>` };
       return { text: deadline, cls: 'text-gray-800 font-medium', badge: '' };
+    }
+
+    const STATUS_STYLE = {
+      '募集中':   'bg-green-100 text-green-700',
+      '受付終了': 'bg-gray-200 text-gray-600',
+      '事業者決定': 'bg-purple-100 text-purple-700',
+    };
+    function statusBadge(status) {
+      return `<span class="text-xs font-medium px-2.5 py-1 rounded-full ${STATUS_STYLE[status] || 'bg-gray-100 text-gray-600'}">${esc(status)}</span>`;
     }
 
     async function load() {
@@ -89,16 +103,41 @@
 
       const badgeClass = t.category === '入札' ? 'badge-nyusatsu' : 'badge-proposal';
       document.getElementById('badges').innerHTML =
+        statusBadge(t.status) +
         `<span class="text-xs font-medium px-2.5 py-1 rounded-full ${badgeClass}">${esc(t.category)}</span>` +
         `<span class="text-xs px-2.5 py-1 rounded-full bg-gray-100 text-gray-600">${esc(t.prefecture) || '—'}</span>`;
       document.getElementById('title').textContent = t.title;
 
+      // プロジェクトの経過（関連案件の時系列）
+      const rel = (t.related || []);
+      if (rel.length > 1) {
+        document.getElementById('timeline-wrap').classList.remove('hidden');
+        document.getElementById('timeline').innerHTML = rel.map(r => {
+          const cur = r.is_current;
+          const dateLine = [
+            r.published_at ? `公示 ${esc(r.published_at)}` : '',
+            r.deadline ? `締切 ${esc(r.deadline)}` : '',
+            r.result_date ? `決定 ${esc(r.result_date)}` : '',
+          ].filter(Boolean).join(' ／ ');
+          return `<li class="flex items-start gap-2 p-2 rounded-lg ${cur ? 'bg-blue-50 border border-blue-200' : 'hover:bg-gray-50'}">
+            <span class="shrink-0">${statusBadge(r.status)}</span>
+            <div class="min-w-0 text-sm">
+              <div class="text-gray-700">${dateLine || '日付情報なし'} ${cur ? '<span class="text-blue-600 font-semibold">← 表示中</span>' : ''}</div>
+              ${cur ? '' : `<a href="/tender/${r.id}" class="text-blue-600 hover:underline text-xs">この回の詳細を見る</a>`}
+            </div>
+          </li>`;
+        }).join('');
+      }
+
       const ds = deadlineStatus(t.deadline);
+      const resultMeta = t.result_date
+        ? `<div>🏆 <span class="text-gray-500">事業者決定日</span><br><span class="text-purple-700 font-medium">${esc(t.result_date)}</span></div>`
+        : `<div>💰 <span class="text-gray-500">予定価格</span><br><span class="text-gray-800">${esc(t.amount) || '記載なし'}</span></div>`;
       document.getElementById('meta').innerHTML = `
         <div>🏢 <span class="text-gray-500">発注機関</span><br><span class="text-gray-800">${esc(t.organization) || '—'}</span></div>
-        <div>📅 <span class="text-gray-500">掲載日</span><br><span class="text-gray-800">${esc(t.published_at) || '—'}</span></div>
+        <div>📅 <span class="text-gray-500">公示日（掲載日）</span><br><span class="text-gray-800">${esc(t.published_at) || '—'}</span></div>
         <div>⏰ <span class="text-gray-500">締切日</span><br><span class="${ds.cls}">${esc(ds.text)}${ds.badge}</span></div>
-        <div>💰 <span class="text-gray-500">予定価格</span><br><span class="text-gray-800">${esc(t.amount) || '記載なし'}</span></div>`;
+        ${resultMeta}`;
 
       const tags = t.tags || [];
       document.getElementById('tags-wrap').style.display = tags.length ? '' : 'none';

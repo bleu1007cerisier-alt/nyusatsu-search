@@ -11,11 +11,11 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from database import init_db, get_db, Tender
-from scraper import run_all_scrapers, fetch_nedo_detail
+from database import init_db, get_db, Tender, SessionLocal
 from datetime import date
+import csv
 
-app = FastAPI(title="入札・プロポーザル検索", version="1.0.0")
+app = FastAPI(title="入札・プロポーザル検索", version="2.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -27,35 +27,104 @@ app.add_middleware(
 # データベース初期化
 init_db()
 
-
-@app.on_event("startup")
-async def startup_event():
-    """起動時にデータがなければ自動取得"""
-    db = next(get_db())
-    count = db.query(Tender).count()
-    db.close()
-    if count == 0:
-        asyncio.create_task(fetch_and_store())
+DATASET_CSV = os.path.join(os.path.dirname(__file__), "../dataset/tenders.csv")
+STATUS_OPEN = "募集中"
+STATUS_CLOSED = "受付終了"
+STATUS_DECIDED = "事業者決定"
 
 
-async def fetch_and_store():
-    """スクレイピングしてDBに保存"""
-    results = await run_all_scrapers()
-    db = next(get_db())
+def load_dataset_into_db() -> int:
+    """蓄積済みCSV（dataset/tenders.csv）をDBへ読み込む。サイト側はスクレイピングしない。"""
+    if not os.path.exists(DATASET_CSV):
+        return 0
+    db = SessionLocal()
     try:
-        for item in results:
-            existing = db.query(Tender).filter(Tender.url == item["url"], Tender.title == item["title"]).first()
-            if not existing:
-                tender = Tender(**item)
-                db.add(tender)
+        db.query(Tender).delete()
+        with open(DATASET_CSV, encoding="utf-8-sig", newline="") as f:
+            for row in csv.DictReader(f):
+                db.add(Tender(
+                    id=int(row["id"]) if (row.get("id") or "").strip().isdigit() else None,
+                    title=row.get("title", ""),
+                    category=row.get("category", ""),
+                    organization=row.get("organization", ""),
+                    prefecture=row.get("prefecture", ""),
+                    published_at=row.get("published_at", ""),
+                    deadline=row.get("deadline", ""),
+                    result_date=row.get("result_date", ""),
+                    project_code=row.get("project_code", ""),
+                    amount=row.get("amount", ""),
+                    url=row.get("url", ""),
+                    summary=row.get("summary", ""),
+                    detail=row.get("detail", ""),
+                    tags=row.get("tags", ""),
+                    source=row.get("source", ""),
+                ))
         db.commit()
+        return db.query(Tender).count()
     finally:
         db.close()
-    return len(results)
+
+
+@app.on_event("startup")
+def startup_event():
+    """起動時に蓄積済みCSVを読み込む（スクレイピングは行わない）。"""
+    n = load_dataset_into_db()
+    print(f"データセット読み込み: {n}件")
+
+
+def compute_status(t: Tender, today: str) -> str:
+    """状態を判定：結果あり→事業者決定、締切超過→受付終了、それ以外→募集中。"""
+    if (t.result_date or "").strip():
+        return STATUS_DECIDED
+    if (t.deadline or "").strip() and t.deadline < today:
+        return STATUS_CLOSED
+    return STATUS_OPEN
+
+
+def _status_rank(status: str) -> int:
+    return {STATUS_OPEN: 0, STATUS_CLOSED: 1, STATUS_DECIDED: 2}.get(status, 3)
+
+
+def _sort_key(item):
+    """募集中(締切近い順)→受付終了(新しい順)→事業者決定(決定日新しい順)。"""
+    st = item["status"]
+    if st == STATUS_OPEN:
+        return (0, item["deadline"] or "9999-99-99")
+    if st == STATUS_CLOSED:
+        # 新しい順 → 文字列降順のため反転
+        return (1, _rev(item["deadline"] or item["published_at"] or ""))
+    if st == STATUS_DECIDED:
+        return (2, _rev(item["result_date"] or ""))
+    return (3, "")
+
+
+def _rev(s: str) -> str:
+    """文字列を降順ソートするためのキー（各文字を反転）。"""
+    return "".join(chr(255 - ord(c)) for c in s) if s else "\xff" * 10
 
 
 def _tag_list(t: Tender):
     return [x for x in (t.tags or "").split(",") if x]
+
+
+def _item_dict(t: Tender, today: str) -> dict:
+    return {
+        "id": t.id,
+        "title": t.title,
+        "category": t.category,
+        "organization": t.organization,
+        "prefecture": t.prefecture,
+        "deadline": t.deadline,
+        "published_at": t.published_at,
+        "result_date": t.result_date,
+        "project_code": t.project_code,
+        "status": compute_status(t, today),
+        "amount": t.amount,
+        "url": t.url,
+        "summary": t.summary,
+        "source": t.source,
+        "tags": _tag_list(t),
+    }
 
 
 @app.get("/api/tenders")
@@ -65,6 +134,7 @@ def search_tenders(
     prefecture: Optional[str] = Query(None, description="都道府県"),
     source: Optional[str] = Query(None, description="データソース"),
     tag: Optional[str] = Query(None, description="タグ"),
+    status: Optional[str] = Query(None, description="募集中 / 受付終了 / 事業者決定"),
     skip: int = 0,
     limit: int = 50,
     db: Session = Depends(get_db),
@@ -90,108 +160,90 @@ def search_tenders(
     if tag:
         query = query.filter(Tender.tags.contains(tag))
 
-    total = query.count()
-    # 並び順：①受付中（締切が今日以降）を先頭に、締切が近い順 ②受付終了を新しい順 ③締切未定は最後
     today = date.today().isoformat()
-    open_q = query.filter(Tender.deadline >= today)
-    closed_q = query.filter(and_(Tender.deadline != "", Tender.deadline < today))
-    undated_q = query.filter(Tender.deadline == "")
-    ordered = (
-        open_q.order_by(Tender.deadline.asc()).all()
-        + closed_q.order_by(Tender.deadline.desc()).all()
-        + undated_q.order_by(Tender.published_at.desc()).all()
-    )
-    items = ordered[skip:skip + limit]
+    items = [_item_dict(t, today) for t in query.all()]
 
-    return {
-        "total": total,
-        "items": [
-            {
-                "id": t.id,
-                "title": t.title,
-                "category": t.category,
-                "organization": t.organization,
-                "prefecture": t.prefecture,
-                "deadline": t.deadline,
-                "published_at": t.published_at,
-                "amount": t.amount,
-                "url": t.url,
-                "summary": t.summary,
-                "source": t.source,
-                "tags": _tag_list(t),
-            }
-            for t in items
-        ],
-    }
+    # 状態フィルタ
+    if status in (STATUS_OPEN, STATUS_CLOSED, STATUS_DECIDED):
+        items = [i for i in items if i["status"] == status]
+
+    items.sort(key=_sort_key)
+    total = len(items)
+    page = items[skip:skip + limit]
+
+    return {"total": total, "items": page}
 
 
 @app.get("/api/tenders/{tender_id}")
 def get_tender(tender_id: int, db: Session = Depends(get_db)):
-    """1件の詳細を返す（アプリ内詳細表示用）。"""
+    """1件の詳細を返す。同一事業コードの関連案件（公募→決定の経過）も付与する。"""
     t = db.query(Tender).filter(Tender.id == tender_id).first()
     if not t:
         raise HTTPException(status_code=404, detail="該当する案件が見つかりません")
+    today = date.today().isoformat()
 
-    # 概要が未取得のNEDO案件は、この時点で詳細ページから取得して保存する（遅延取得）
-    if t.source == "NEDO" and not t.detail and t.url:
-        info = fetch_nedo_detail(t.url)
-        if info.get("detail"):
-            t.detail = info["detail"]
-        # 一覧の締切より詳細ページの締切の方が正確な場合は更新（未来日のみ採用）
-        dl = info.get("deadline")
-        if dl and (not t.deadline or dl >= (t.published_at or "")):
-            t.deadline = dl
-        db.commit()
-        db.refresh(t)
+    data = _item_dict(t, today)
+    data["detail"] = t.detail
 
-    return {
-        "id": t.id,
-        "title": t.title,
-        "category": t.category,
-        "organization": t.organization,
-        "prefecture": t.prefecture,
-        "deadline": t.deadline,
-        "published_at": t.published_at,
-        "amount": t.amount,
-        "url": t.url,
-        "summary": t.summary,
-        "detail": t.detail,
-        "source": t.source,
-        "tags": _tag_list(t),
-    }
+    # 同一プロジェクト（事業コード）の経過
+    related = []
+    if (t.project_code or "").strip():
+        siblings = db.query(Tender).filter(
+            Tender.project_code == t.project_code
+        ).all()
+        for s in siblings:
+            related.append({
+                "id": s.id,
+                "title": s.title,
+                "status": compute_status(s, today),
+                "published_at": s.published_at,
+                "deadline": s.deadline,
+                "result_date": s.result_date,
+                "is_current": s.id == t.id,
+            })
+        # 公示日（なければ締切）で時系列に並べる
+        related.sort(key=lambda r: r["published_at"] or r["deadline"] or "")
+    data["related"] = related
+    return data
 
 
 @app.get("/api/stats")
 def get_stats(db: Session = Depends(get_db)):
-    total = db.query(Tender).count()
-    nyusatsu = db.query(Tender).filter(Tender.category == "入札").count()
-    proposal = db.query(Tender).filter(Tender.category == "プロポーザル").count()
-    sources = db.query(Tender.source).distinct().all()
-    prefectures = db.query(Tender.prefecture).distinct().all()
+    today = date.today().isoformat()
+    all_items = db.query(Tender).all()
+    total = len(all_items)
 
-    # タグを集計（件数の多い順）
+    status_counts = {STATUS_OPEN: 0, STATUS_CLOSED: 0, STATUS_DECIDED: 0}
     tag_counts: dict = {}
-    for (tags_str,) in db.query(Tender.tags).all():
-        for tag in (tags_str or "").split(","):
+    sources = set()
+    for t in all_items:
+        status_counts[compute_status(t, today)] += 1
+        if t.source:
+            sources.add(t.source)
+        for tag in (t.tags or "").split(","):
             tag = tag.strip()
             if tag:
                 tag_counts[tag] = tag_counts.get(tag, 0) + 1
+
     top_tags = sorted(tag_counts.items(), key=lambda kv: kv[1], reverse=True)
+    nyusatsu = sum(1 for t in all_items if t.category == "入札")
+    proposal = sum(1 for t in all_items if t.category == "プロポーザル")
 
     return {
         "total": total,
         "nyusatsu": nyusatsu,
         "proposal": proposal,
-        "sources": [s[0] for s in sources if s[0]],
-        "prefectures": [p[0] for p in prefectures if p[0]],
+        "status": status_counts,
+        "sources": sorted(sources),
         "tags": [{"name": name, "count": cnt} for name, cnt in top_tags],
     }
 
 
 @app.post("/api/refresh")
-async def refresh_data(background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
-    background_tasks.add_task(fetch_and_store)
-    return {"message": "データ取得を開始しました"}
+def refresh_data():
+    """蓄積済みCSVを再読み込みする（スクレイピングはしない）。"""
+    n = load_dataset_into_db()
+    return {"message": f"データを再読み込みしました（{n}件）", "count": n}
 
 
 @app.get("/")

@@ -64,6 +64,8 @@ async def fetch_bytes(session: aiohttp.ClientSession, url: str):
 
 def _normalize_date(text: str) -> str:
     """文字列中の最後の日付を 'YYYY-MM-DD' に正規化する（期間表記は終了日＝締切を採用）。"""
+    # セル内の改行・空白を除去してから判定（年と月日の間に空白が入る表記に対応）
+    text = re.sub(r"\s+", "", text or "")
     matches = re.findall(r"(20\d\d)\D{0,2}(\d{1,2})\D{0,2}(\d{1,2})", text)
     if not matches:
         return ""
@@ -160,23 +162,33 @@ NEDO_BASE = "https://www.nedo.go.jp"
 # 取得対象の年度別一覧（現行年度のみ。過去年度を足せば件数を増やせる）
 NEDO_YEAR_LISTS = ["/koubo/2026_list.html"]
 
+# 分野ページのテーブル列: [事業名, 予告掲載日, 公募開始日(リンク), 公募締切日, 結果(リンク)]
+_DETAIL_HREF = re.compile(r"/koubo/[A-Za-z0-9_]+\.html")
 
-def _clean_nedo_title(text: str) -> str:
-    """分野ページの行テキストから日付以降を除いてタイトルを得る。"""
-    return re.sub(r"\s*20\d\d\D.*$", "", text).strip()
+
+def _abs(href: str) -> str:
+    if not href:
+        return ""
+    return href if href.startswith("http") else NEDO_BASE + href
+
+
+def _project_code(title: str) -> str:
+    """タイトル先頭の 【P25011】 等から事業コードを取り出す。"""
+    m = re.match(r"\s*【([^】]+)】", title)
+    return m.group(1).strip() if m else ""
 
 
 async def scrape_nedo() -> List[Dict]:
-    """NEDO 公募情報を分野別ページから網羅的に取得する。
+    """NEDO 公募情報を分野別ページの表から網羅的に取得する。
 
-    年度別一覧 → 分野ページ → 各分野ページ内の個別公募（タイトル・公示日・締切日）を収集する。
-    概要本文（detail）は件数が多いため、ここでは取得せず詳細表示時に遅延取得する。
+    年度別一覧 → 分野ページ → 表の各行を列ごとに解析し、
+    公示日(公募開始日)・締切日(公募締切日)・結果日(結果)・事業コードを取得する。
+    概要本文(detail)は別途 fetch_nedo_detail で取得する。
     """
     results: List[Dict] = []
     seen: set = set()
 
     async with aiohttp.ClientSession() as session:
-        # 1) 年度別一覧から分野ページURLを集める
         field_pages: Dict[str, str] = {}
         for ylist in NEDO_YEAR_LISTS:
             raw, ct = await fetch_bytes(session, NEDO_BASE + ylist)
@@ -188,43 +200,50 @@ async def scrape_nedo() -> List[Dict]:
 
         logger.info(f"NEDO: 分野ページ {len(field_pages)}件を巡回")
 
-        # 2) 各分野ページから個別公募を抽出
         for href, field_name in field_pages.items():
             raw, ct = await fetch_bytes(session, NEDO_BASE + href)
             if not raw:
                 continue
             soup = BeautifulSoup(_decode(raw, ct), "html.parser")
-            for a in soup.find_all("a", href=re.compile(r"/koubo/[A-Za-z0-9_]+\.html")):
-                h = a["href"]
-                if "_list" in h or "/index" in h or "pastbunya" in h:
-                    continue
-                li = a.find_parent(["li", "tr"])
-                row_text = li.get_text(" ", strip=True) if li else a.get_text(strip=True)
-                if len(row_text) < 6:
+            table = soup.find("table")
+            if not table:
+                continue
+
+            for tr in table.find_all("tr"):
+                tds = tr.find_all("td")
+                if len(tds) < 4:
+                    continue  # ヘッダ行など
+
+                title = tds[0].get_text(" ", strip=True)
+                if not title or len(title) < 5:
                     continue
 
-                full_url = NEDO_BASE + h
-                if full_url in seen:
-                    continue
-                seen.add(full_url)
+                yokoku = _normalize_date(tds[1].get_text())
+                kaishi = _normalize_date(tds[2].get_text())
+                shimekiri = _normalize_date(tds[3].get_text())
+                kekka = _normalize_date(tds[4].get_text()) if len(tds) > 4 else ""
 
-                title = _clean_nedo_title(row_text) or a.get_text(strip=True)
-                if not title or len(title) < 6:
-                    continue
+                # 公募詳細リンクは「公募開始日」列、結果リンクは「結果」列
+                call_a = tds[2].find("a", href=_DETAIL_HREF)
+                result_a = tds[4].find("a", href=_DETAIL_HREF) if len(tds) > 4 else None
+                url = _abs(call_a["href"]) if call_a else (_abs(result_a["href"]) if result_a else "")
 
-                # 行内の日付：最初＝公示日、最後＝締切日（複数回ある場合は最終回が締切）
-                dates = re.findall(r"20\d\d\D{0,2}\d{1,2}\D{0,2}\d{1,2}", row_text)
-                published = _normalize_date(dates[0]) if dates else ""
-                deadline = _normalize_date(dates[-1]) if dates else ""
+                # 行を一意に識別（同一事業の各回を区別）
+                key = (title, kaishi, shimekiri, kekka)
+                if key in seen:
+                    continue
+                seen.add(key)
 
                 tags = generate_tags(title, field_name, extra=[field_name])
                 results.append({
                     "title": title,
                     "category": "プロポーザル",
                     "organization": "NEDO（新エネルギー・産業技術総合開発機構）",
-                    "deadline": deadline,
-                    "published_at": published,
-                    "url": full_url,
+                    "deadline": shimekiri,
+                    "published_at": kaishi or yokoku,
+                    "result_date": kekka,
+                    "project_code": _project_code(title),
+                    "url": url,
                     "prefecture": "国",
                     "source": "NEDO",
                     "amount": "",
@@ -238,7 +257,7 @@ async def scrape_nedo() -> List[Dict]:
 
 
 def fetch_nedo_detail(url: str) -> Dict[str, str]:
-    """NEDO詳細ページを同期取得し、概要と締切を返す（詳細表示時の遅延取得用）。"""
+    """NEDO詳細ページを同期取得し、概要を返す（データ蓄積時に使用）。"""
     import urllib.request
     try:
         req = urllib.request.Request(url, headers=HEADERS)
@@ -249,50 +268,11 @@ def fetch_nedo_detail(url: str) -> Dict[str, str]:
         logger.error(f"詳細取得失敗 {url}: {e}")
         return {}
     soup = BeautifulSoup(_decode(raw, ct), "html.parser")
-    text = soup.get_text("\n", strip=True)
-    return {
-        "detail": _extract_overview(soup),
-        "deadline": _extract_deadline(text),
-    }
-
-
-# ---------------------------------------------------------------------------
-# フォールバック用サンプル
-# ---------------------------------------------------------------------------
-SAMPLE_DATA = [
-    {
-        "title": "令和7年度 情報システム最適化業務委託",
-        "category": "プロポーザル",
-        "organization": "デジタル庁",
-        "deadline": "2026-07-15",
-        "published_at": "2026-06-20",
-        "url": "https://www.digital.go.jp/procurement/",
-        "prefecture": "国",
-        "source": "デジタル庁",
-        "amount": "5,000万円",
-        "summary": "行政デジタル化推進のための情報システム最適化に係る業務委託",
-        "detail": "行政のデジタル化推進に向け、情報システムの最適化に関する設計・構築・運用支援を行う業務委託です。",
-        "tags": "AI・データ,委託",
-    },
-    {
-        "title": "国道○○号道路改良工事",
-        "category": "入札",
-        "organization": "国土交通省 関東地方整備局",
-        "deadline": "2026-07-10",
-        "published_at": "2026-06-18",
-        "url": "https://www.ktr.mlit.go.jp/",
-        "prefecture": "国",
-        "source": "国土交通省",
-        "amount": "1億2,000万円",
-        "summary": "一般競争入札（電子）",
-        "detail": "国道の道路改良工事に関する一般競争入札（電子入札）です。",
-        "tags": "",
-    },
-]
+    return {"detail": _extract_overview(soup)}
 
 
 async def run_all_scrapers() -> List[Dict]:
-    """全スクレイパーを実行してデータを返す。"""
+    """全スクレイパーを実行して取得結果（生データ）を返す。"""
     all_results: List[Dict] = []
 
     tasks = [
@@ -305,10 +285,6 @@ async def run_all_scrapers() -> List[Dict]:
             all_results.extend(result)
         elif isinstance(result, Exception):
             logger.error(f"スクレイパーで例外: {result}")
-
-    if not all_results:
-        logger.info("スクレイピング結果が0件のためサンプルデータを使用")
-        all_results.extend(SAMPLE_DATA)
 
     logger.info(f"合計 {len(all_results)}件")
     return all_results
