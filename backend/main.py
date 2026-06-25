@@ -12,7 +12,8 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from database import init_db, get_db, Tender
-from scraper import run_all_scrapers
+from scraper import run_all_scrapers, fetch_nedo_detail
+from datetime import date
 
 app = FastAPI(title="入札・プロポーザル検索", version="1.0.0")
 
@@ -90,8 +91,17 @@ def search_tenders(
         query = query.filter(Tender.tags.contains(tag))
 
     total = query.count()
-    # 締切が空のものは末尾に来るよう、空文字を大きい値として扱う
-    items = query.order_by(Tender.deadline == "", Tender.deadline).offset(skip).limit(limit).all()
+    # 並び順：①受付中（締切が今日以降）を先頭に、締切が近い順 ②受付終了を新しい順 ③締切未定は最後
+    today = date.today().isoformat()
+    open_q = query.filter(Tender.deadline >= today)
+    closed_q = query.filter(and_(Tender.deadline != "", Tender.deadline < today))
+    undated_q = query.filter(Tender.deadline == "")
+    ordered = (
+        open_q.order_by(Tender.deadline.asc()).all()
+        + closed_q.order_by(Tender.deadline.desc()).all()
+        + undated_q.order_by(Tender.published_at.desc()).all()
+    )
+    items = ordered[skip:skip + limit]
 
     return {
         "total": total,
@@ -121,6 +131,19 @@ def get_tender(tender_id: int, db: Session = Depends(get_db)):
     t = db.query(Tender).filter(Tender.id == tender_id).first()
     if not t:
         raise HTTPException(status_code=404, detail="該当する案件が見つかりません")
+
+    # 概要が未取得のNEDO案件は、この時点で詳細ページから取得して保存する（遅延取得）
+    if t.source == "NEDO" and not t.detail and t.url:
+        info = fetch_nedo_detail(t.url)
+        if info.get("detail"):
+            t.detail = info["detail"]
+        # 一覧の締切より詳細ページの締切の方が正確な場合は更新（未来日のみ採用）
+        dl = info.get("deadline")
+        if dl and (not t.deadline or dl >= (t.published_at or "")):
+            t.deadline = dl
+        db.commit()
+        db.refresh(t)
+
     return {
         "id": t.id,
         "title": t.title,
@@ -174,6 +197,12 @@ async def refresh_data(background_tasks: BackgroundTasks, db: Session = Depends(
 @app.get("/")
 def root():
     return FileResponse(os.path.join(os.path.dirname(__file__), "../frontend/index.html"))
+
+
+@app.get("/tender/{tender_id}")
+def tender_page(tender_id: int):
+    """案件詳細ページ（独立ページ）。JS側でIDを読み取り内容を表示する。"""
+    return FileResponse(os.path.join(os.path.dirname(__file__), "../frontend/detail.html"))
 
 
 # フロントエンドの静的ファイルを配信

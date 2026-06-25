@@ -52,7 +52,7 @@ def _decode(raw: bytes, content_type: str = "") -> str:
 async def fetch_bytes(session: aiohttp.ClientSession, url: str):
     """URLを取得して (本文バイト列, Content-Type) を返す。失敗時は (b"", "")。"""
     try:
-        await asyncio.sleep(1.2)  # サーバー負荷対策
+        await asyncio.sleep(0.7)  # サーバー負荷対策
         async with session.get(url, headers=HEADERS, timeout=aiohttp.ClientTimeout(total=30)) as resp:
             resp.raise_for_status()
             raw = await resp.read()
@@ -156,112 +156,104 @@ def _extract_overview(soup: BeautifulSoup) -> str:
     return "\n\n".join(paras)[:1500]
 
 
-async def _scrape_nedo_detail(session: aiohttp.ClientSession, item: Dict) -> None:
-    """NEDO詳細ページを取得して item に deadline / detail / tags を補完する（破壊的更新）。"""
-    raw, ct = await fetch_bytes(session, item["url"])
-    if not raw:
-        return
-    soup = BeautifulSoup(_decode(raw, ct), "html.parser")
-    text = soup.get_text("\n", strip=True)
+NEDO_BASE = "https://www.nedo.go.jp"
+# 取得対象の年度別一覧（現行年度のみ。過去年度を足せば件数を増やせる）
+NEDO_YEAR_LISTS = ["/koubo/2026_list.html"]
 
-    deadline = _extract_deadline(text)
-    if deadline:
-        item["deadline"] = deadline
 
-    overview = _extract_overview(soup)
-    if overview:
-        item["detail"] = overview
-
-    # タイトル＋概要＋分野からタグを生成
-    field = item.get("summary", "")
-    tags = generate_tags(item.get("title", ""), overview, field, extra=[field] if field else None)
-    item["tags"] = ",".join(tags)
+def _clean_nedo_title(text: str) -> str:
+    """分野ページの行テキストから日付以降を除いてタイトルを得る。"""
+    return re.sub(r"\s*20\d\d\D.*$", "", text).strip()
 
 
 async def scrape_nedo() -> List[Dict]:
-    """NEDO 公募情報一覧＋各詳細を取得する。"""
+    """NEDO 公募情報を分野別ページから網羅的に取得する。
+
+    年度別一覧 → 分野ページ → 各分野ページ内の個別公募（タイトル・公示日・締切日）を収集する。
+    概要本文（detail）は件数が多いため、ここでは取得せず詳細表示時に遅延取得する。
+    """
     results: List[Dict] = []
-    url = "https://www.nedo.go.jp/koubo/index.html"
-    base = "https://www.nedo.go.jp"
+    seen: set = set()
 
     async with aiohttp.ClientSession() as session:
-        raw, ct = await fetch_bytes(session, url)
-        if not raw:
-            return results
-        soup = BeautifulSoup(_decode(raw, ct), "html.parser")
-
-        seen = set()
-        for a in soup.find_all("a", href=re.compile(r"^/koubo/.*\.html$")):
-            li = a.find_parent("li")
-            if not li:
+        # 1) 年度別一覧から分野ページURLを集める
+        field_pages: Dict[str, str] = {}
+        for ylist in NEDO_YEAR_LISTS:
+            raw, ct = await fetch_bytes(session, NEDO_BASE + ylist)
+            if not raw:
                 continue
-            full_text = li.get_text(" ", strip=True)
-            if len(full_text) < 12:
+            soup = BeautifulSoup(_decode(raw, ct), "html.parser")
+            for a in soup.find_all("a", href=re.compile(r"/koubo/20\d\d_list_[0-9_]+\.html")):
+                field_pages.setdefault(a["href"], a.get_text(strip=True))
+
+        logger.info(f"NEDO: 分野ページ {len(field_pages)}件を巡回")
+
+        # 2) 各分野ページから個別公募を抽出
+        for href, field_name in field_pages.items():
+            raw, ct = await fetch_bytes(session, NEDO_BASE + href)
+            if not raw:
                 continue
+            soup = BeautifulSoup(_decode(raw, ct), "html.parser")
+            for a in soup.find_all("a", href=re.compile(r"/koubo/[A-Za-z0-9_]+\.html")):
+                h = a["href"]
+                if "_list" in h or "/index" in h or "pastbunya" in h:
+                    continue
+                li = a.find_parent(["li", "tr"])
+                row_text = li.get_text(" ", strip=True) if li else a.get_text(strip=True)
+                if len(row_text) < 6:
+                    continue
 
-            href = a.get("href", "")
-            link_text = a.get_text(strip=True)
+                full_url = NEDO_BASE + h
+                if full_url in seen:
+                    continue
+                seen.add(full_url)
 
-            m = re.match(
-                r"(20\d\d年\d{1,2}月\d{1,2}日)\s*(\S+)?\s*(本公募|公募予告|予告|公募|決定|採択)?\s*(.*)",
-                full_text,
-            )
-            if not m:
-                continue
-            date_raw, field, status, _ = m.groups()
-            field = field or ""
-            status = status or ""
+                title = _clean_nedo_title(row_text) or a.get_text(strip=True)
+                if not title or len(title) < 6:
+                    continue
 
-            title = link_text or (m.group(4) or "").strip()
-            if not title or len(title) < 6:
-                continue
+                # 行内の日付：最初＝公示日、最後＝締切日（複数回ある場合は最終回が締切）
+                dates = re.findall(r"20\d\d\D{0,2}\d{1,2}\D{0,2}\d{1,2}", row_text)
+                published = _normalize_date(dates[0]) if dates else ""
+                deadline = _normalize_date(dates[-1]) if dates else ""
 
-            # 「結果・決定」は応募できる案件ではないため除外
-            if status in ("決定", "採択") or "の決定について" in title or "実施体制の決定" in title or "採択" in title:
-                continue
+                tags = generate_tags(title, field_name, extra=[field_name])
+                results.append({
+                    "title": title,
+                    "category": "プロポーザル",
+                    "organization": "NEDO（新エネルギー・産業技術総合開発機構）",
+                    "deadline": deadline,
+                    "published_at": published,
+                    "url": full_url,
+                    "prefecture": "国",
+                    "source": "NEDO",
+                    "amount": "",
+                    "summary": field_name,
+                    "detail": "",
+                    "tags": ",".join(tags),
+                })
 
-            full_url = base + href
-            if full_url in seen:
-                continue
-            seen.add(full_url)
-
-            # 分野名（NEDOの内部カテゴリ）を概要欄に保持
-            summary_field = field
-            results.append({
-                "title": title,
-                "category": "プロポーザル",
-                "organization": "NEDO（新エネルギー・産業技術総合開発機構）",
-                "deadline": "",
-                "published_at": _normalize_date(date_raw),
-                "url": full_url,
-                "prefecture": "国",
-                "source": "NEDO",
-                "amount": "",
-                "summary": summary_field,
-                "detail": "",
-                "tags": "",
-                "_status": status,
-            })
-
-        # 詳細ページを取得して締切・概要・タグを補完
-        targets = results[:MAX_DETAIL_FETCH]
-        for item in targets:
-            await _scrape_nedo_detail(session, item)
-
-    # タグがまだ空のもの（詳細取得失敗等）はタイトルだけでタグ生成
-    for item in results:
-        if not item.get("tags"):
-            item["tags"] = ",".join(
-                generate_tags(item.get("title", ""), item.get("summary", ""),
-                              extra=[item["summary"]] if item.get("summary") else None)
-            )
-        # 状態（本公募/予告）を概要の先頭に付与
-        st = item.pop("_status", "")
-        if st and st not in item["summary"]:
-            item["summary"] = (st + " / " + item["summary"]).strip(" /")
-
-    logger.info(f"NEDO: {len(results)}件取得（詳細取得 {len(results[:MAX_DETAIL_FETCH])}件）")
+    logger.info(f"NEDO: {len(results)}件取得")
     return results
+
+
+def fetch_nedo_detail(url: str) -> Dict[str, str]:
+    """NEDO詳細ページを同期取得し、概要と締切を返す（詳細表示時の遅延取得用）。"""
+    import urllib.request
+    try:
+        req = urllib.request.Request(url, headers=HEADERS)
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            raw = resp.read()
+            ct = resp.headers.get("Content-Type", "")
+    except Exception as e:
+        logger.error(f"詳細取得失敗 {url}: {e}")
+        return {}
+    soup = BeautifulSoup(_decode(raw, ct), "html.parser")
+    text = soup.get_text("\n", strip=True)
+    return {
+        "detail": _extract_overview(soup),
+        "deadline": _extract_deadline(text),
+    }
 
 
 # ---------------------------------------------------------------------------

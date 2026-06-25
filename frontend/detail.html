@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>案件詳細 | 入札・プロポーザル検索</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    .badge-nyusatsu { background:#dbeafe; color:#1d4ed8; }
+    .badge-proposal { background:#fce7f3; color:#9d174d; }
+  </style>
+</head>
+<body class="bg-gray-50 min-h-screen">
+
+  <!-- ヘッダー -->
+  <header class="bg-blue-700 text-white shadow">
+    <div class="max-w-4xl mx-auto px-4 py-4">
+      <a href="/" class="text-blue-100 hover:text-white text-sm">🏛️ 入札・プロポーザル検索</a>
+    </div>
+  </header>
+
+  <main class="max-w-4xl mx-auto px-4 py-6">
+    <a href="/" class="inline-flex items-center text-sm text-blue-600 hover:underline mb-4">← 検索結果へ戻る</a>
+
+    <div id="loading" class="text-center py-16 text-gray-400">読み込み中...</div>
+    <div id="error" class="hidden text-center py-16 text-gray-400">
+      <p class="text-4xl mb-2">😢</p><p>案件を表示できませんでした</p>
+    </div>
+
+    <article id="content" class="hidden bg-white border rounded-2xl shadow-sm p-6">
+      <div id="badges" class="flex flex-wrap gap-2 mb-3"></div>
+      <h1 id="title" class="text-xl font-bold text-gray-800 leading-relaxed mb-4"></h1>
+
+      <div id="meta" class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm bg-gray-50 rounded-xl p-4 mb-5"></div>
+
+      <div id="tags-wrap" class="mb-5">
+        <h2 class="text-sm font-semibold text-gray-700 mb-2">🏷️ タグ</h2>
+        <div id="tags" class="flex flex-wrap gap-2"></div>
+      </div>
+
+      <div class="mb-6">
+        <h2 class="text-sm font-semibold text-gray-700 mb-2">📋 概要</h2>
+        <p id="detail" class="text-sm text-gray-600 whitespace-pre-wrap leading-relaxed"></p>
+      </div>
+
+      <div class="pt-4 border-t flex flex-wrap gap-3 items-center">
+        <a id="orig-link" href="#" target="_blank" rel="noopener"
+           class="bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-lg text-sm font-medium transition">
+          🔗 公式ページで原文・応募方法を見る
+        </a>
+        <span class="text-xs text-gray-400">出典: <span id="source"></span></span>
+      </div>
+    </article>
+  </main>
+
+  <script>
+    function esc(s) {
+      return (s == null ? '' : String(s))
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+    function deadlineStatus(deadline) {
+      if (!deadline) return { text: '未定', cls: 'text-gray-500', badge: '' };
+      const today = new Date(); today.setHours(0,0,0,0);
+      const d = new Date(deadline + 'T00:00:00');
+      const days = Math.round((d - today) / 86400000);
+      if (days < 0) return { text: deadline, cls: 'text-gray-500', badge: '<span class="text-xs px-1.5 py-0.5 rounded bg-gray-200 text-gray-500 ml-1">受付終了</span>' };
+      if (days <= 7) return { text: deadline, cls: 'text-red-600 font-semibold', badge: `<span class="text-xs px-1.5 py-0.5 rounded bg-red-100 text-red-700 ml-1">あと${days}日</span>` };
+      return { text: deadline, cls: 'text-gray-800 font-medium', badge: '' };
+    }
+
+    async function load() {
+      const id = location.pathname.split('/').filter(Boolean).pop();
+      try {
+        const res = await fetch('/api/tenders/' + id);
+        if (!res.ok) throw new Error('not found');
+        const t = await res.json();
+        render(t);
+      } catch (e) {
+        document.getElementById('loading').classList.add('hidden');
+        document.getElementById('error').classList.remove('hidden');
+      }
+    }
+
+    function render(t) {
+      document.getElementById('loading').classList.add('hidden');
+      document.getElementById('content').classList.remove('hidden');
+      document.title = t.title + ' | 入札・プロポーザル検索';
+
+      const badgeClass = t.category === '入札' ? 'badge-nyusatsu' : 'badge-proposal';
+      document.getElementById('badges').innerHTML =
+        `<span class="text-xs font-medium px-2.5 py-1 rounded-full ${badgeClass}">${esc(t.category)}</span>` +
+        `<span class="text-xs px-2.5 py-1 rounded-full bg-gray-100 text-gray-600">${esc(t.prefecture) || '—'}</span>`;
+      document.getElementById('title').textContent = t.title;
+
+      const ds = deadlineStatus(t.deadline);
+      document.getElementById('meta').innerHTML = `
+        <div>🏢 <span class="text-gray-500">発注機関</span><br><span class="text-gray-800">${esc(t.organization) || '—'}</span></div>
+        <div>📅 <span class="text-gray-500">掲載日</span><br><span class="text-gray-800">${esc(t.published_at) || '—'}</span></div>
+        <div>⏰ <span class="text-gray-500">締切日</span><br><span class="${ds.cls}">${esc(ds.text)}${ds.badge}</span></div>
+        <div>💰 <span class="text-gray-500">予定価格</span><br><span class="text-gray-800">${esc(t.amount) || '記載なし'}</span></div>`;
+
+      const tags = t.tags || [];
+      document.getElementById('tags-wrap').style.display = tags.length ? '' : 'none';
+      document.getElementById('tags').innerHTML = tags.map(tag =>
+        `<a href="/?tag=${encodeURIComponent(tag)}" class="text-xs px-2.5 py-1 rounded-full bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-100">#${esc(tag)}</a>`).join('');
+
+      document.getElementById('detail').textContent = t.detail || '（詳しい内容は公式ページをご確認ください）';
+      document.getElementById('orig-link').href = t.url;
+      document.getElementById('source').textContent = t.source || '';
+    }
+
+    load();
+  </script>
+</body>
+</html>

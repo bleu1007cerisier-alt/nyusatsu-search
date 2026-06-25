@@ -134,32 +134,6 @@
     <div id="pagination" class="flex justify-center gap-2 mt-8"></div>
   </main>
 
-  <!-- 詳細モーダル -->
-  <div id="detail-modal" class="hidden fixed inset-0 z-50 flex items-start justify-center bg-black/50 p-4 overflow-y-auto"
-       onclick="if(event.target===this) closeDetail()">
-    <div class="bg-white rounded-2xl shadow-xl max-w-3xl w-full my-8">
-      <div class="flex items-start justify-between gap-4 p-5 border-b sticky top-0 bg-white rounded-t-2xl">
-        <h2 id="m-title" class="text-lg font-bold leading-snug text-gray-800"></h2>
-        <button onclick="closeDetail()" class="text-gray-400 hover:text-gray-700 text-2xl leading-none shrink-0">×</button>
-      </div>
-      <div class="p-5 space-y-4">
-        <div id="m-badges" class="flex flex-wrap gap-2"></div>
-        <div id="m-meta" class="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm"></div>
-        <div id="m-tags" class="flex flex-wrap gap-1.5"></div>
-        <div>
-          <h3 class="text-sm font-semibold text-gray-700 mb-1">📋 概要</h3>
-          <p id="m-detail" class="text-sm text-gray-600 whitespace-pre-wrap leading-relaxed"></p>
-        </div>
-        <div class="pt-2 border-t flex flex-wrap gap-3 items-center">
-          <a id="m-link" href="#" target="_blank" rel="noopener"
-             class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition">
-            🔗 公式ページで原文を見る
-          </a>
-          <span class="text-xs text-gray-400">出典: <span id="m-source"></span></span>
-        </div>
-      </div>
-    </div>
-  </div>
 
   <script>
     let currentPage = 0;
@@ -271,7 +245,7 @@
         : '';
 
       return `
-        <div onclick="openDetail(${t.id})"
+        <div onclick="location.href='/tender/${t.id}'"
              class="bg-white border rounded-xl p-4 hover:shadow-md hover:border-blue-300 transition cursor-pointer">
           <div class="flex items-start gap-3">
             <span class="inline-block text-xs font-medium px-2 py-0.5 rounded-full mt-0.5 ${badgeClass} whitespace-nowrap">${esc(t.category)}</span>
@@ -294,43 +268,6 @@
         </div>`;
     }
 
-    async function openDetail(id) {
-      const modal = document.getElementById('detail-modal');
-      document.getElementById('m-title').textContent = '読み込み中...';
-      document.getElementById('m-detail').textContent = '';
-      document.getElementById('m-badges').innerHTML = '';
-      document.getElementById('m-meta').innerHTML = '';
-      document.getElementById('m-tags').innerHTML = '';
-      modal.classList.remove('hidden');
-      document.body.style.overflow = 'hidden';
-
-      const res = await fetch('/api/tenders/' + id);
-      if (!res.ok) { document.getElementById('m-title').textContent = '詳細を取得できませんでした'; return; }
-      const t = await res.json();
-
-      document.getElementById('m-title').textContent = t.title;
-      const ds = deadlineStatus(t.deadline);
-      const badgeClass = t.category === '入札' ? 'badge-nyusatsu' : 'badge-proposal';
-      document.getElementById('m-badges').innerHTML =
-        `<span class="text-xs font-medium px-2 py-0.5 rounded-full ${badgeClass}">${esc(t.category)}</span>` +
-        `<span class="text-xs px-2 py-0.5 rounded-full bg-gray-100 text-gray-600">${esc(t.prefecture) || '—'}</span>`;
-      document.getElementById('m-meta').innerHTML = `
-        <div class="text-gray-600">🏢 発注機関: <span class="text-gray-800">${esc(t.organization) || '—'}</span></div>
-        <div class="text-gray-600">📅 掲載日: <span class="text-gray-800">${esc(t.published_at) || '—'}</span></div>
-        <div class="${ds.cls}">⏰ ${ds.label.replace('締切: ', '締切日: ')}${ds.badge}</div>
-        <div class="text-gray-600">💰 予定価格: <span class="text-gray-800">${esc(t.amount) || '記載なし'}</span></div>`;
-      document.getElementById('m-tags').innerHTML = (t.tags || [])
-        .map(tag => `<span onclick="closeDetail(); filterByTag('${esc(tag)}')" class="cursor-pointer text-xs px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-100">#${esc(tag)}</span>`).join('');
-      document.getElementById('m-detail').textContent = t.detail || '（概要は公式ページをご確認ください）';
-      document.getElementById('m-link').href = t.url;
-      document.getElementById('m-source').textContent = t.source || '';
-    }
-
-    function closeDetail() {
-      document.getElementById('detail-modal').classList.add('hidden');
-      document.body.style.overflow = '';
-    }
-    document.addEventListener('keydown', e => { if (e.key === 'Escape') closeDetail(); });
 
     function renderPagination(total, currentPage) {
       const totalPages = Math.ceil(total / PAGE_SIZE);
@@ -374,9 +311,21 @@
       }, 3000);
     }
 
-    // 初期表示
-    loadStats();
-    search();
+    // 初期表示（詳細ページ等から ?tag= で来た場合はそのタグで絞り込む）
+    (function init() {
+      const params = new URLSearchParams(location.search);
+      const tag = params.get('tag');
+      const q = params.get('q');
+      if (q) document.getElementById('q').value = q;
+      loadStats();
+      if (tag) {
+        currentTag = tag;
+        const at = document.getElementById('active-tag');
+        at.classList.remove('hidden');
+        at.innerHTML = `絞り込み中: <span class="font-semibold text-indigo-700">#${esc(currentTag)}</span> <button onclick="filterByTag('${esc(currentTag)}')" class="ml-1 text-gray-400 hover:text-gray-700 underline">解除</button>`;
+      }
+      search();
+    })();
   </script>
 </body>
 </html>
