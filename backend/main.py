@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from database import init_db, get_db, Tender, SessionLocal
 from datetime import date
 import csv
+import json
 
 app = FastAPI(title="入札・プロポーザル検索", version="2.0.0")
 
@@ -67,6 +68,7 @@ def load_dataset_into_db() -> int:
                     url=row.get("url", ""),
                     summary=row.get("summary", ""),
                     detail=row.get("detail", ""),
+                    schedule=row.get("schedule", ""),
                     tags=row.get("tags", ""),
                     source=row.get("source", ""),
                 ))
@@ -196,6 +198,10 @@ def get_tender(tender_id: int, db: Session = Depends(get_db)):
 
     data = _item_dict(t, today)
     data["detail"] = t.detail
+    try:
+        data["schedule"] = json.loads(t.schedule) if (t.schedule or "").strip() else []
+    except (ValueError, TypeError):
+        data["schedule"] = []
 
     # 同じ事業名（正式名称が一致するもの）の公募回をまとめる。
     # ※ 事業コードは予算番号で別テーマの公募も含むため、正式名称で厳密に同一案件のみを束ねる。
