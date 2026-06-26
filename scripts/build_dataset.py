@@ -23,7 +23,9 @@ from datetime import date
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "backend"))
 
-from scraper import run_all_scrapers, fetch_nedo_detail, fetch_nedo_result  # noqa: E402
+from scraper import (  # noqa: E402
+    run_all_scrapers, fetch_nedo_detail, fetch_nedo_result,
+)
 
 DATASET_DIR = os.path.join(ROOT, "dataset")
 CSV_PATH = os.path.join(DATASET_DIR, "tenders.csv")
@@ -31,7 +33,7 @@ CSV_PATH = os.path.join(DATASET_DIR, "tenders.csv")
 FIELDNAMES = [
     "id", "title", "category", "organization", "prefecture",
     "published_at", "deadline", "result_date", "project_code", "awardee",
-    "amount", "url", "summary", "detail", "tags", "source",
+    "awardee_checked", "amount", "url", "summary", "detail", "tags", "source",
     "first_seen", "last_seen",
 ]
 
@@ -118,36 +120,43 @@ def main():
 
     print(f"新規: {new_count}件 / 更新: {update_count}件 / 合計: {len(merged)}件")
 
-    # 概要(detail)・予算規模(amount)が未取得のものを補完（NEDOのみ・URLあり）
+    # 【増分】概要(detail)・予算(amount)が未取得のものだけ取得。本文に予算が無ければPDFから補完。
+    # detailは一度取れれば再取得しないため、定常運用では新規分のみが対象になる。
     targets = [
         r for r in merged.values()
         if r.get("source") == "NEDO" and r.get("url") and not (r.get("detail") or "").strip()
     ]
-    print(f"概要を取得する件数: {min(len(targets), MAX_DETAIL_PER_RUN)} / 未取得 {len(targets)}件")
+    print(f"概要/予算を取得（増分）: {min(len(targets), MAX_DETAIL_PER_RUN)}件")
     for r in targets[:MAX_DETAIL_PER_RUN]:
-        info = fetch_nedo_detail(r["url"])
+        info = fetch_nedo_detail(r["url"])  # 概要＋予算（本文→無ければ公募要領PDF）
         if info.get("detail"):
             r["detail"] = info["detail"]
         if info.get("budget") and not (r.get("amount") or "").strip():
             r["amount"] = info["budget"]
         time.sleep(DETAIL_SLEEP)
 
-    # 決定事業者(awardee)を補完：結果日があり、結果ページURLが取れる案件のみ
+    # 【増分】決定事業者：結果が出ていて未チェックの案件だけ確認（一度確認したら再取得しない）
     aw_count = 0
     for item in scraped:
         if aw_count >= MAX_DETAIL_PER_RUN:
             break
-        if not item.get("result_date") or not item.get("result_url"):
-            continue
         row = merged.get(_row_key(item))
-        if not row or (row.get("awardee") or "").strip():
+        if not row:
+            continue
+        if not (row.get("result_date") or "").strip():
+            continue
+        if (row.get("awardee") or "").strip() or (row.get("awardee_checked") or "").strip() == "1":
+            continue
+        if not item.get("result_url"):
             continue
         info = fetch_nedo_result(item["result_url"])
-        if info.get("awardee"):
-            row["awardee"] = info["awardee"]
-        aw_count += 1
-        time.sleep(DETAIL_SLEEP)
-    print(f"決定事業者を取得した件数: {aw_count}")
+        if info:  # ページ取得成功（社名が無くても確認済みにして再取得を防ぐ）
+            if info.get("awardee"):
+                row["awardee"] = info["awardee"]
+            row["awardee_checked"] = "1"
+            aw_count += 1
+            time.sleep(DETAIL_SLEEP)
+    print(f"決定事業者を確認（増分）: {aw_count}件")
 
     # ID順に並べて書き出し
     rows = sorted(merged.values(), key=lambda r: int(r.get("id") or 0))
