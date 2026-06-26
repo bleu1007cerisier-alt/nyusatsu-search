@@ -157,11 +157,17 @@ _SKIP_PARA = re.compile(
     r"公式Ｘ|公式X|＠nedo|@nedo|フォロー|随時配信|ＳＮＳ)"
 )
 
+# 連絡先・メール等（概要から完全に除外する）
+_CONTACT = re.compile(
+    r"(担当者|問い?合わせ先?|問合せ先?|Ｅ[-－]?mail|E[-－]?mail|e[-－]?mail|"
+    r"メールアドレス|アドレスの|\[\*\]|＠|@[\w\.]|nedo\.go\.jp|ＴＥＬ|TEL|電話|内線|FAX|ＦＡＸ)"
+)
+
 
 def _extract_overview(soup: BeautifulSoup) -> str:
     """詳細ページから「公募内容の要約」を抽出する。
 
-    定型の募集アナウンスや手続き案内（説明会・応募方法・契約等）を除き、
+    募集アナウンス・手続き案内に加え、連絡先/メール等の段落を除外し、
     事業の目的・内容を説明する段落を優先して集める。
     """
     def collect(skip_boiler: bool) -> List[str]:
@@ -170,6 +176,8 @@ def _extract_overview(soup: BeautifulSoup) -> str:
             t = p.get_text(strip=True)
             if len(t) < 25 or t.startswith("※"):
                 continue
+            if _CONTACT.search(t):
+                continue  # 連絡先・メールは概要に含めない
             if skip_boiler and _SKIP_PARA.search(t):
                 continue
             paras.append(t)
@@ -178,9 +186,44 @@ def _extract_overview(soup: BeautifulSoup) -> str:
         return paras
 
     paras = collect(skip_boiler=True)
-    if not paras:  # 全て定型文だった場合のフォールバック
+    if not paras:
         paras = collect(skip_boiler=False)
     return "\n\n".join(paras)[:1200]
+
+
+_SCHED_DATE = r"(20\d\d年\d{1,2}月\d{1,2}日(?:（[月火水木金土日]）)?(?:[^。\n、]{0,10}?(?:まで|正午|時\d{0,2}分?))?)"
+
+
+def _extract_schedule(text: str):
+    """説明会・各種期限などの予定を時系列で抽出する。[{label, date, raw}] を返す。"""
+    f = re.sub(r"\s+", "", text)
+    items = []
+    keys = [
+        ("説明会", "開催日時"),
+        ("説明会の申込期限", "申込期限"),
+        ("応募締切", "応募期限"),
+        ("提出締切", "提出期限"),
+        ("質問受付期限", "質問受付期限"),
+        ("質問締切", "質問期限"),
+    ]
+    for label, kw in keys:
+        m = re.search(re.escape(kw) + r"[：:]?" + _SCHED_DATE, f)
+        if m:
+            d = _normalize_date(m.group(1))
+            if d:
+                items.append({"label": label, "date": d, "raw": m.group(1)})
+    m = re.search(r"事前相談[^。]{0,40}?" + _SCHED_DATE, f)
+    if m and _normalize_date(m.group(1)):
+        items.append({"label": "事前相談", "date": _normalize_date(m.group(1)), "raw": m.group(1)})
+
+    seen = set()
+    uniq = []
+    for it in sorted(items, key=lambda x: x["date"]):
+        k = (it["label"], it["date"])
+        if k not in seen:
+            seen.add(k)
+            uniq.append(it)
+    return uniq
 
 
 def _parse_yen(s: str):
@@ -393,7 +436,11 @@ def fetch_nedo_detail(url: str) -> Dict[str, str]:
     budget = _extract_budget(text)
     if not budget:
         budget = _pdf_budget_from_soup(soup)
-    return {"detail": _extract_overview(soup), "budget": budget}
+    return {
+        "detail": _extract_overview(soup),
+        "budget": budget,
+        "schedule": _extract_schedule(text),
+    }
 
 
 def fetch_nedo_result(url: str) -> Dict[str, str]:
