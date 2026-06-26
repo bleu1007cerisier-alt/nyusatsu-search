@@ -382,12 +382,18 @@ def _fetch_soup(url: str, retries: int = 3):
 
 
 def fetch_nedo_detail(url: str) -> Dict[str, str]:
-    """NEDO公募詳細ページを同期取得し、概要と予算規模を返す（データ蓄積時に使用）。"""
+    """NEDO公募詳細ページを同期取得し、概要と予算規模を返す。
+
+    予算は本文の「予算規模：」を優先。本文に無ければ同ページの公募要領PDFから補完する。
+    """
     soup = _fetch_soup(url)
     if soup is None:
         return {}
     text = soup.get_text("\n", strip=True)
-    return {"detail": _extract_overview(soup), "budget": _extract_budget(text)}
+    budget = _extract_budget(text)
+    if not budget:
+        budget = _pdf_budget_from_soup(soup)
+    return {"detail": _extract_overview(soup), "budget": budget}
 
 
 def fetch_nedo_result(url: str) -> Dict[str, str]:
@@ -397,6 +403,55 @@ def fetch_nedo_result(url: str) -> Dict[str, str]:
         return {}
     text = soup.get_text("\n", strip=True)
     return {"awardee": _extract_awardee(text)}
+
+
+_PDF_MONEY = r"([0-9０-９][0-9０-９,，\.]*(?:億|千万|百万|万)?円)"
+
+
+def _extract_pdf_budget(text: str) -> str:
+    """公募要領PDFの本文から予算を抽出する（1件あたり優先→全体予算）。万円表記に統一。"""
+    flat = re.sub(r"\s+", "", text)
+    # 1件（テーマ）あたりの予算（応募者にとって最も重要）
+    for kw in ["1件当たり", "１件当たり", "1件あたり", "一件当たり",
+               "1テーマ当たり", "1テーマあたり", "1事業者当たり"]:
+        m = re.search(re.escape(kw) + _PDF_MONEY + r"(以内|以下|程度|まで)?", flat)
+        if m:
+            return "1件あたり" + _format_amount(m.group(1) + (m.group(2) or ""))
+    # 全体予算（事業全体の規模）
+    for kw in ["全体予算", "予算総額", "総事業費", "事業規模", "予算規模"]:
+        for m in re.finditer(re.escape(kw) + r"[：:は，、（(]{0,4}" + _PDF_MONEY + r"(程度|以内|以下)?", flat):
+            if "取得" in flat[max(0, m.start() - 8):m.start()]:
+                continue  # 「取得価額50万円」等のノイズを除外
+            return "全体予算" + _format_amount(m.group(1) + (m.group(2) or ""))
+    return ""
+
+
+def _pdf_budget_from_soup(soup) -> str:
+    """公募ページ内の公募要領PDFを探して予算を抽出する（本文に予算が無い場合のフォールバック）。"""
+    import io
+    import urllib.request
+    pdf_url = ""
+    for a in soup.find_all("a", href=re.compile(r"\.pdf", re.I)):
+        label = a.get_text(strip=True)
+        href = a.get("href", "")
+        if any(k in label for k in ("公募要領", "募集要項", "仕様書")):
+            pdf_url = _abs(href)
+            break
+        if not pdf_url:
+            pdf_url = _abs(href)
+    if not pdf_url:
+        return ""
+    try:
+        from pypdf import PdfReader
+        req = urllib.request.Request(pdf_url, headers=HEADERS)
+        with urllib.request.urlopen(req, timeout=40) as resp:
+            data = resp.read()
+        reader = PdfReader(io.BytesIO(data))
+        text = "\n".join((p.extract_text() or "") for p in reader.pages)
+    except Exception as e:
+        logger.error(f"PDF予算取得失敗 {pdf_url}: {e}")
+        return ""
+    return _extract_pdf_budget(text)
 
 
 async def run_all_scrapers() -> List[Dict]:
