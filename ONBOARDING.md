@@ -37,6 +37,8 @@ GitHub Actions（毎日 9:30/13:30/15:30 JST, cron）
 - タグ: `scraper.py` の `TAG_KEYWORDS`（洋上風力/水素/脱炭素・GX/AI・データ 等）＋NEDO分野名。
 - 予算規模(amount): 公募詳細ページ本文の「予算規模：」を優先抽出し**万円表記に統一**（`_format_amount`）。本文に無ければ**公募要領PDF**から抽出（`_pdf_budget_from_soup`/`_extract_pdf_budget`、pypdf使用。「1件あたり」優先→「全体予算」）。表記例: `15,000万円未満（税込）` `1件あたり3,000万円以内` `全体予算100,000万円程度`。
 - 決定事業者(awardee): 結果ページの「実施予定先」直後の社名を抽出（HTMLに社名がある案件のみ。添付PDFのみの案件は取得不可）。`awardee_checked=1`で確認済みを記録し再取得しない。
+- 概要(detail)は**連絡先・メール・電話を除外**（`_CONTACT`）。
+- 予定(schedule): 説明会・申込期限・応募締切・事前相談等を時系列抽出（`_extract_schedule`）しJSON文字列で`schedule`列に保存。詳細ページ「🗓️予定」に表示（過去はグレー）。
 - 文字コード: NEDOはページによりUTF-8/Shift_JIS混在。`_decode`で自動判定。`_normalize_date`は空白除去してから日付判定（重要）。
 - NEDO分野ページの表は5列 `[事業名 | 予告掲載日 | 公募開始日(詳細リンク) | 公募締切日 | 結果(結果リンク)]`。
 
