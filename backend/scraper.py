@@ -49,17 +49,21 @@ def _decode(raw: bytes, content_type: str = "") -> str:
         return raw.decode("utf-8", "replace")
 
 
-async def fetch_bytes(session: aiohttp.ClientSession, url: str):
-    """URLを取得して (本文バイト列, Content-Type) を返す。失敗時は (b"", "")。"""
-    try:
-        await asyncio.sleep(0.7)  # サーバー負荷対策
-        async with session.get(url, headers=HEADERS, timeout=aiohttp.ClientTimeout(total=30)) as resp:
-            resp.raise_for_status()
-            raw = await resp.read()
-            return raw, resp.headers.get("Content-Type", "")
-    except Exception as e:
-        logger.error(f"取得失敗 {url}: {e}")
-        return b"", ""
+async def fetch_bytes(session: aiohttp.ClientSession, url: str, retries: int = 3):
+    """URLを取得して (本文バイト列, Content-Type) を返す。失敗時はリトライ、最終的に (b"", "")。"""
+    for attempt in range(retries):
+        try:
+            await asyncio.sleep(0.7)  # サーバー負荷対策
+            async with session.get(url, headers=HEADERS, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+                resp.raise_for_status()
+                raw = await resp.read()
+                return raw, resp.headers.get("Content-Type", "")
+        except Exception as e:
+            if attempt < retries - 1:
+                await asyncio.sleep(1.5 * (attempt + 1))
+                continue
+            logger.error(f"取得失敗 {url}: {e}")
+            return b"", ""
 
 
 def _normalize_date(text: str) -> str:
@@ -146,23 +150,74 @@ def _extract_deadline(text: str) -> str:
     return ""
 
 
+_SKIP_PARA = re.compile(
+    r"(実施者を.{0,8}募集|を募集します|を募集する予定|を募集いたします|募集致します|"
+    r"説明会を開催|オンライン.{0,4}説明会|Ｊグランツ|Jグランツ|応募期限|受付期間|"
+    r"持参、郵送|契約約款|公募要領をご参照|以下のとおりです。詳細は|電子申請|お問い合わせ|"
+    r"公式Ｘ|公式X|＠nedo|@nedo|フォロー|随時配信|ＳＮＳ)"
+)
+
+
 def _extract_overview(soup: BeautifulSoup) -> str:
-    """詳細ページから概要本文（最初のまとまった段落）を抽出する。"""
-    paras: List[str] = []
-    for p in soup.find_all("p"):
-        t = p.get_text(strip=True)
-        if len(t) >= 20 and not t.startswith("※"):
+    """詳細ページから「公募内容の要約」を抽出する。
+
+    定型の募集アナウンスや手続き案内（説明会・応募方法・契約等）を除き、
+    事業の目的・内容を説明する段落を優先して集める。
+    """
+    def collect(skip_boiler: bool) -> List[str]:
+        paras: List[str] = []
+        for p in soup.find_all("p"):
+            t = p.get_text(strip=True)
+            if len(t) < 25 or t.startswith("※"):
+                continue
+            if skip_boiler and _SKIP_PARA.search(t):
+                continue
             paras.append(t)
-        if len(paras) >= 6:
-            break
-    return "\n\n".join(paras)[:1500]
+            if len(paras) >= 4:
+                break
+        return paras
+
+    paras = collect(skip_boiler=True)
+    if not paras:  # 全て定型文だった場合のフォールバック
+        paras = collect(skip_boiler=False)
+    return "\n\n".join(paras)[:1200]
+
+
+def _parse_yen(s: str):
+    """日本語の金額表記をおおよその円に変換する。変換不能なら None。"""
+    s = s.replace(",", "").replace("，", "").replace("、", "")
+    units = {"億": 10**8, "千万": 10**7, "百万": 10**6, "万": 10**4, "円": 1}
+    total = 0.0
+    found = False
+    for num, unit in re.findall(r"(\d+(?:\.\d+)?)\s*(億|千万|百万|万|円)", s):
+        total += float(num) * units[unit]
+        found = True
+    return total if found else None
+
+
+def _format_amount(raw: str) -> str:
+    """金額表記を「○○万円」に統一する（例：1億5千万円未満（税込）→ 15,000万円未満（税込））。"""
+    if not raw:
+        return raw
+    yen = _parse_yen(raw)
+    if not yen or yen <= 0:
+        return raw  # 変換できなければ原文のまま
+    man = int(round(yen / 10**4))
+    # 付帯表現を保持
+    cond = next((c for c in ["未満", "以内", "以下", "程度", "まで", "以上"] if c in raw), "")
+    tax = ""
+    mt = re.search(r"(税込|税抜)", raw)
+    if mt:
+        tax = "（" + mt.group(1) + "）"
+    per = "1件あたり" if re.search(r"1\s*件", raw) else ""
+    return f"{per}{man:,}万円{cond}{tax}"
 
 
 def _extract_budget(text: str) -> str:
-    """公募詳細ページから「予算規模」を抽出する（例：1億5千万円未満（税込））。"""
+    """公募詳細ページから「予算規模」を抽出し、万円表記に統一して返す。"""
     flat = re.sub(r"\s+", "", text)
     m = re.search(
-        r"予算規模[：:]?[はを]?([0-9０-９,，\.億万千百円以内未満程度税込（）\(\)約\-―~～／/件]{2,45})",
+        r"予算規模[：:]?[はを]?([0-9０-９,，\.億万千百円以内未満程度税込税抜（）\(\)約\-―~～／/件]{2,45})",
         flat,
     )
     if not m:
@@ -170,9 +225,9 @@ def _extract_budget(text: str) -> str:
     val = m.group(1).strip("／/-")
     if "円" not in val:
         return ""
-    # 末尾の余分な文字（次項目の番号など）を除き、金額表現で区切る
-    m2 = re.match(r".*?円(?:以内|未満|程度|以下|台|規模|未満)?(?:（税込）|（税抜）|\(税込\)|\(税抜\))?", val)
-    return m2.group(0) if m2 else val
+    m2 = re.match(r".*?円(?:以内|未満|程度|以下|台|規模)?(?:（税込）|（税抜）|\(税込\)|\(税抜\))?", val)
+    val = m2.group(0) if m2 else val
+    return _format_amount(val)
 
 
 # 会社・機関名の判定パターン（接頭辞型と接尾辞型）。長音ー・中黒・々等も許容。
@@ -307,17 +362,23 @@ async def scrape_nedo() -> List[Dict]:
     return results
 
 
-def _fetch_soup(url: str):
+def _fetch_soup(url: str, retries: int = 3):
+    """同期でページを取得（一時的な失敗に備えてリトライ）。"""
     import urllib.request
-    try:
-        req = urllib.request.Request(url, headers=HEADERS)
-        with urllib.request.urlopen(req, timeout=20) as resp:
-            raw = resp.read()
-            ct = resp.headers.get("Content-Type", "")
-    except Exception as e:
-        logger.error(f"取得失敗 {url}: {e}")
-        return None
-    return BeautifulSoup(_decode(raw, ct), "html.parser")
+    import time as _time
+    for attempt in range(retries):
+        try:
+            req = urllib.request.Request(url, headers=HEADERS)
+            with urllib.request.urlopen(req, timeout=25) as resp:
+                raw = resp.read()
+                ct = resp.headers.get("Content-Type", "")
+            return BeautifulSoup(_decode(raw, ct), "html.parser")
+        except Exception as e:
+            if attempt < retries - 1:
+                _time.sleep(1.5 * (attempt + 1))
+                continue
+            logger.error(f"取得失敗 {url}: {e}")
+            return None
 
 
 def fetch_nedo_detail(url: str) -> Dict[str, str]:
