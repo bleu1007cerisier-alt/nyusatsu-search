@@ -164,31 +164,43 @@ _CONTACT = re.compile(
 )
 
 
-def _extract_overview(soup: BeautifulSoup) -> str:
-    """詳細ページから「公募内容の要約」を抽出する。
+# 「実際の業務内容」を表す段落（背景説明より優先して概要の先頭に置く）
+# 同一段落内に「主語(本事業等)」と「動詞(実施・調査等)」の両方があれば業務内容とみなす
+_SCOPE_SUBJ = re.compile(r"(本事業|本調査|本業務|本公募|本研究|本プロジェクト|本制度|本取組|本委託|本件|本テーマ)")
+_SCOPE_VERB = re.compile(r"(を実施|を行|を募集|を対象|を目的|に取り組|を支援|を構築|を開発|を整備|を調査|を検討|を策定|を推進|を目指)")
 
-    募集アナウンス・手続き案内に加え、連絡先/メール等の段落を除外し、
-    事業の目的・内容を説明する段落を優先して集める。
+
+def _is_scope(p: str) -> bool:
+    return bool(_SCOPE_SUBJ.search(p) and _SCOPE_VERB.search(p))
+
+
+def _extract_overview(soup: BeautifulSoup) -> str:
+    """詳細ページから「業務内容（何をする案件か）」を中心に要約を抽出する。
+
+    募集アナウンス・手続き案内・連絡先を除外し、実際の業務内容を述べた段落を
+    先頭に、続けて背景説明を補足として並べる。
     """
     def collect(skip_boiler: bool) -> List[str]:
-        paras: List[str] = []
+        out: List[str] = []
         for p in soup.find_all("p"):
             t = p.get_text(strip=True)
             if len(t) < 25 or t.startswith("※"):
                 continue
             if _CONTACT.search(t):
-                continue  # 連絡先・メールは概要に含めない
+                continue
             if skip_boiler and _SKIP_PARA.search(t):
                 continue
-            paras.append(t)
-            if len(paras) >= 4:
+            out.append(t)
+            if len(out) >= 6:
                 break
-        return paras
+        return out
 
-    paras = collect(skip_boiler=True)
-    if not paras:
-        paras = collect(skip_boiler=False)
-    return "\n\n".join(paras)[:1200]
+    paras = collect(skip_boiler=True) or collect(skip_boiler=False)
+    # 業務内容を述べた段落を先頭に並べ替え（背景説明は後ろへ）
+    scope = [p for p in paras if _is_scope(p)]
+    rest = [p for p in paras if p not in scope]
+    ordered = (scope + rest)[:3]
+    return "\n\n".join(ordered)[:1000]
 
 
 _SCHED_DATE = r"(20\d\d年\d{1,2}月\d{1,2}日(?:（[月火水木金土日]）)?(?:[^。\n、]{0,10}?(?:まで|正午|時\d{0,2}分?))?)"

@@ -222,6 +222,34 @@ def get_tender(tender_id: int, db: Session = Depends(get_db)):
             # 公示日（なければ締切）で時系列に並べる
             related.sort(key=lambda r: r["published_at"] or r["deadline"] or "")
     data["related"] = related
+
+    # テーマが近い案件（タグの一致数でスコア。自分・同名は除外）
+    my_tags = set(_tag_list(t))
+    similar = []
+    if my_tags:
+        related_titles = {r["title"] for r in related} | {t.title}
+        for s in db.query(Tender).filter(Tender.id != t.id).all():
+            if s.title in related_titles:
+                continue
+            overlap = my_tags & set(_tag_list(s))
+            if overlap:
+                similar.append((len(overlap), s))
+        # 一致数の多い順→受付中優先→新しい順
+        def _rank(pair):
+            n, s = pair
+            st = compute_status(s, today)
+            return (-n, 0 if st == STATUS_OPEN else 1, _rev(s.published_at or ""))
+        similar.sort(key=_rank)
+        data["similar"] = [
+            {
+                "id": s.id, "title": s.title, "status": compute_status(s, today),
+                "deadline": s.deadline, "tags": _tag_list(s),
+                "match": n,
+            }
+            for n, s in similar[:5]
+        ]
+    else:
+        data["similar"] = []
     return data
 
 

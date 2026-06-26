@@ -61,7 +61,21 @@
         </a>
         <span class="text-xs text-gray-400">出典: <span id="source"></span></span>
       </div>
+
+      <!-- 注意書き -->
+      <div class="mt-4 text-xs text-gray-500 bg-amber-50 border border-amber-200 rounded-lg p-3 leading-relaxed">
+        ⚠️ 本ページの情報は当サイトが各機関の公開情報を<strong>自動収集・整形</strong>したものです。
+        収集・解析の過程で<strong>誤りや古い情報が含まれる場合</strong>があります。
+        また、リンク先の元ページは<strong>すでに削除・変更されている場合</strong>があります。
+        応募・正確な内容の確認は必ず<strong>掲載元（公式ページ）</strong>をご確認ください。
+      </div>
     </article>
+
+    <!-- テーマが近い案件 -->
+    <section id="similar-wrap" class="hidden mt-6">
+      <h2 class="text-sm font-semibold text-gray-700 mb-3">🔎 テーマが近い案件</h2>
+      <div id="similar" class="space-y-2"></div>
+    </section>
   </main>
 
   <script>
@@ -172,6 +186,22 @@
 
       document.getElementById('orig-link').href = t.url;
       document.getElementById('source').textContent = t.source || '';
+
+      // テーマが近い案件
+      const sim = t.similar || [];
+      if (sim.length) {
+        document.getElementById('similar-wrap').classList.remove('hidden');
+        const stStyle = {'募集中':'bg-green-100 text-green-700','受付終了':'bg-gray-200 text-gray-600','事業者決定':'bg-purple-100 text-purple-700'};
+        document.getElementById('similar').innerHTML = sim.map(s => `
+          <a href="/tender/${s.id}" class="block bg-white border rounded-lg p-3 hover:shadow-md hover:border-blue-300 transition">
+            <div class="flex items-center gap-2 mb-1">
+              <span class="text-xs px-2 py-0.5 rounded-full ${stStyle[s.status]||'bg-gray-100 text-gray-600'}">${esc(s.status)}</span>
+              ${s.deadline ? `<span class="text-xs text-gray-500">締切 ${esc(s.deadline)}</span>` : ''}
+            </div>
+            <p class="text-sm text-blue-700 leading-snug">${esc(s.title)}</p>
+            <div class="mt-1 flex flex-wrap gap-1">${(s.tags||[]).slice(0,4).map(tag=>`<span class="text-xs px-1.5 py-0.5 rounded-full bg-indigo-50 text-indigo-600">#${esc(tag)}</span>`).join('')}</div>
+          </a>`).join('');
+      }
     }
 
     load();
