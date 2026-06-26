@@ -131,7 +131,7 @@
         statusBadge(t.status) +
         `<span class="text-xs font-medium px-2.5 py-1 rounded-full ${badgeClass}">${esc(t.category)}</span>` +
         `<span class="text-xs px-2.5 py-1 rounded-full bg-gray-100 text-gray-600">${esc(t.prefecture) || '—'}</span>`;
-      document.getElementById('title').textContent = t.title;
+      document.getElementById('title').textContent = t.title.replace(/^【[^】]*】\s*/, '');
 
       // プロジェクトの経過（関連案件の時系列）
       const rel = (t.related || []);
