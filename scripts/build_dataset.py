@@ -34,8 +34,8 @@ CSV_PATH = os.path.join(DATASET_DIR, "tenders.csv")
 FIELDNAMES = [
     "id", "title", "category", "organization", "prefecture",
     "published_at", "deadline", "result_date", "project_code", "awardee",
-    "awardee_checked", "amount", "url", "summary", "detail", "schedule", "tags", "source",
-    "first_seen", "last_seen",
+    "awardee_checked", "amount", "budget_checked", "url", "summary", "detail",
+    "schedule", "tags", "source", "first_seen", "last_seen",
 ]
 
 # 1回の実行で詳細/結果ページを取得する最大件数（負荷・実行時間対策。未取得分を順次埋める）
@@ -121,21 +121,29 @@ def main():
 
     print(f"新規: {new_count}件 / 更新: {update_count}件 / 合計: {len(merged)}件")
 
-    # 【増分】概要(detail)・予算(amount)が未取得のものだけ取得。本文に予算が無ければPDFから補完。
-    # detailは一度取れれば再取得しないため、定常運用では新規分のみが対象になる。
-    targets = [
-        r for r in merged.values()
-        if r.get("source") == "NEDO" and r.get("url") and not (r.get("detail") or "").strip()
-    ]
+    # 【増分】概要が未取得、または予算が未取得で未確認の案件だけ取得。
+    # 本文に予算が無ければ公募要領PDFから補完。一度確認した案件は再取得しない。
+    def needs_fetch(r):
+        if r.get("source") != "NEDO" or not r.get("url"):
+            return False
+        if not (r.get("detail") or "").strip():
+            return True  # 概要未取得（新規等）
+        if not (r.get("amount") or "").strip() and (r.get("budget_checked") or "") != "1":
+            return True  # 予算未取得かつ未確認（取りこぼしの補完）
+        return False
+
+    targets = [r for r in merged.values() if needs_fetch(r)]
     print(f"概要/予算を取得（増分）: {min(len(targets), MAX_DETAIL_PER_RUN)}件")
     for r in targets[:MAX_DETAIL_PER_RUN]:
         info = fetch_nedo_detail(r["url"])  # 概要＋予算（本文→無ければPDF）＋予定
-        if info.get("detail"):
-            r["detail"] = info["detail"]
-        if info.get("budget") and not (r.get("amount") or "").strip():
-            r["amount"] = info["budget"]
-        if info.get("schedule"):
-            r["schedule"] = json.dumps(info["schedule"], ensure_ascii=False)
+        if info:  # ページ取得成功
+            if info.get("detail") and not (r.get("detail") or "").strip():
+                r["detail"] = info["detail"]
+            if info.get("budget") and not (r.get("amount") or "").strip():
+                r["amount"] = info["budget"]
+            if info.get("schedule") and not (r.get("schedule") or "").strip():
+                r["schedule"] = json.dumps(info["schedule"], ensure_ascii=False)
+            r["budget_checked"] = "1"  # 予算確認済み（空でも再取得しない）
         time.sleep(DETAIL_SLEEP)
 
     # 【増分】決定事業者：結果が出ていて未チェックの案件だけ確認（一度確認したら再取得しない）

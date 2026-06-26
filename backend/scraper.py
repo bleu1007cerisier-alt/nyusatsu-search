@@ -271,8 +271,9 @@ def _format_amount(raw: str) -> str:
 def _extract_budget(text: str) -> str:
     """公募詳細ページから「予算規模」を抽出し、万円表記に統一して返す。"""
     flat = re.sub(r"\s+", "", text)
+    # 「予算規模：」「【予算規模】」「予算規模は」等、キーワード直後の区切り（】］：等）を許容
     m = re.search(
-        r"予算規模[：:]?[はを]?([0-9０-９,，\.億万千百円以内未満程度税込税抜（）\(\)約\-―~～／/件]{2,45})",
+        r"予算規模[^0-9０-９億万千百]{0,5}([0-9０-９,，\.億万千百円以内未満程度税込税抜（）\(\)約\-―~～／/件]{2,45})",
         flat,
     )
     if not m:
@@ -476,9 +477,14 @@ def _extract_pdf_budget(text: str) -> str:
         m = re.search(re.escape(kw) + _PDF_MONEY + r"(以内|以下|程度|まで)?", flat)
         if m:
             return "1件あたり" + _format_amount(m.group(1) + (m.group(2) or ""))
+    # 予算規模（【予算規模】2,000万円以内 等。1件あたりの次に優先）
+    for m in re.finditer(r"予算規模[^0-9０-９億万千百]{0,5}" + _PDF_MONEY + r"(以内|以下|程度|まで)?", flat):
+        if "提案内容次第" in flat[m.start():m.start() + 30]:
+            continue  # 「予算規模は提案内容次第のため上限等は設けません」等を除外
+        return _format_amount(m.group(1) + (m.group(2) or ""))
     # 全体予算（事業全体の規模）
-    for kw in ["全体予算", "予算総額", "総事業費", "事業規模", "予算規模"]:
-        for m in re.finditer(re.escape(kw) + r"[：:は，、（(]{0,4}" + _PDF_MONEY + r"(程度|以内|以下)?", flat):
+    for kw in ["全体予算", "予算総額", "総事業費", "事業規模"]:
+        for m in re.finditer(re.escape(kw) + r"[^0-9０-９億万千百]{0,5}" + _PDF_MONEY + r"(程度|以内|以下)?", flat):
             if "取得" in flat[max(0, m.start() - 8):m.start()]:
                 continue  # 「取得価額50万円」等のノイズを除外
             return "全体予算" + _format_amount(m.group(1) + (m.group(2) or ""))
