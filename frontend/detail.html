@@ -54,6 +54,11 @@
         <ol id="schedule" class="space-y-1.5"></ol>
       </div>
 
+      <div id="attach-wrap" class="mb-6 hidden">
+        <h2 class="text-sm font-semibold text-gray-700 mb-2">📎 関連資料（仕様書・公募要領・評価基準）</h2>
+        <ul id="attachments" class="space-y-1.5"></ul>
+      </div>
+
       <div class="pt-4 border-t flex flex-wrap gap-3 items-center">
         <a id="orig-link" href="#" target="_blank" rel="noopener"
            class="bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-lg text-sm font-medium transition">
@@ -180,6 +185,19 @@
             <span class="shrink-0 tabular-nums ${past ? '' : 'font-semibold'}">${esc(s.date)}</span>
             <span class="shrink-0 text-xs px-1.5 py-0.5 rounded ${past ? 'bg-gray-100 text-gray-400' : 'bg-blue-50 text-blue-700'}">${esc(s.label)}</span>
             <span class="text-xs text-gray-400">${esc(s.raw || '')}</span>
+          </li>`;
+        }).join('');
+      }
+
+      // 関連資料（保存済み添付ファイル）
+      const atts = t.attachments || [];
+      if (atts.length) {
+        document.getElementById('attach-wrap').classList.remove('hidden');
+        document.getElementById('attachments').innerHTML = atts.map(a => {
+          const link = a.url || a.source_url;
+          return `<li class="text-sm flex items-center gap-2">
+            <span class="text-xs px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 shrink-0">${esc(a.kind || '資料')}</span>
+            <a href="${esc(link)}" target="_blank" rel="noopener" class="text-blue-600 hover:underline">📄 ${esc(a.name || a.kind)}</a>
           </li>`;
         }).join('');
       }
