@@ -65,8 +65,10 @@ def _store_attachments(row, attachments):
         safe = _re.sub(r"[^A-Za-z0-9_.-]", "_", att["url"].split("/")[-1]) or f"file{i}.pdf"
         key = f"nedo/{row['id']}/{att['kind']}_{safe}"
         public = storage.upload_bytes(key, data, "application/pdf")
+        # 公開URL（http...）のときだけ表示用urlに採用。非公開保存時は原文リンクにフォールバック
+        url = public if public.startswith("http") else ""
         stored.append({"name": att["name"], "kind": att["kind"],
-                       "url": public, "source_url": att["url"]})
+                       "url": url, "key": key, "source_url": att["url"]})
     row["attachments"] = json.dumps(stored, ensure_ascii=False)
     row["attachments_checked"] = "1"
 
