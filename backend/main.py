@@ -69,6 +69,7 @@ def load_dataset_into_db() -> int:
                     summary=row.get("summary", ""),
                     detail=row.get("detail", ""),
                     schedule=row.get("schedule", ""),
+                    attachments=row.get("attachments", ""),
                     tags=row.get("tags", ""),
                     source=row.get("source", ""),
                 ))
@@ -202,6 +203,10 @@ def get_tender(tender_id: int, db: Session = Depends(get_db)):
         data["schedule"] = json.loads(t.schedule) if (t.schedule or "").strip() else []
     except (ValueError, TypeError):
         data["schedule"] = []
+    try:
+        data["attachments"] = json.loads(t.attachments) if (t.attachments or "").strip() else []
+    except (ValueError, TypeError):
+        data["attachments"] = []
 
     # 同じ事業名（正式名称が一致するもの）の公募回をまとめる。
     # ※ 事業コードは予算番号で別テーマの公募も含むため、正式名称で厳密に同一案件のみを束ねる。

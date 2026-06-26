@@ -35,6 +35,7 @@ class Tender(Base):
     summary = Column(Text)               # 概要（短い説明・分野名）
     detail = Column(Text)                # 詳細本文（アプリ内詳細表示用・連絡先は除外）
     schedule = Column(Text)              # 予定（説明会・各種期限）JSON文字列
+    attachments = Column(Text)           # 添付ファイル（R2保存先）JSON文字列
     tags = Column(String(500))           # タグ（カンマ区切り）
     source = Column(String(100))         # データソース名
     fetched_at = Column(DateTime, default=datetime.now)
@@ -59,6 +60,7 @@ def init_db():
             ("project_code", "ALTER TABLE tenders ADD COLUMN project_code VARCHAR(100)"),
             ("awardee", "ALTER TABLE tenders ADD COLUMN awardee VARCHAR(300)"),
             ("schedule", "ALTER TABLE tenders ADD COLUMN schedule TEXT"),
+            ("attachments", "ALTER TABLE tenders ADD COLUMN attachments TEXT"),
         ]
         for col, ddl in migrations:
             if col not in existing:

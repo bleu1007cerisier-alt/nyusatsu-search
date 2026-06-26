@@ -453,7 +453,33 @@ def fetch_nedo_detail(url: str) -> Dict[str, str]:
         "detail": _extract_overview(soup),
         "budget": budget,
         "schedule": _extract_schedule(text),
+        "attachments": _extract_attachment_links(soup),
     }
+
+
+# 蓄積対象の添付ファイル種別（ラベルに含まれる語 → 種別名）
+_ATTACH_KINDS = [
+    ("公募要領", "公募要領"), ("募集要項", "公募要領"), ("仕様書", "仕様書"),
+    ("評価", "評価基準"), ("採点", "評価基準"), ("審査", "審査基準"),
+    ("基本計画", "基本計画"), ("提案書", "提案様式"),
+]
+
+
+def _extract_attachment_links(soup):
+    """公募ページから蓄積対象の添付PDF（公募要領・仕様書・評価基準等）のリンクを抽出する。"""
+    out = []
+    seen = set()
+    for a in soup.find_all("a", href=re.compile(r"\.pdf", re.I)):
+        label = a.get_text(" ", strip=True)
+        kind = next((k for key, k in _ATTACH_KINDS if key in label), "")
+        if not kind:
+            continue
+        href = _abs(a.get("href", ""))
+        if not href or href in seen:
+            continue
+        seen.add(href)
+        out.append({"name": label, "url": href, "kind": kind})
+    return out
 
 
 def fetch_nedo_result(url: str) -> Dict[str, str]:

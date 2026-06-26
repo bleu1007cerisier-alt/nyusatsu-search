@@ -27,6 +27,7 @@ sys.path.insert(0, os.path.join(ROOT, "backend"))
 from scraper import (  # noqa: E402
     run_all_scrapers, fetch_nedo_detail, fetch_nedo_result,
 )
+import storage  # noqa: E402
 
 DATASET_DIR = os.path.join(ROOT, "dataset")
 CSV_PATH = os.path.join(DATASET_DIR, "tenders.csv")
@@ -35,8 +36,39 @@ FIELDNAMES = [
     "id", "title", "category", "organization", "prefecture",
     "published_at", "deadline", "result_date", "project_code", "awardee",
     "awardee_checked", "amount", "budget_checked", "url", "summary", "detail",
-    "schedule", "tags", "source", "first_seen", "last_seen",
+    "schedule", "attachments", "attachments_checked", "tags", "source",
+    "first_seen", "last_seen",
 ]
+
+
+def _download(url: str) -> bytes:
+    import urllib.request
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            return resp.read()
+    except Exception as e:  # noqa: BLE001
+        print(f"添付DL失敗 {url}: {e}")
+        return b""
+
+
+def _store_attachments(row, attachments):
+    """添付PDFをR2へ保存し、保存先情報を row['attachments'] に記録する（R2有効時のみ）。"""
+    if not storage.r2_enabled():
+        return  # 鍵未設定なら何もしない（attachments_checkedも立てず、有効化後に処理）
+    import re as _re
+    stored = []
+    for i, att in enumerate(attachments):
+        data = _download(att["url"])
+        if not data:
+            continue
+        safe = _re.sub(r"[^A-Za-z0-9_.-]", "_", att["url"].split("/")[-1]) or f"file{i}.pdf"
+        key = f"nedo/{row['id']}/{att['kind']}_{safe}"
+        public = storage.upload_bytes(key, data, "application/pdf")
+        stored.append({"name": att["name"], "kind": att["kind"],
+                       "url": public, "source_url": att["url"]})
+    row["attachments"] = json.dumps(stored, ensure_ascii=False)
+    row["attachments_checked"] = "1"
 
 # 1回の実行で詳細/結果ページを取得する最大件数（負荷・実行時間対策。未取得分を順次埋める）
 MAX_DETAIL_PER_RUN = 200
@@ -130,6 +162,8 @@ def main():
             return True  # 概要未取得（新規等）
         if not (r.get("amount") or "").strip() and (r.get("budget_checked") or "") != "1":
             return True  # 予算未取得かつ未確認（取りこぼしの補完）
+        if storage.r2_enabled() and (r.get("attachments_checked") or "") != "1":
+            return True  # 添付ファイル未保存（R2有効時）
         return False
 
     targets = [r for r in merged.values() if needs_fetch(r)]
@@ -144,6 +178,9 @@ def main():
             if info.get("schedule") and not (r.get("schedule") or "").strip():
                 r["schedule"] = json.dumps(info["schedule"], ensure_ascii=False)
             r["budget_checked"] = "1"  # 予算確認済み（空でも再取得しない）
+            # 添付ファイル（仕様書・公募要領・評価基準）をR2へ保存（有効時のみ・未保存のみ）
+            if storage.r2_enabled() and (r.get("attachments_checked") or "") != "1":
+                _store_attachments(r, info.get("attachments", []))
         time.sleep(DETAIL_SLEEP)
 
     # 【増分】決定事業者：結果が出ていて未チェックの案件だけ確認（一度確認したら再取得しない）
