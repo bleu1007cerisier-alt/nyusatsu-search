@@ -39,6 +39,9 @@ GitHub Actions（毎日 9:30/13:30/15:30 JST, cron）
 - 決定事業者(awardee): 結果ページの「実施予定先」直後の社名を抽出（HTMLに社名がある案件のみ。添付PDFのみの案件は取得不可）。`awardee_checked=1`で確認済みを記録し再取得しない。
 - 概要(detail)は**連絡先・メール・電話を除外**（`_CONTACT`）。
 - 予定(schedule): 説明会・申込期限・応募締切・事前相談等を時系列抽出（`_extract_schedule`）しJSON文字列で`schedule`列に保存。詳細ページ「🗓️予定」に表示（過去はグレー）。
+- 概要は業務内容段落(_is_scope)を先頭に並べ替え。類似案件: タグ一致数で算出し詳細最下段表示(/api/tenders/{id} の similar)。各ページに自動収集の注意書き。
+- 添付ファイル(attachments): 公募要領/仕様書/評価基準PDFを `backend/storage.py`(Cloudflare R2, S3互換)へ保存。**R2_* 環境変数(GitHub Secrets)が未設定なら保存はスキップ**(原文リンクのみ)。build_dataset が新規案件のみDL→R2保存しattachments(JSON)に記録。CSV列: attachments/attachments_checked、DB attachments列。要 boto3。
+- 予算抽出はHTML本文→無ければ公募要領PDF。「【予算規模】」等の記号区切りにも対応。budget_checkedで未取得分の一度きり再取得。カバレッジ約53/100件。
 - 文字コード: NEDOはページによりUTF-8/Shift_JIS混在。`_decode`で自動判定。`_normalize_date`は空白除去してから日付判定（重要）。
 - NEDO分野ページの表は5列 `[事業名 | 予告掲載日 | 公募開始日(詳細リンク) | 公募締切日 | 結果(結果リンク)]`。
 
