@@ -18,7 +18,39 @@ import csv
 import json
 import time
 import asyncio
+import re as _re_summary
 from datetime import date
+
+
+def _ai_summary(raw_text: str, title: str = "") -> str:
+    """Claude Haiku で入札公告・公募テキストを要約する。
+    ANTHROPIC_API_KEY が未設定の場合は空文字を返す（処理をスキップ）。
+    """
+    api_key = os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("CLAUDE_API_KEY")
+    if not api_key or len(raw_text.strip()) < 80:
+        return ""
+    try:
+        import anthropic
+        client = anthropic.Anthropic(api_key=api_key)
+        prompt = (
+            "以下の入札公告・公募テキストを、150〜250文字の自然な日本語散文で要約してください。\n"
+            "箇条書きや見出しは不要です。調達の目的・内容、履行期限、参加資格、入札日程など"
+            "重要な情報を含めた、読みやすい要約文を作成してください。\n"
+            "「入　札　公　告」のような書式タイトルは省いてください。\n\n"
+            f"タイトル: {title}\n\n"
+            f"テキスト:\n{raw_text[:2000]}\n\n"
+            "要約（150〜250文字）:"
+        )
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        summary = msg.content[0].text.strip()
+        return summary[:400] if summary else ""
+    except Exception as e:
+        print(f"AI要約失敗: {e}")
+        return ""
 
 # backend をインポートできるようにする
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -329,18 +361,21 @@ def main():
     # 本文に予算が無ければ公募要領PDFから補完。一度確認した案件は再取得しない。
     _FETCH_SOURCES = {"NEDO", "JST", "PORTAL"}
 
-    # PORTAL: ゴミ記号のみの detail（非空だが無意味）の案件だけをリセット。
+    # PORTAL: ゴミ記号・ヘッダーのみの detail をリセット（→ 再取得 & AI要約の対象に）。
     # 空の detail は「取得済みだが portal 側に情報がない」ため再取得しない（無限ループ防止）。
+    _HEADER_ONLY = _re_summary.compile(r'^[入　札公告\s　]{2,40}$')  # 「入　札　公　告」など
     portal_retry = 0
     for r in merged.values():
         if r.get("source") == "PORTAL" and (r.get("budget_checked") or "") == "1":
             det = (r.get("detail") or "").strip()
-            if det and _GARBAGE_DETAIL.match(det):  # 空ならスキップ、ゴミだけリセット
+            is_garbage = det and _GARBAGE_DETAIL.match(det)
+            is_header_only = det and _HEADER_ONLY.match(det)
+            if is_garbage or is_header_only:
                 r["budget_checked"] = ""
                 r["detail"] = ""
                 portal_retry += 1
     if portal_retry:
-        print(f"PORTAL: ゴミdetail({portal_retry}件)を再取得対象にリセット")
+        print(f"PORTAL: ゴミ・ヘッダーのみdetail({portal_retry}件)を再取得対象にリセット")
 
     def needs_fetch(r):
         if r.get("source") not in _FETCH_SOURCES or not r.get("url"):
@@ -365,6 +400,11 @@ def main():
             info = fetch_nedo_detail(r["url"])  # 概要＋予算（本文→無ければPDF）＋予定
         if info:  # ページ取得成功
             new_detail = info.get("detail", "")
+            # 長い生テキスト（入札公告など）はAIで要約してから格納
+            if new_detail and len(new_detail) > 100:
+                summarized = _ai_summary(new_detail, r.get("title", ""))
+                if summarized:
+                    new_detail = summarized
             cur_detail = (r.get("detail") or "").strip()
             # PORTAL はゴミdetailをリセット済みなので常に上書き。他ソースは空のときのみ
             if new_detail and (not cur_detail or r.get("source") == "PORTAL"):
