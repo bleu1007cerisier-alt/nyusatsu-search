@@ -363,7 +363,7 @@ def main():
 
     # PORTAL: ゴミ記号・ヘッダーのみの detail をリセット（→ 再取得 & AI要約の対象に）。
     # 空の detail は「取得済みだが portal 側に情報がない」ため再取得しない（無限ループ防止）。
-    _HEADER_ONLY = _re_summary.compile(r'^[入　札公告\s　]{2,40}$')  # 「入　札　公　告」など
+    _HEADER_ONLY = _re_key.compile(r'^[入　札公告\s　]{2,40}$')  # 「入　札　公　告」など
     portal_retry = 0
     for r in merged.values():
         if r.get("source") == "PORTAL" and (r.get("budget_checked") or "") == "1":
