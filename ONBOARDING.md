@@ -1,85 +1,311 @@
 # 入札・プロポーザル検索アプリ 引き継ぎガイド
 
-別のClaude Code環境／アカウントで、このプロジェクトの続きを行うための引き継ぎ資料です。
-まずこのファイルを最初から最後まで読み、`backend/` と `dataset/tenders.csv` を確認してください。
+別のClaude Code環境／アカウントで続きを行うための引き継ぎ資料です。
+**まずこのファイルを最初から最後まで読んでください。**
+
+---
 
 ## 0. このプロジェクトは何か
+
 - 日本全国の入札・公募（プロポーザル）情報を一元検索できるWebアプリ。
 - オーナーの目標：**月5万円の副収入**（有料プラン980円/月 × 50人を想定）。
 - 公開中: **https://nyusatsu-search.onrender.com/**
 - GitHub: **https://github.com/bleu1007cerisier-alt/nyusatsu-search**
 
-## 1. 技術構成
-- バックエンド: Python + FastAPI（`backend/main.py`）
-- DB: SQLite（`backend/database.py`）。ただし**永続的な真のデータは `dataset/tenders.csv`**（後述）。
-- フロント: 素のHTML + Tailwind CDN（`frontend/index.html` 一覧、`frontend/detail.html` 詳細ページ）
-- スクレイピング: aiohttp + BeautifulSoup（`backend/scraper.py`）、PDFは未使用
-- デプロイ: Render.com（無料プラン）。`render.yaml` あり。起動コマンドは必ず `uvicorn backend.main:app --host 0.0.0.0 --port $PORT`（**$PORT必須**）。
-- 自動更新: GitHub Actions（`.github/workflows/scrape.yml`）
+---
 
-## 2. 最重要：データの流れ（集める=cron / 見せる=軽量サイト）
+## 1. システム構成（全体像）
+
 ```
-GitHub Actions（毎日 9:30/13:30/15:30 JST, cron）
-  → python scripts/build_dataset.py を実行（★スクレイピングはここだけ）
-  → NEDOを巡回し dataset/tenders.csv に追記マージ（消さず蓄積）。**増分更新**：概要・予算・決定事業者は新規/未取得の案件だけ取得し、既存は再ダウンロードしない
-  → 変更があれば自動コミット&push
-  → Render が自動再デプロイ
-  → サイトは起動時に dataset/tenders.csv をDBへ読込（load_dataset_into_db）。★実行時スクレイピングはしない
+【収集層】毎日3回自動実行（GitHub Actions cron）
+  NEDO公式サイト
+    ↓ HTML巡回・PDF取得
+  GitHub Actions (scrape.yml → build_dataset.py + scraper.py)
+    ↓ PDF保存             ↓ CSVコミット
+  Cloudflare R2        GitHub (dataset/tenders.csv) ← データの正本
+                           ↓ push検知
+                       Render.com 自動デプロイ
+
+【表示層】リクエスト時
+  ユーザーブラウザ → Render.com (FastAPI) → SQLite（起動時にCSVから構築）
+                                          ↑ 実行時スクレイピングなし
 ```
-- だからサイトは軽い。データの正本は `dataset/tenders.csv`（utf-8-sig, id列で安定）。
-- ローカルで手動更新するなら: `python scripts/build_dataset.py`
 
-## 3. データ項目と仕様
-- 種別(category): 入札 / プロポーザル（現状ほぼ全てプロポーザル）
-- 状態(status): **DB非保存・配信時に算出**。`result_date`あり→事業者決定 / 締切<今日→受付終了 / それ以外→募集中。
-- `project_code`(事業コード 【Pxxxxx】): NEDOの予算番号。**別テーマの公募も同番号にぶら下がる**ため、関連案件のまとめには使わない。
-- 関連案件（プロジェクト経過）: **事業名(title完全一致)**で束ねる。詳細ページ「同じ事業名の公募回」。
-- タグ: `scraper.py` の `TAG_KEYWORDS`（洋上風力/水素/脱炭素・GX/AI・データ 等）＋NEDO分野名。
-- 予算規模(amount): 公募詳細ページ本文の「予算規模：」を優先抽出し**万円表記に統一**（`_format_amount`）。本文に無ければ**公募要領PDF**から抽出（`_pdf_budget_from_soup`/`_extract_pdf_budget`、pypdf使用。「1件あたり」優先→「全体予算」）。表記例: `15,000万円未満（税込）` `1件あたり3,000万円以内` `全体予算100,000万円程度`。
-- 決定事業者(awardee): 結果ページの「実施予定先」直後の社名を抽出（HTMLに社名がある案件のみ。添付PDFのみの案件は取得不可）。`awardee_checked=1`で確認済みを記録し再取得しない。
-- 概要(detail)は**連絡先・メール・電話を除外**（`_CONTACT`）。
-- 予定(schedule): 説明会・申込期限・応募締切・事前相談等を時系列抽出（`_extract_schedule`）しJSON文字列で`schedule`列に保存。詳細ページ「🗓️予定」に表示（過去はグレー）。
-- 概要は業務内容段落(_is_scope)を先頭に並べ替え。類似案件: タグ一致数で算出し詳細最下段表示(/api/tenders/{id} の similar)。各ページに自動収集の注意書き。
-- 添付ファイル(attachments): 公募要領/仕様書/評価基準PDFを `backend/storage.py`(Cloudflare R2, S3互換)へ保存。**R2_* 環境変数(GitHub Secrets)が未設定なら保存はスキップ**(原文リンクのみ)。build_dataset が新規案件のみDL→R2保存しattachments(JSON)に記録。CSV列: attachments/attachments_checked、DB attachments列。要 boto3。
-- 予算抽出はHTML本文→無ければ公募要領PDF。「【予算規模】」等の記号区切りにも対応。budget_checkedで未取得分の一度きり再取得。カバレッジ約53/100件。
-- 文字コード: NEDOはページによりUTF-8/Shift_JIS混在。`_decode`で自動判定。`_normalize_date`は空白除去してから日付判定（重要）。
-- NEDO分野ページの表は5列 `[事業名 | 予告掲載日 | 公募開始日(詳細リンク) | 公募締切日 | 結果(結果リンク)]`。
+**重要**: ローカルPC（あなたのPC）は開発・デバッグ専用。本番運用はローカル不要。
 
-## 4. API（`backend/main.py`）
-- `GET /api/tenders` … 検索。params: q, category, prefecture, source, tag, status, skip, limit。並び順=募集中(締切近い順)→受付終了→事業者決定。
-- `GET /api/tenders/{id}` … 詳細。related[]（同名の公募回）を含む。
-- `GET /api/stats` … 件数・状態別件数・タグ集計。
-- `GET /tender/{id}` … 詳細ページHTML（detail.html）を返すルート。
-- レスポンスは no-cache ヘッダ付き（古い画面のキャッシュ防止）。
+---
 
-## 5. ローカル開発手順
+## 2. 技術スタック
+
+| 役割 | 技術 | ファイル |
+|------|------|---------|
+| バックエンド | Python + FastAPI | `backend/main.py` |
+| データベース | SQLite（起動時構築・永続化しない） | `backend/database.py` |
+| データ正本 | CSV（GitHubに蓄積） | `dataset/tenders.csv` |
+| フロントエンド | 素のHTML + Tailwind CDN | `frontend/index.html`, `frontend/detail.html` |
+| スクレイピング | aiohttp + BeautifulSoup + pypdf | `backend/scraper.py` |
+| データ蓄積 | build_dataset.py（Actions専用） | `scripts/build_dataset.py` |
+| PDFストレージ | Cloudflare R2（S3互換） | `backend/storage.py` |
+| デプロイ | Render.com 無料プラン | `render.yaml` |
+| 自動更新 | GitHub Actions cron | `.github/workflows/scrape.yml` |
+
+---
+
+## 3. データの流れ（最重要）
+
+### 3-1. 収集フロー（GitHub Actions が自動実行）
+
 ```
+1. scrape_nedo() で NEDO分野ページを全巡回 → 案件一覧を取得
+2. 既存 tenders.csv とURLキーでマージ（既存データは消さず蓄積）
+3. needs_fetch() で未取得案件のみ詳細ページ取得（増分）
+   - 概要(detail)未取得 → fetch_nedo_detail() で取得
+   - 予算(amount)未取得 → HTML本文 → 無ければ公募要領PDFから抽出
+   - R2有効かつ添付未保存 → _store_attachments() でR2にアップロード
+4. R2に添付済みで予算未取得の案件 → _budget_from_r2() でR2 PDFから再抽出
+5. 決定事業者(awardee)未取得 → fetch_nedo_result() で取得
+6. 変更があれば tenders.csv をコミット → Render が自動デプロイ
+```
+
+### 3-2. 表示フロー（Render.com）
+
+```
+サーバー起動 → load_dataset_into_db() → tenders.csv を SQLite に全件投入
+リクエスト → compute_status() で状態を動的計算 → JSON返却
+※ 起動後のスクレイピングは一切しない（軽量・安定）
+```
+
+---
+
+## 4. CSVの構造（dataset/tenders.csv）
+
+文字コード: **utf-8-sig**（BOM付き）。`id`列が安定キー。
+
+| 列名 | 内容 | 備考 |
+|------|------|------|
+| id | 連番（整数） | マージ時に自動採番 |
+| title | 業務名 | 【P25011】等の事業コードは除去済み |
+| category | 入札 / プロポーザル | 現状ほぼプロポーザル |
+| organization | 発注機関名 | |
+| prefecture | 都道府県 / 国 | |
+| published_at | 公募開始日（YYYY-MM-DD） | |
+| deadline | 締切日（YYYY-MM-DD） | |
+| result_date | 事業者決定日（YYYY-MM-DD） | あれば事業者決定ステータス |
+| project_code | 事業コード（P25011等） | NEDOの予算番号。別テーマも同番号になるため関連案件のまとめには使わない |
+| awardee | 決定事業者名 | HTMLに記載がある案件のみ |
+| awardee_checked | 1=確認済み | 再取得しない制御フラグ |
+| amount | 予算規模（万円表記） | 例: `2,000万円以内` `1件あたり1,500万円程度` |
+| budget_checked | 1=確認済み | 再取得しない制御フラグ |
+| url | 公募詳細ページURL | |
+| summary | NEDO分野名 | 一覧ページで取得 |
+| detail | 概要文（業務内容） | 連絡先・メール除外済み |
+| schedule | 予定リスト（JSON） | `[{label, date, raw}]` |
+| attachments | R2保存情報（JSON） | `[{name, kind, url, key, source_url}]` |
+| attachments_checked | 1=確認済み | 再アップロードしない制御フラグ |
+| tags | タグ（カンマ区切り） | TAG_KEYWORDS + NEDO分野名 |
+| source | データソース名 | 現状 "NEDO" |
+| first_seen | 初回取得日 | |
+| last_seen | 最終確認日 | |
+
+---
+
+## 5. 重要な実装ポイント
+
+### 5-1. 状態(status)はDB非保存・動的計算
+```python
+# backend/main.py の compute_status()
+result_date あり → 事業者決定
+deadline < 今日  → 受付終了
+それ以外         → 募集中
+```
+
+### 5-2. 関連案件は title 完全一致で束ねる
+`project_code`（予算番号）は別テーマの公募も同番号にぶら下がるため使わない。
+
+### 5-3. 予算抽出の優先順位
+```
+HTML本文「予算規模：」→ 公募要領PDF（NEDOから直接DL）→ R2保存PDF（_budget_from_r2）
+```
+抽出パターン: 予算規模 / 上限額 / 委託費 / 委託業務費 / 上限金額 / 交付上限額 / 補助上限額 等
+
+### 5-4. R2ストレージのキー形式
+```
+nedo/{published_at}_{id}/{kind}_{filename}
+例: nedo/2025-04-01_42/公募要領_koubo.pdf
+```
+
+### 5-5. 増分更新フラグの仕組み
+- `budget_checked=1` → 予算確認済み（空でも再取得しない）
+- `awardee_checked=1` → 決定事業者確認済み
+- `attachments_checked=1` → R2保存済み
+
+**フラグを空にリセット → 次回実行時に再取得される**
+
+### 5-6. キャッシュ防止
+全APIレスポンスに `Cache-Control: no-store` ヘッダを付与（`add_no_cache_headers` ミドルウェア）。
+
+---
+
+## 6. 現状サマリ（2026-06-27時点）
+
+| 項目 | 値 |
+|------|-----|
+| データ件数 | 100件（NEDOのみ） |
+| 予算カバレッジ | 76/100件（76%） |
+| R2保存PDF | 203ファイル / 113MB |
+| 状態内訳 | 募集中 約16件 / 受付終了 約41件 / 事業者決定 約43件 |
+| スクレイピング頻度 | 毎日3回（9:30/13:30/15:30 JST）|
+
+---
+
+## 7. インフラ・認証情報
+
+### GitHub Secrets（Actions実行時に自動注入）
+| Secret名 | 用途 |
+|---------|------|
+| `R2_ENDPOINT` | `https://{accountid}.r2.cloudflarestorage.com` |
+| `R2_ACCESS_KEY_ID` | Cloudflare R2 APIトークン |
+| `R2_SECRET_ACCESS_KEY` | Cloudflare R2 シークレット |
+| `R2_BUCKET` | `nyusatsu-docs` |
+
+`R2_PUBLIC_URL` は未設定（PDFは非公開。サイトには原文リンクを表示）。
+
+### ローカル開発用 .env（gitignore済み・GitHub未登録）
+```
+R2_ENDPOINT=https://bbb8a2c9b518b16ec1969f232154d2c4.r2.cloudflarestorage.com
+R2_ACCESS_KEY_ID=（オーナーに確認）
+R2_SECRET_ACCESS_KEY=（オーナーに確認）
+R2_BUCKET=nyusatsu-docs
+```
+
+### GitHub PAT（コードpush用）
+- スコープ: `repo` + `workflow`
+- 保存場所: Windows資格情報マネージャー（`git:https://github.com`）
+- Actions手動実行: `gh workflow run scrape.yml --repo bleu1007cerisier-alt/nyusatsu-search`
+  または GitHub REST API:
+  ```powershell
+  $headers = @{ Authorization = "token ghp_..."; Accept = "application/vnd.github.v3+json" }
+  Invoke-RestMethod -Method POST -Uri "https://api.github.com/repos/bleu1007cerisier-alt/nyusatsu-search/actions/workflows/scrape.yml/dispatches" -Headers $headers -Body '{"ref":"main"}' -ContentType "application/json"
+  ```
+
+### Render.com
+- Start Command: `uvicorn backend.main:app --host 0.0.0.0 --port $PORT`（**$PORT必須**）
+- Build Command: `pip install -r requirements.txt`
+- プラン: Free（15分無アクセスで休止→初回表示遅い）
+
+---
+
+## 8. ローカル開発手順
+
+```bash
 git clone https://github.com/bleu1007cerisier-alt/nyusatsu-search.git
 cd nyusatsu-search
 python -m venv .venv
 .venv/Scripts/python.exe -m pip install -r requirements.txt   # Windows
-.venv/Scripts/python.exe -m uvicorn backend.main:app --host 127.0.0.1 --port 8130
-# → http://127.0.0.1:8130/  （dataset/tenders.csv を読み込んで表示）
 ```
-- データを作り直す: `.venv/Scripts/python.exe scripts/build_dataset.py`（NEDO巡回。数分。連続実行はrate limitに注意）
-- プレビュー検証は `.claude/launch.json`（gitignore）でも可。`preview_screenshot`は件数多いと時々タイムアウト→`preview_eval`でDOM確認。
 
-## 6. 必要なアカウント・認証（別アカウントで引き継ぐ場合）
-- **GitHub**: コードをpushするには `repo` + `workflow` スコープの Personal Access Token が必要（`.github/workflows/` 変更には workflow 必須）。新オーナーは自分のGitHubでforkまたは移管し、自分のPATを使う。
-- **GitHub Actions**: ワークフロー自体は各リポジトリの `GITHUB_TOKEN` で動くのでオーナーのPATは不要。fork/移管後は Actions タブで有効化を確認。
-- **Render**: GitHub連携で Web Service を作成。Start Command=`uvicorn backend.main:app --host 0.0.0.0 --port $PORT`、Build=`pip install -r requirements.txt`、Plan=Free。push毎に自動デプロイ。
-- 旧オーナーのトークンは引き継ぎ後に必ず Revoke。
+**サーバー起動（表示確認用）:**
+```bash
+.venv/Scripts/python.exe -m uvicorn backend.main:app --host 127.0.0.1 --port 8130
+# → http://127.0.0.1:8130/
+```
 
-## 7. 現状サマリ（2026-06-26時点）
-- 情報源は **NEDOのみ・約98件**（募集中16前後/受付終了/事業者決定43）。
-- 状態3分類・事業名でのプロジェクト追跡・タグ・予算規模(本文記載分)・決定事業者(HTML記載分)まで実装済み・本番反映済み。
+**手動スクレイピング（R2有効にするには.envが必要）:**
+```bash
+.venv/Scripts/python.exe scripts/build_dataset.py
+# 数分かかる。連続実行はNEDOのrate limitに注意
+```
 
-## 8. 既知の制約 / 次にやること（優先度順）
-1. **情報源を増やす**（最優先・収益化の核心）。現状NEDOのみ＝「入札」カテゴリが空。自治体・他省庁の静的HTML一覧を `scraper.py` に追加（分野ページ巡回と同じ要領）。
-2. **PDF予算抽出は実装済み**（pypdf、本文に予算が無い場合のフォールバック。予算カバレッジ 6→27件/100件）。さらに精度を上げる余地あり（表現が多様、表組みは苦手）。
-3. **コンソーシアム決定事業者**の社名が区切り無し連結（日本語社名の区切り推定が困難）。改善余地あり。
-4. **Render無料プラン**は15分非アクセスで休止し初回表示が遅い＋稀にcold start 404。常時稼働は有料化やpingで回避。
-5. ビジネス: 無料/有料プラン、アラート通知、課金導線は未実装。
+**R2の内容確認（.envが必要）:**
+```python
+import os, boto3
+# .envを読み込んでからboto3で接続
+s3 = boto3.client('s3', endpoint_url=os.environ['R2_ENDPOINT'], ...)
+resp = s3.list_objects_v2(Bucket='nyusatsu-docs')
+```
 
-## 9. 引き継ぎ後 最初の一手（推奨）
-「`scraper.py` を見て、NEDO以外の静的HTML公募一覧（例: 自治体・省庁）を1つ追加し、`run_all_scrapers()` に組み込んで `build_dataset.py` でCSVに蓄積する」。データ項目（title/category/organization/prefecture/published_at/deadline/result_date/url/summary/detail/tags/source）を埋めれば、UIは自動で対応します。
+---
+
+## 9. ファイル構成（主要ファイルのみ）
+
+```
+nyusatsu-search/
+├── backend/
+│   ├── main.py          # FastAPI アプリ本体・API定義
+│   ├── database.py      # SQLite モデル定義・マイグレーション
+│   ├── scraper.py       # スクレイピング関数群（NEDO対応）
+│   └── storage.py       # Cloudflare R2 アップロード
+├── frontend/
+│   ├── index.html       # 一覧ページ
+│   └── detail.html      # 詳細ページ
+├── scripts/
+│   └── build_dataset.py # データ蓄積スクリプト（Actions専用）
+├── dataset/
+│   └── tenders.csv      # ★データの正本（utf-8-sig）
+├── .github/workflows/
+│   └── scrape.yml       # GitHub Actions cron定義
+├── requirements.txt     # Python依存パッケージ
+├── render.yaml          # Render.com デプロイ設定
+└── .env                 # ★gitignore済み・R2鍵（ローカルのみ）
+```
+
+---
+
+## 10. 既知の制約・次にやること（優先度順）
+
+1. **情報源を増やす**（最優先・収益化の核心）
+   - 現状NEDOのみ → 「入札」カテゴリが空
+   - 追加手順: `scraper.py` に新スクレイパー関数を書き、`run_all_scrapers()` に追加
+   - 必要なデータ項目: `title, category, organization, prefecture, published_at, deadline, result_date, url, summary, detail, tags, source`
+   - UIは自動対応済み（source別フィルターも動作する）
+
+2. **PDF予算カバレッジをさらに改善**
+   - 現状 76/100件（76%）
+   - 未取得24件はPDFに予算記載なし or テキスト抽出不可（スキャンPDF等）
+   - 表組み内の金額はpypdfで取れないケースがある
+
+3. **コンソーシアム決定事業者**の社名連結問題
+   - 複数社が連結表記されるケースで区切り推定が困難
+
+4. **Render無料プラン**の休止問題
+   - 15分無アクセスで休止→初回表示10秒程度かかる
+   - 解決策: Render有料化 or 外部pingサービス（UptimeRobot等）
+
+5. **ビジネス機能**（未実装）
+   - 有料プラン・課金導線・メールアラート通知・ユーザー管理
+
+---
+
+## 11. 引き継ぎ後 最初の一手（推奨）
+
+```
+scraper.py を開き、NEDO以外の静的HTML公募一覧（例: JST・農水省・国交省）を
+1ソース追加して run_all_scrapers() に組み込む。
+```
+
+追加の流れ:
+1. 対象サイトの一覧HTMLを確認（BeautifulSoupで解析できるか）
+2. `scrape_xxx()` 関数を書く（scrape_nedo を参考に）
+3. `run_all_scrapers()` に `scrape_xxx()` を追加
+4. `source="XXX"` を必ずセット（フィルター・区別に使用）
+5. ローカルで `build_dataset.py` を実行して確認
+6. push → GitHub Actions で本番反映
+
+---
+
+## 12. scraper.py 主要関数リファレンス
+
+| 関数 | 役割 |
+|------|------|
+| `scrape_nedo()` | NEDO一覧を巡回し案件リストを返す（async） |
+| `fetch_nedo_detail(url)` | 詳細ページから概要・予算・予定・添付リンクを取得 |
+| `fetch_nedo_result(url)` | 結果ページから決定事業者を取得 |
+| `_extract_budget(text)` | HTMLテキストから予算を抽出 |
+| `_extract_pdf_budget(text)` | PDFテキストから予算を抽出（幅広いパターン対応） |
+| `_pdf_budget_from_soup(soup)` | 公募ページのPDFをDLして予算抽出 |
+| `_format_amount(raw)` | 金額を万円表記に統一 |
+| `_extract_overview(soup)` | 概要を抽出（業務内容優先・連絡先除外） |
+| `_extract_schedule(text)` | 予定（説明会・締切等）を時系列で抽出 |
+| `_extract_attachment_links(soup)` | 公募要領・仕様書等のPDFリンクを抽出 |
+| `generate_tags(*texts)` | タグを自動生成 |
+| `run_all_scrapers()` | 全スクレイパーを実行（async） |
