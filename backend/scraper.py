@@ -989,7 +989,10 @@ def fetch_portal_detail(url: str) -> Dict[str, str]:
         if deadline:
             break
 
-    # 分類・調達品目分類（thタグのテキスト → 次のtdの値）
+    # 公告内容・分類・調達品目分類 を th → td から直接取得
+    # （soup.get_text は改行区切りで URL が次行になるためregexでは取りこぼす）
+    _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
+    raw_kouji = ""
     bunrui = ""
     hinmoku = ""
     for th in soup.find_all("th"):
@@ -999,7 +1002,9 @@ def fetch_portal_detail(url: str) -> Dict[str, str]:
         if not td:
             continue
         val = td.get_text(" ", strip=True)
-        if th_text == "分類" and not bunrui:
+        if th_text == "公告内容" and not raw_kouji:
+            raw_kouji = _EMAIL_RE.sub("", val).strip()  # メールアドレスを除去
+        elif th_text == "分類" and not bunrui:
             bunrui = val
         elif th_text == "調達品目分類" and not hinmoku:
             hinmoku = val.strip()
@@ -1008,18 +1013,12 @@ def fetch_portal_detail(url: str) -> Dict[str, str]:
     _BOILER = re.compile(r"^(入札公告のとおり|添付のとおり|別紙のとおり|公募要領のとおり|仕様書のとおり|[-－])$")
     _GARBAGE_START = re.compile(r"^[口□・\s　]+")
     detail_text = ""
-    for m in re.finditer(r"公告内容\s*[\n\s]*(.{5,500})", text):
-        cand = m.group(1).strip()
-        # 先頭のチェックボックス記号（口□・）を除去
-        cand = _GARBAGE_START.sub("", cand).strip()
-        if not cand or _BOILER.match(cand):
-            break
-        # 記号のみ（意味のある文字が2文字未満）なら除外
-        meaningful = re.sub(r'[口□・　\s]', '', cand)
-        if len(meaningful) < 5:
-            break
-        detail_text = cand[:500]
-        break
+    if raw_kouji:
+        cand = _GARBAGE_START.sub("", raw_kouji).strip()
+        if cand and not _BOILER.match(cand):
+            meaningful = re.sub(r"[口□・　\s]", "", cand)
+            if len(meaningful) >= 5:
+                detail_text = cand[:500]
 
     # 公告内容が空の場合は 調達品目分類 + 分類 から合成概要を作成
     if not detail_text and hinmoku:
