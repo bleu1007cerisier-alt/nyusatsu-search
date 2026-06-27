@@ -275,6 +275,16 @@ def main():
     # 本文に予算が無ければ公募要領PDFから補完。一度確認した案件は再取得しない。
     _FETCH_SOURCES = {"NEDO", "JST", "PORTAL"}
 
+    # PORTAL: budget_checked=1 でも detail が空の案件は、改善された概要抽出で再試行させる
+    portal_retry = 0
+    for r in merged.values():
+        if r.get("source") == "PORTAL" and (r.get("budget_checked") or "") == "1":
+            if not (r.get("detail") or "").strip():
+                r["budget_checked"] = ""  # リセット → needs_fetch が True になる
+                portal_retry += 1
+    if portal_retry:
+        print(f"PORTAL: detail空({portal_retry}件)を再取得対象にリセット")
+
     def needs_fetch(r):
         if r.get("source") not in _FETCH_SOURCES or not r.get("url"):
             return False

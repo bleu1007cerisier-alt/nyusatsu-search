@@ -987,11 +987,37 @@ def fetch_portal_detail(url: str) -> Dict[str, str]:
         if deadline:
             break
 
-    # 公告内容（概要）
+    # 分類・調達品目分類（thタグのテキスト → 次のtdの値）
+    bunrui = ""
+    hinmoku = ""
+    for th in soup.find_all("th"):
+        th_text = th.get_text(strip=True)
+        td = th.find_next_sibling("td") or (th.parent.find_next_sibling("tr") and
+             th.parent.find_next_sibling("tr").find("td"))
+        if not td:
+            continue
+        val = td.get_text(" ", strip=True)
+        if th_text == "分類" and not bunrui:
+            bunrui = val
+        elif th_text == "調達品目分類" and not hinmoku:
+            hinmoku = val.strip()
+
+    # 公告内容（定型文はスキップ）
+    _BOILER = re.compile(r"^(入札公告のとおり|添付のとおり|別紙のとおり|公募要領のとおり|仕様書のとおり|[-－])$")
     detail_text = ""
-    for m in re.finditer(r"公告内容\s*[\n\s]*(.{10,500})", text):
-        detail_text = m.group(1).strip()[:500]
+    for m in re.finditer(r"公告内容\s*[\n\s]*(.{5,500})", text):
+        cand = m.group(1).strip()
+        if _BOILER.match(cand):
+            break  # 定型文は不採用
+        detail_text = cand[:500]
         break
+
+    # 公告内容が空の場合は 調達品目分類 + 分類 から合成概要を作成
+    if not detail_text and hinmoku:
+        parts = [hinmoku]
+        if bunrui and bunrui not in hinmoku:
+            parts.append(f"({bunrui})")
+        detail_text = "".join(parts)
 
     # 添付ファイル（調達資料）
     # ポータルの調達資料はGEPS(geps.go.jp)への外部リンクか、テキストに「ダウンロード」を含む
