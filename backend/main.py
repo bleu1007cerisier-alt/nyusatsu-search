@@ -103,7 +103,7 @@ def _sort_key(item):
     """募集中(締切近い順)→受付終了・事業者決定(掲載日新しい順、区別なし)。"""
     st = item["status"]
     if st == STATUS_OPEN:
-        return (0, item["deadline"] or "9999-99-99")
+        return (0, _rev(item["published_at"] or item["deadline"] or ""))
     return (1, _rev(item["published_at"] or item["deadline"] or ""))
 
 
