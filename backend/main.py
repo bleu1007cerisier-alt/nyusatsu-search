@@ -100,16 +100,11 @@ def _status_rank(status: str) -> int:
 
 
 def _sort_key(item):
-    """募集中(締切近い順)→受付終了(新しい順)→事業者決定(決定日新しい順)。"""
+    """募集中(締切近い順)→受付終了・事業者決定(掲載日新しい順、区別なし)。"""
     st = item["status"]
     if st == STATUS_OPEN:
         return (0, item["deadline"] or "9999-99-99")
-    if st == STATUS_CLOSED:
-        # 新しい順 → 文字列降順のため反転
-        return (1, _rev(item["deadline"] or item["published_at"] or ""))
-    if st == STATUS_DECIDED:
-        return (2, _rev(item["result_date"] or ""))
-    return (3, "")
+    return (1, _rev(item["published_at"] or item["deadline"] or ""))
 
 
 def _rev(s: str) -> str:
