@@ -994,11 +994,19 @@ def fetch_portal_detail(url: str) -> Dict[str, str]:
         break
 
     # 添付ファイル（調達資料）
+    # ポータルの調達資料はGEPS(geps.go.jp)への外部リンクか、テキストに「ダウンロード」を含む
     attachments = []
-    for a in soup.find_all("a", href=re.compile(r"download|資料|\.pdf", re.I)):
-        label = a.get_text(" ", strip=True)
+    for a in soup.find_all("a", href=True):
         href = a.get("href", "")
-        if href and label:
+        label = a.get_text(" ", strip=True)
+        if not href or not label:
+            continue
+        is_download = (
+            "geps.go.jp" in href
+            or re.search(r"download|\.pdf", href, re.I)
+            or re.search(r"ダウンロード", label)
+        )
+        if is_download:
             kind = next((k for key, k in _ATTACH_KINDS if key in label), "調達資料")
             full = href if href.startswith("http") else PORTAL_BASE + href
             attachments.append({"name": label, "url": full, "kind": kind})

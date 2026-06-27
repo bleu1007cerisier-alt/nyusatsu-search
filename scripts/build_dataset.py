@@ -56,26 +56,76 @@ def _download(url: str) -> bytes:
 
 
 def _store_attachments(row, attachments):
-    """添付PDFをR2へ保存し、保存先情報を row['attachments'] に記録する（R2有効時のみ）。"""
+    """添付PDFをR2へ保存し、保存先情報を row['attachments'] に記録する（R2有効時のみ）。
+
+    GEPS(geps.go.jp)など認証必須リンクはPDFが返らないためR2スキップ。
+    その場合でも source_url はメタデータとして保存し、UIでリンク表示に使う。
+    """
     if not storage.r2_enabled():
         return  # 鍵未設定なら何もしない（attachments_checkedも立てず、有効化後に処理）
     import re as _re
     stored = []
     for i, att in enumerate(attachments):
         data = _download(att["url"])
-        if not data:
-            continue
-        safe = _re.sub(r"[^A-Za-z0-9_.-]", "_", att["url"].split("/")[-1]) or f"file{i}.pdf"
-        pub_date = (row.get("published_at") or "unknown").replace("/", "-")
-        src_prefix = (row.get("source") or "misc").lower()
-        key = f"{src_prefix}/{pub_date}_{row['id']}/{att['kind']}_{safe}"
-        public = storage.upload_bytes(key, data, "application/pdf")
-        # 公開URL（http...）のときだけ表示用urlに採用。非公開保存時は原文リンクにフォールバック
-        url = public if public.startswith("http") else ""
+        r2_url = ""
+        r2_key = ""
+        # PDFマジックナンバー確認（認証必要なURLはHTMLが返るためスキップ）
+        if data and data.lstrip()[:4] == b"%PDF":
+            safe = _re.sub(r"[^A-Za-z0-9_.-]", "_", att["url"].split("/")[-1]) or f"file{i}.pdf"
+            pub_date = (row.get("published_at") or "unknown").replace("/", "-")
+            src_prefix = (row.get("source") or "misc").lower()
+            key = f"{src_prefix}/{pub_date}_{row['id']}/{att['kind']}_{safe}"
+            public = storage.upload_bytes(key, data, "application/pdf")
+            r2_url = public if public.startswith("http") else ""
+            r2_key = key
+        # PDFでなくても source_url をメタデータとして保存（UIでリンク表示可能）
         stored.append({"name": att["name"], "kind": att["kind"],
-                       "url": url, "key": key, "source_url": att["url"]})
+                       "url": r2_url, "key": r2_key, "source_url": att["url"]})
     row["attachments"] = json.dumps(stored, ensure_ascii=False)
     row["attachments_checked"] = "1"
+
+def _overview_from_r2(row: dict) -> str:
+    """R2保存済みPDFから概要テキストを抽出する（detail未記入の案件のみ）。"""
+    if not storage.r2_enabled():
+        return ""
+    try:
+        atts = json.loads(row.get("attachments") or "[]")
+    except Exception:
+        return ""
+    if not atts:
+        return ""
+    import io
+    import boto3
+    from pypdf import PdfReader
+    s3 = boto3.client(
+        "s3",
+        endpoint_url=os.environ.get("R2_ENDPOINT", ""),
+        aws_access_key_id=os.environ.get("R2_ACCESS_KEY_ID", ""),
+        aws_secret_access_key=os.environ.get("R2_SECRET_ACCESS_KEY", ""),
+    )
+    bucket = os.environ.get("R2_BUCKET", "")
+    # 公募要領→仕様書→調達資料の順に試行（意味ある文章が得られるまで）
+    priority = ["公募要領", "仕様書", "調達資料", "審査基準", "評価基準"]
+    atts_sorted = sorted(atts, key=lambda a: next(
+        (i for i, k in enumerate(priority) if k == a.get("kind")), 99))
+    for att in atts_sorted:
+        key = att.get("key", "")
+        if not key:
+            continue
+        try:
+            obj = s3.get_object(Bucket=bucket, Key=key)
+            data = obj["Body"].read()
+            reader = PdfReader(io.BytesIO(data))
+            # 先頭5ページのテキストから意味ある行だけ結合
+            text = "\n".join((p.extract_text() or "") for p in reader.pages[:5])
+            lines = [ln.strip() for ln in text.split("\n")
+                     if ln.strip() and len(ln.strip()) > 8]
+            if lines:
+                return " ".join(lines[:15])[:500]
+        except Exception as e:
+            print(f"R2 PDF概要読込失敗 {key}: {e}")
+    return ""
+
 
 def _budget_from_r2(row: dict) -> str:
     """R2保存済みPDFから予算規模を抽出する（R2が有効で添付ファイルがある案件のみ）。"""
@@ -308,6 +358,19 @@ def main():
             r["amount"] = budget
             r2_budget_count += 1
     print(f"R2 PDFから予算補完: {r2_budget_count}件")
+
+    # R2保存済みPDFから概要を補完（添付あり・detail未記入の案件）
+    r2_detail_count = 0
+    for r in merged.values():
+        if (r.get("detail") or "").strip():
+            continue  # 既に概要あり
+        if not (r.get("attachments") or "").strip():
+            continue  # R2にPDFなし
+        overview = _overview_from_r2(r)
+        if overview:
+            r["detail"] = overview
+            r2_detail_count += 1
+    print(f"R2 PDFから概要補完: {r2_detail_count}件")
 
     # ID順に並べて書き出し
     rows = sorted(merged.values(), key=lambda r: int(r.get("id") or 0))
