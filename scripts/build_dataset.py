@@ -25,7 +25,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "backend"))
 
 from scraper import (  # noqa: E402
-    run_all_scrapers, fetch_nedo_detail, fetch_nedo_result,
+    run_all_scrapers, fetch_nedo_detail, fetch_nedo_result, _extract_pdf_budget,
 )
 import storage  # noqa: E402
 
@@ -72,6 +72,47 @@ def _store_attachments(row, attachments):
                        "url": url, "key": key, "source_url": att["url"]})
     row["attachments"] = json.dumps(stored, ensure_ascii=False)
     row["attachments_checked"] = "1"
+
+def _budget_from_r2(row: dict) -> str:
+    """R2保存済みPDFから予算規模を抽出する（R2が有効で添付ファイルがある案件のみ）。"""
+    if not storage.r2_enabled():
+        return ""
+    try:
+        atts = json.loads(row.get("attachments") or "[]")
+    except Exception:
+        return ""
+    if not atts:
+        return ""
+    import io
+    import boto3
+    from pypdf import PdfReader
+    s3 = boto3.client(
+        "s3",
+        endpoint_url=os.environ.get("R2_ENDPOINT", ""),
+        aws_access_key_id=os.environ.get("R2_ACCESS_KEY_ID", ""),
+        aws_secret_access_key=os.environ.get("R2_SECRET_ACCESS_KEY", ""),
+    )
+    bucket = os.environ.get("R2_BUCKET", "")
+    # 公募要領→仕様書→その他の順で試行
+    priority = ["公募要領", "仕様書", "審査基準", "評価基準"]
+    atts_sorted = sorted(atts, key=lambda a: next(
+        (i for i, k in enumerate(priority) if k == a.get("kind")), 99))
+    for att in atts_sorted:
+        key = att.get("key", "")
+        if not key:
+            continue
+        try:
+            obj = s3.get_object(Bucket=bucket, Key=key)
+            data = obj["Body"].read()
+            reader = PdfReader(io.BytesIO(data))
+            text = "\n".join((p.extract_text() or "") for p in reader.pages)
+            budget = _extract_pdf_budget(text)
+            if budget:
+                return budget
+        except Exception as e:
+            print(f"R2 PDF読込失敗 {key}: {e}")
+    return ""
+
 
 # 1回の実行で詳細/結果ページを取得する最大件数（負荷・実行時間対策。未取得分を順次埋める）
 MAX_DETAIL_PER_RUN = 200
@@ -156,6 +197,12 @@ def main():
 
     print(f"新規: {new_count}件 / 更新: {update_count}件 / 合計: {len(merged)}件")
 
+    # 既存CSVタイトルから【事業コード】プレフィックスを除去（整合性維持）
+    import re as _re
+    for r in merged.values():
+        if r.get("title"):
+            r["title"] = _re.sub(r"^\s*【[^】]+】\s*", "", r["title"]).strip()
+
     # 【増分】概要が未取得、または予算が未取得で未確認の案件だけ取得。
     # 本文に予算が無ければ公募要領PDFから補完。一度確認した案件は再取得しない。
     def needs_fetch(r):
@@ -208,6 +255,19 @@ def main():
             aw_count += 1
             time.sleep(DETAIL_SLEEP)
     print(f"決定事業者を確認（増分）: {aw_count}件")
+
+    # R2保存済みPDFから予算を補完（添付あり・予算未取得の案件）
+    r2_budget_count = 0
+    for r in merged.values():
+        if (r.get("amount") or "").strip():
+            continue  # 既に予算あり
+        if not (r.get("attachments") or "").strip():
+            continue  # R2にPDFなし
+        budget = _budget_from_r2(r)
+        if budget:
+            r["amount"] = budget
+            r2_budget_count += 1
+    print(f"R2 PDFから予算補完: {r2_budget_count}件")
 
     # ID順に並べて書き出し
     rows = sorted(merged.values(), key=lambda r: int(r.get("id") or 0))

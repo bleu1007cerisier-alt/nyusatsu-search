@@ -394,16 +394,18 @@ async def scrape_nedo() -> List[Dict]:
                     continue
                 seen.add(key)
 
-                tags = generate_tags(title, field_name, extra=[field_name])
+                project_code = _project_code(title)
+                title_clean = re.sub(r"^\s*【[^】]+】\s*", "", title).strip()
+                tags = generate_tags(title_clean, field_name, extra=[field_name])
                 results.append({
-                    "title": title,
+                    "title": title_clean,
                     "category": "プロポーザル",
                     "organization": "NEDO（新エネルギー・産業技術総合開発機構）",
                     "deadline": shimekiri,
                     "published_at": kaishi or yokoku,
                     "result_date": kekka,
                     "result_url": result_url,
-                    "project_code": _project_code(title),
+                    "project_code": project_code,
                     "awardee": "",
                     "url": url,
                     "prefecture": "国",
@@ -492,28 +494,59 @@ def fetch_nedo_result(url: str) -> Dict[str, str]:
 
 
 _PDF_MONEY = r"([0-9０-９][0-9０-９,，\.]*(?:億|千万|百万|万)?円)"
+_PDF_SUFFIX = r"(以内|以下|程度|まで|台)?"
+
+
+def _zen2han(s: str) -> str:
+    """全角数字・記号を半角に正規化する。"""
+    return "".join(
+        chr(ord(c) - 0xFEE0) if 0xFF01 <= ord(c) <= 0xFF5E else c for c in s
+    )
 
 
 def _extract_pdf_budget(text: str) -> str:
-    """公募要領PDFの本文から予算を抽出する（1件あたり優先→全体予算）。万円表記に統一。"""
-    flat = re.sub(r"\s+", "", text)
-    # 1件（テーマ）あたりの予算（応募者にとって最も重要）
-    for kw in ["1件当たり", "１件当たり", "1件あたり", "一件当たり",
-               "1テーマ当たり", "1テーマあたり", "1事業者当たり"]:
-        m = re.search(re.escape(kw) + _PDF_MONEY + r"(以内|以下|程度|まで)?", flat)
+    """公募要領PDFの本文から予算を抽出する（1件あたり優先→上限額類→全体予算）。万円表記に統一。"""
+    flat = re.sub(r"\s+", "", _zen2han(text))
+
+    # 1. 1件/テーマあたりの予算（応募者にとって最も重要）
+    for kw in ["1件当たり", "1件あたり", "一件当たり",
+               "1テーマ当たり", "1テーマあたり", "1事業者当たり", "1社当たり"]:
+        m = re.search(re.escape(kw) + r"[^0-9億万千百]{0,10}" + _PDF_MONEY + _PDF_SUFFIX, flat)
         if m:
             return "1件あたり" + _format_amount(m.group(1) + (m.group(2) or ""))
-    # 予算規模（【予算規模】2,000万円以内 等。1件あたりの次に優先）
-    for m in re.finditer(r"予算規模[^0-9０-９億万千百]{0,5}" + _PDF_MONEY + r"(以内|以下|程度|まで)?", flat):
+
+    # 2. 予算規模（【予算規模】2,000万円以内 等）
+    for m in re.finditer(r"予算規模[^0-9億万千百]{0,5}" + _PDF_MONEY + _PDF_SUFFIX, flat):
         if "提案内容次第" in flat[m.start():m.start() + 30]:
-            continue  # 「予算規模は提案内容次第のため上限等は設けません」等を除外
+            continue
         return _format_amount(m.group(1) + (m.group(2) or ""))
-    # 全体予算（事業全体の規模）
+
+    # 3. 上限額・委託費・契約上限額 など（幅広い表現に対応）
+    upper_pats = [
+        (r"上限額[：:]?" + _PDF_MONEY + _PDF_SUFFIX, ""),
+        (r"上限金額[：:]?" + _PDF_MONEY + _PDF_SUFFIX, ""),
+        (r"契約上限額[^0-9億万千百]{0,5}" + _PDF_MONEY + _PDF_SUFFIX, ""),
+        (r"委託費[^0-9億万千百]{0,10}" + _PDF_MONEY + _PDF_SUFFIX, ""),
+        (r"委託業務費[^0-9億万千百]{0,10}" + _PDF_MONEY + _PDF_SUFFIX, ""),
+        (r"委託金額[^0-9億万千百]{0,5}" + _PDF_MONEY + _PDF_SUFFIX, ""),
+        (r"交付上限額[^0-9億万千百]{0,5}" + _PDF_MONEY + _PDF_SUFFIX, ""),
+        (r"補助上限額[^0-9億万千百]{0,5}" + _PDF_MONEY + _PDF_SUFFIX, ""),
+        (r"費用の上限[^0-9億万千百]{0,5}" + _PDF_MONEY + _PDF_SUFFIX, ""),
+        (r"補助金額[^0-9億万千百]{0,5}" + _PDF_MONEY + _PDF_SUFFIX, ""),
+    ]
+    for pat, prefix in upper_pats:
+        m = re.search(pat, flat)
+        if m:
+            val = _format_amount(m.group(1) + (m.group(2) or ""))
+            return (prefix + val) if prefix else val
+
+    # 4. 全体予算・事業規模
     for kw in ["全体予算", "予算総額", "総事業費", "事業規模"]:
-        for m in re.finditer(re.escape(kw) + r"[^0-9０-９億万千百]{0,5}" + _PDF_MONEY + r"(程度|以内|以下)?", flat):
+        for m in re.finditer(re.escape(kw) + r"[^0-9億万千百]{0,5}" + _PDF_MONEY + _PDF_SUFFIX, flat):
             if "取得" in flat[max(0, m.start() - 8):m.start()]:
-                continue  # 「取得価額50万円」等のノイズを除外
+                continue
             return "全体予算" + _format_amount(m.group(1) + (m.group(2) or ""))
+
     return ""
 
 
