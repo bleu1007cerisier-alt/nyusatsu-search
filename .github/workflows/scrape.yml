@@ -47,5 +47,6 @@ jobs:
             echo "更新なし"
           else
             git commit -m "データ自動更新 $(date -u +%Y-%m-%d)"
+            git pull --rebase origin main
             git push
           fi
