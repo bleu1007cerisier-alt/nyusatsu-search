@@ -89,6 +89,8 @@
         .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
     }
+    const SOURCE_LABEL = { 'PORTAL': '調達ポータル', 'NEDO': 'NEDO', 'JST': 'JST' };
+    function srcLabel(s) { return SOURCE_LABEL[s] || s || ''; }
     function deadlineStatus(deadline) {
       if (!deadline) return { text: '未定', cls: 'text-gray-500', badge: '' };
       const today = new Date(); today.setHours(0,0,0,0);
@@ -203,7 +205,7 @@
       }
 
       document.getElementById('orig-link').href = t.url;
-      document.getElementById('source').textContent = t.source || '';
+      document.getElementById('source').textContent = srcLabel(t.source);
 
       // テーマが近い案件
       const sim = t.similar || [];

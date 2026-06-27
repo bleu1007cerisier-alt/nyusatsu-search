@@ -93,6 +93,11 @@
           <option value="沖縄県">沖縄県</option>
         </select>
 
+        <!-- 発注機関（府省庁等） -->
+        <select id="ministry" class="border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400">
+          <option value="">すべての機関</option>
+        </select>
+
         <!-- 検索ボタン -->
         <button onclick="search()"
           class="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg text-sm font-medium transition">
@@ -152,6 +157,10 @@
         .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
     }
 
+    // データソースの表示名（コード→日本語ラベル）
+    const SOURCE_LABEL = { 'PORTAL': '調達ポータル', 'NEDO': 'NEDO', 'JST': 'JST' };
+    function srcLabel(s) { return SOURCE_LABEL[s] || s || ''; }
+
     // 状態（募集中／受付終了／事業者決定）の見た目
     const STATUS_STYLE = {
       '募集中':   { cls: 'bg-green-100 text-green-700', icon: '🟢' },
@@ -207,6 +216,17 @@
         ? `<span class="text-xs text-gray-400 self-center mr-1">タグで絞り込み:</span>` +
           tags.map(t => `<button onclick="filterByTag('${esc(t.name)}')" class="text-xs px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-100 transition">#${esc(t.name)} <span class="text-indigo-400">${t.count}</span></button>`).join('')
         : '';
+
+      // 発注機関プルダウン（初回のみ生成。件数の多い順）
+      const msel = document.getElementById('ministry');
+      if (msel && !msel.dataset.filled && (data.organizations || []).length) {
+        const cur = msel.value;
+        msel.innerHTML = '<option value="">すべての機関</option>' +
+          data.organizations.map(o =>
+            `<option value="${esc(o.name)}">${esc(o.name)}（${o.count}）</option>`).join('');
+        msel.value = cur;
+        msel.dataset.filled = '1';
+      }
     }
 
     function filterByStatus(status) {
@@ -233,6 +253,7 @@
       const q = document.getElementById('q').value;
       const category = document.getElementById('category').value;
       const prefecture = document.getElementById('prefecture').value;
+      const ministry = document.getElementById('ministry').value;
 
       const params = new URLSearchParams({
         skip: page * PAGE_SIZE,
@@ -241,6 +262,7 @@
       if (q) params.append('q', q);
       if (category) params.append('category', category);
       if (prefecture) params.append('prefecture', prefecture);
+      if (ministry) params.append('organization', ministry);
       if (currentTag) params.append('tag', currentTag);
       if (currentStatus) params.append('status', currentStatus);
 
@@ -310,7 +332,7 @@
               ${t.summary ? `<p class="text-xs text-gray-500 mt-1.5 line-clamp-2">${esc(t.summary)}</p>` : ''}
               ${tagsHtml}
               <div class="mt-1.5">
-                <span class="text-xs text-gray-300">出典: ${esc(t.source)} ・ クリックで詳細</span>
+                <span class="text-xs text-gray-300">出典: ${esc(srcLabel(t.source))} ・ クリックで詳細</span>
               </div>
             </div>
           </div>
@@ -344,6 +366,7 @@
       document.getElementById('q').value = '';
       document.getElementById('category').value = '';
       document.getElementById('prefecture').value = '';
+      document.getElementById('ministry').value = '';
       currentTag = '';
       currentStatus = '';
       document.getElementById('active-tag').classList.add('hidden');

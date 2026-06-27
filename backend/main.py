@@ -142,6 +142,7 @@ def search_tenders(
     q: Optional[str] = Query(None, description="キーワード検索"),
     category: Optional[str] = Query(None, description="入札 or プロポーザル"),
     prefecture: Optional[str] = Query(None, description="都道府県"),
+    organization: Optional[str] = Query(None, description="発注機関（府省庁等）"),
     source: Optional[str] = Query(None, description="データソース"),
     tag: Optional[str] = Query(None, description="タグ"),
     status: Optional[str] = Query(None, description="募集中 / 受付終了 / 事業者決定"),
@@ -165,6 +166,8 @@ def search_tenders(
         query = query.filter(Tender.category == category)
     if prefecture:
         query = query.filter(Tender.prefecture == prefecture)
+    if organization:
+        query = query.filter(Tender.organization == organization)
     if source:
         query = query.filter(Tender.source == source)
     if tag:
@@ -261,17 +264,22 @@ def get_stats(db: Session = Depends(get_db)):
 
     status_counts = {STATUS_OPEN: 0, STATUS_CLOSED: 0, STATUS_DECIDED: 0}
     tag_counts: dict = {}
+    org_counts: dict = {}
     sources = set()
     for t in all_items:
         status_counts[compute_status(t, today)] += 1
         if t.source:
             sources.add(t.source)
+        org = (t.organization or "").strip()
+        if org:
+            org_counts[org] = org_counts.get(org, 0) + 1
         for tag in (t.tags or "").split(","):
             tag = tag.strip()
             if tag:
                 tag_counts[tag] = tag_counts.get(tag, 0) + 1
 
     top_tags = sorted(tag_counts.items(), key=lambda kv: kv[1], reverse=True)
+    top_orgs = sorted(org_counts.items(), key=lambda kv: kv[1], reverse=True)
     nyusatsu = sum(1 for t in all_items if t.category == "入札")
     proposal = sum(1 for t in all_items if t.category == "プロポーザル")
 
@@ -282,6 +290,7 @@ def get_stats(db: Session = Depends(get_db)):
         "status": status_counts,
         "sources": sorted(sources),
         "tags": [{"name": name, "count": cnt} for name, cnt in top_tags],
+        "organizations": [{"name": name, "count": cnt} for name, cnt in top_orgs],
     }
 
 
