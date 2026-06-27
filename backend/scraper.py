@@ -1024,7 +1024,7 @@ def fetch_portal_detail(url: str) -> Dict[str, str]:
                     r"^[一-鿿　]{1,2}(　[一-鿿]{1,2}){1,5}\s*",
                     "", cand
                 ).strip()
-                detail_text = (cleaned or cand)[:2000]
+                detail_text = (cleaned or cand)  # 全文保持（AI要約側で処理）
 
     # 公告内容が空の場合は 調達品目分類 + 分類 から合成概要を作成
     if not detail_text and hinmoku:
