@@ -63,7 +63,8 @@ def _store_attachments(row, attachments):
         if not data:
             continue
         safe = _re.sub(r"[^A-Za-z0-9_.-]", "_", att["url"].split("/")[-1]) or f"file{i}.pdf"
-        key = f"nedo/{row['id']}/{att['kind']}_{safe}"
+        pub_date = (row.get("published_at") or "unknown").replace("/", "-")
+        key = f"nedo/{pub_date}_{row['id']}/{att['kind']}_{safe}"
         public = storage.upload_bytes(key, data, "application/pdf")
         # 公開URL（http...）のときだけ表示用urlに採用。非公開保存時は原文リンクにフォールバック
         url = public if public.startswith("http") else ""
