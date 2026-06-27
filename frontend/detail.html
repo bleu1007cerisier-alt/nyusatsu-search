@@ -202,12 +202,7 @@
         }).join('');
       }
 
-      const origLink = document.getElementById('orig-link');
-      origLink.href = t.url;
-      // POTRALは詳細URLが直リン不可なのでトップページへリンク、ラベル変更
-      if (t.source === 'PORTAL') {
-        origLink.textContent = '🔗 調達ポータルで検索する（案件番号: ' + (t.project_code || '') + '）';
-      }
+      document.getElementById('orig-link').href = t.url;
       document.getElementById('source').textContent = t.source || '';
 
       // テーマが近い案件

@@ -194,10 +194,6 @@ def get_tender(tender_id: int, db: Session = Depends(get_db)):
 
     data = _item_dict(t, today)
     data["detail"] = t.detail
-    # PORTAL: 詳細ページはPOST必須のためユーザーがGETで開くとエラーになる。
-    # 検索トップページへ差し替えて「調達ポータルで案件番号を検索してください」と表示させる。
-    if data.get("source") == "PORTAL":
-        data["url"] = "https://www.p-portal.go.jp/pps-web-biz/UAA01/OAA0101"
     try:
         data["schedule"] = json.loads(t.schedule) if (t.schedule or "").strip() else []
     except (ValueError, TypeError):
