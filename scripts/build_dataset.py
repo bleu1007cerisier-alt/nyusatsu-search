@@ -37,12 +37,12 @@ def _ai_summary(raw_text: str, title: str = "") -> str:
             "入札・開札日程など重要な情報を含めた、読みやすい要約文を作成してください。\n"
             "「入　札　公　告」のような書式タイトルは省いてください。\n\n"
             f"タイトル: {title}\n\n"
-            f"テキスト:\n{raw_text[:2000]}\n\n"
+            f"テキスト:\n{raw_text[:8000]}\n\n"
             "要約（300〜500文字）:"
         )
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
-            max_tokens=600,
+            max_tokens=800,
             messages=[{"role": "user", "content": prompt}],
         )
         summary = msg.content[0].text.strip()
@@ -400,15 +400,15 @@ def main():
             info = fetch_nedo_detail(r["url"])  # 概要＋予算（本文→無ければPDF）＋予定
         if info:  # ページ取得成功
             new_detail = info.get("detail", "")
-            # 長い公告テキスト（100文字超）はAI要約に変換して格納
-            if new_detail and len(new_detail) > 100:
-                summarized = _ai_summary(new_detail, r.get("title", ""))
-                if summarized:
-                    new_detail = summarized
             cur_detail = (r.get("detail") or "").strip()
             # PORTAL はゴミdetailをリセット済みなので常に上書き。他ソースは空のときのみ
             if new_detail and (not cur_detail or r.get("source") == "PORTAL"):
-                r["detail"] = new_detail
+                r["detail"] = new_detail  # 生テキストを保持
+            # 長い公告テキスト（100文字超）はAI要約してsummaryフィールドへ
+            if new_detail and len(new_detail) > 100:
+                summarized = _ai_summary(new_detail, r.get("title", ""))
+                if summarized:
+                    r["summary"] = summarized
             if info.get("budget") and not (r.get("amount") or "").strip():
                 r["amount"] = info["budget"]
             if info.get("schedule") and not (r.get("schedule") or "").strip():
