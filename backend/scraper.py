@@ -318,8 +318,12 @@ def _extract_awardee(text: str) -> str:
 
 
 NEDO_BASE = "https://www.nedo.go.jp"
-# 取得対象の年度別一覧（現行年度のみ。過去年度を足せば件数を増やせる）
-NEDO_YEAR_LISTS = ["/koubo/2026_list.html"]
+# 取得対象の年度別一覧（当年度＋前年度を自動生成。年が変わっても自動対応）
+def _nedo_year_lists() -> list:
+    from datetime import date
+    y = date.today().year
+    return [f"/koubo/{y}_list.html", f"/koubo/{y - 1}_list.html"]
+NEDO_YEAR_LISTS = _nedo_year_lists()
 
 # 分野ページのテーブル列: [事業名, 予告掲載日, 公募開始日(リンク), 公募締切日, 結果(リンク)]
 _DETAIL_HREF = re.compile(r"/koubo/[A-Za-z0-9_]+\.html")
