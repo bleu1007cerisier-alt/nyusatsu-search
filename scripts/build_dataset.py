@@ -228,12 +228,12 @@ def main():
     def needs_fetch(r):
         if r.get("source") not in _FETCH_SOURCES or not r.get("url"):
             return False
-        if not (r.get("detail") or "").strip():
-            return True  # 概要未取得（新規等）
-        if not (r.get("amount") or "").strip() and (r.get("budget_checked") or "") != "1":
-            return True  # 予算未取得かつ未確認（取りこぼしの補完）
+        # budget_checked=1 が「詳細取得を一度試みた」フラグ。立っていなければ必ず取得する
+        if (r.get("budget_checked") or "") != "1":
+            return True
+        # R2有効で添付ファイルがまだ未保存の場合のみ再取得
         if storage.r2_enabled() and (r.get("attachments_checked") or "") != "1":
-            return True  # 添付ファイル未保存（R2有効時）
+            return True
         return False
 
     targets = [r for r in merged.values() if needs_fetch(r)]
