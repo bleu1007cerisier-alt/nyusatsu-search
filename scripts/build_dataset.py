@@ -29,6 +29,7 @@ from scraper import (  # noqa: E402
     fetch_jst_detail, fetch_portal_detail, fetch_portal_award,
     _extract_pdf_budget,
 )
+from datetime import date, timedelta
 import storage  # noqa: E402
 
 DATASET_DIR = os.path.join(ROOT, "dataset")
@@ -150,7 +151,21 @@ def main():
     existing = load_existing()
     print(f"既存データ: {len(existing)}件")
 
-    scraped = asyncio.run(run_all_scrapers())
+    # 調達ポータル: 既存CSVの最新PORTAL掲載日 − 1日 を取得開始日に使う
+    # （前回実行時の最終掲載日の翌日以降だけを取得 → 重複なし・取りこぼしなし）
+    portal_dates = [
+        r.get("published_at", "")
+        for r in existing.values()
+        if r.get("source") == "PORTAL" and r.get("published_at")
+    ]
+    if portal_dates:
+        last_portal = max(portal_dates)          # "YYYY-MM-DD"
+        portal_from = (date.fromisoformat(last_portal) - timedelta(days=1)).strftime("%Y/%m/%d")
+    else:
+        portal_from = (date.today() - timedelta(days=7)).strftime("%Y/%m/%d")  # 初回のみ7日分
+    print(f"調達ポータル取得開始日: {portal_from}")
+
+    scraped = asyncio.run(run_all_scrapers(portal_date_from=portal_from))
     print(f"スクレイピング取得: {len(scraped)}件")
     if not scraped:
         print("取得0件のため既存データを保持して終了")

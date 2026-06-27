@@ -842,16 +842,21 @@ def _portal_parse_rows(soup: BeautifulSoup):
     return rows
 
 
-async def scrape_portal(days_back: int = 3) -> List[Dict]:
-    """調達ポータルから差分（直近 days_back 日分）を取得する。
+async def scrape_portal(date_from: str = "") -> List[Dict]:
+    """調達ポータルから差分を取得する。
+
+    date_from: 取得開始日（YYYY/MM/DD 形式）。省略時は当日のみ。
+    build_dataset.py 側で「前回PORTAL取得日 − 1日」を計算して渡すことで
+    必要最小限の差分のみを取得する。
 
     1セッションで GET フォーム → POST 検索 → ページング の順に取得。
     落札公示が存在する行は result_url にそのアイテム ID を記録。
     """
-    from datetime import date, timedelta
+    from datetime import date
     results: List[Dict] = []
     seen: set = set()
-    date_from = (date.today() - timedelta(days=days_back)).strftime("%Y/%m/%d")
+    if not date_from:
+        date_from = date.today().strftime("%Y/%m/%d")
 
     async with aiohttp.ClientSession(cookie_jar=aiohttp.CookieJar()) as session:
         form_data = await _portal_get_form_data(session)
@@ -1058,14 +1063,18 @@ def fetch_portal_award(url: str) -> Dict[str, str]:
 # ---------------------------------------------------------------------------
 # 全スクレイパー統合
 # ---------------------------------------------------------------------------
-async def run_all_scrapers() -> List[Dict]:
-    """全スクレイパーを実行して取得結果（生データ）を返す。"""
+async def run_all_scrapers(portal_date_from: str = "") -> List[Dict]:
+    """全スクレイパーを実行して取得結果（生データ）を返す。
+
+    portal_date_from: 調達ポータルの取得開始日（YYYY/MM/DD）。
+    build_dataset.py が既存CSVの最終PORTAL掲載日から算出して渡す。
+    """
     all_results: List[Dict] = []
 
     tasks = [
         scrape_nedo(),
         scrape_jst(),
-        scrape_portal(),
+        scrape_portal(date_from=portal_date_from),
     ]
 
     scraped = await asyncio.gather(*tasks, return_exceptions=True)
