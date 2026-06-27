@@ -18,13 +18,12 @@ import csv
 import json
 import time
 import asyncio
-import re as _re_summary
 from datetime import date
 
 
 def _ai_summary(raw_text: str, title: str = "") -> str:
     """Claude Haiku で入札公告・公募テキストを要約する。
-    ANTHROPIC_API_KEY が未設定の場合は空文字を返す（処理をスキップ）。
+    ANTHROPIC_API_KEY が未設定の場合は空文字を返す（生テキストをそのまま使用）。
     """
     api_key = os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("CLAUDE_API_KEY")
     if not api_key or len(raw_text.strip()) < 80:
@@ -33,24 +32,25 @@ def _ai_summary(raw_text: str, title: str = "") -> str:
         import anthropic
         client = anthropic.Anthropic(api_key=api_key)
         prompt = (
-            "以下の入札公告・公募テキストを、150〜250文字の自然な日本語散文で要約してください。\n"
-            "箇条書きや見出しは不要です。調達の目的・内容、履行期限、参加資格、入札日程など"
-            "重要な情報を含めた、読みやすい要約文を作成してください。\n"
+            "以下の入札公告・公募のテキストを300〜500文字程度の自然な日本語で要約してください。\n"
+            "箇条書きや見出しは不要です。調達・業務の目的と内容、履行期限、競争参加資格、"
+            "入札・開札日程など重要な情報を含めた、読みやすい要約文を作成してください。\n"
             "「入　札　公　告」のような書式タイトルは省いてください。\n\n"
             f"タイトル: {title}\n\n"
             f"テキスト:\n{raw_text[:2000]}\n\n"
-            "要約（150〜250文字）:"
+            "要約（300〜500文字）:"
         )
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
-            max_tokens=400,
+            max_tokens=600,
             messages=[{"role": "user", "content": prompt}],
         )
         summary = msg.content[0].text.strip()
-        return summary[:400] if summary else ""
+        return summary[:600] if summary else ""
     except Exception as e:
         print(f"AI要約失敗: {e}")
         return ""
+
 
 # backend をインポートできるようにする
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -400,7 +400,7 @@ def main():
             info = fetch_nedo_detail(r["url"])  # 概要＋予算（本文→無ければPDF）＋予定
         if info:  # ページ取得成功
             new_detail = info.get("detail", "")
-            # 長い生テキスト（入札公告など）はAIで要約してから格納
+            # 長い公告テキスト（100文字超）はAI要約に変換して格納
             if new_detail and len(new_detail) > 100:
                 summarized = _ai_summary(new_detail, r.get("title", ""))
                 if summarized:

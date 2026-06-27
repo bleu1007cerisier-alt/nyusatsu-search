@@ -1018,7 +1018,13 @@ def fetch_portal_detail(url: str) -> Dict[str, str]:
         if cand and not _BOILER.match(cand):
             meaningful = re.sub(r"[口□・　\s]", "", cand)
             if len(meaningful) >= 5:
-                detail_text = cand[:2000]  # 入札公告全文取得のため上限を2000文字に拡大
+                # 「入　札　公　告」「公　募　要　領」のような全角スペース区切りタイトルを先頭から除去
+                # 例: "入　札　公　告 次のとおり…" → "次のとおり…"
+                cleaned = re.sub(
+                    r"^[一-鿿　]{1,2}(　[一-鿿]{1,2}){1,5}\s*",
+                    "", cand
+                ).strip()
+                detail_text = (cleaned or cand)[:2000]
 
     # 公告内容が空の場合は 調達品目分類 + 分類 から合成概要を作成
     if not detail_text and hinmoku:
