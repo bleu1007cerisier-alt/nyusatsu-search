@@ -726,6 +726,336 @@ def fetch_jst_detail(url: str) -> Dict[str, str]:
 
 
 # ---------------------------------------------------------------------------
+# 調達ポータル（デジタル庁 p-portal.go.jp）
+# ---------------------------------------------------------------------------
+PORTAL_BASE = "https://www.p-portal.go.jp"
+PORTAL_FORM   = PORTAL_BASE + "/pps-web-biz/UAA01/OAA0101"
+PORTAL_SEARCH = PORTAL_BASE + "/pps-web-biz/UAA01/OAA0100"
+PORTAL_DETAIL = PORTAL_BASE + "/pps-web-biz/UAA01/OAA0104"
+
+# 調達種別 → category/tags のマッピング
+_PORTAL_TYPE_MAP = {
+    "公募型プロポーザル": "プロポーザル",
+    "企画競争": "プロポーザル",
+    "随意契約": "随意契約",
+    "一般競争入札": "入札",
+    "指名競争入札": "入札",
+    "オープンカウンタ": "入札",
+    "資料提供招請": "RFI",
+    "意見招請": "RFI",
+    "入札公告": "入札",
+    "落札": "",  # 落札公示は単独レコード化しない（既存行更新）
+}
+
+
+def _portal_category(choutatsushu: str) -> str:
+    for kw, cat in _PORTAL_TYPE_MAP.items():
+        if kw in choutatsushu:
+            return cat
+    return "入札"
+
+
+def _reiwa_date(text: str) -> str:
+    """元号付き日付を YYYY-MM-DD に変換する（令和/平成/昭和）。"""
+    ERA = {"令和": 2018, "平成": 1988, "昭和": 1925}
+    m = re.search(r"(令和|平成|昭和)(\d{1,2})年(\d{1,2})月(\d{1,2})日", text)
+    if not m:
+        # 西暦表記にもフォールバック
+        return _normalize_date(text)
+    base = ERA.get(m.group(1), 0)
+    return f"{base + int(m.group(2))}-{int(m.group(3)):02d}-{int(m.group(4)):02d}"
+
+
+def _portal_item_url(item_info_id: str) -> str:
+    return f"{PORTAL_DETAIL}?id={item_info_id}"
+
+
+def _portal_item_id_from_url(url: str) -> str:
+    m = re.search(r"[?&]id=(\d+)", url)
+    return m.group(1) if m else ""
+
+
+async def _portal_get_form_data(session: aiohttp.ClientSession) -> dict:
+    """フォームページを GET してセッション確立 + フォームデータ（CSRF含む）を返す。"""
+    raw, ct = await fetch_bytes(session, PORTAL_FORM)
+    soup = BeautifulSoup(_decode(raw, ct), "html.parser")
+    form = soup.find("form", {"id": "tri_WAA0101FM01"})
+    if not form:
+        return {}
+    data: dict = {}
+    for inp in form.find_all("input"):
+        name = inp.get("name", ""); val = inp.get("value", ""); itype = inp.get("type", "text")
+        if not name:
+            continue
+        if itype in ("hidden", "text"):
+            data[name] = val
+        elif itype == "radio" and inp.get("checked"):
+            data[name] = val
+    return data
+
+
+def _portal_parse_rows(soup: BeautifulSoup):
+    """検索結果ページのテーブル行をパースして行情報リストを返す。"""
+    rows = []
+    for tr in soup.find_all("tr"):
+        cells = tr.find_all("td")
+        if len(cells) < 4:
+            continue
+        case_no = cells[0].get_text(strip=True)
+        if not re.match(r"\d{19}", case_no):
+            continue  # ヘッダ行等をスキップ
+        title = cells[1].get_text(strip=True)
+        org   = cells[2].get_text(strip=True)
+        pref  = cells[3].get_text(strip=True)
+        tr_html = str(tr)
+        # 各種公示の itemInfoId と種別を抽出
+        notices = re.findall(
+            r"'procurementItemInfoId',\s*value:'(\d+)'[^)]+\),\s*'(/pps-web-biz/UAA01/OAA\d+)'",
+            tr_html)
+        # シンプルなパターンでも試す
+        if not notices:
+            item_ids = re.findall(r"'procurementItemInfoId',\s*value:'(\d+)'", tr_html)
+            labels   = re.findall(r'class="[^"]*info-button[^"]*"[^>]*>([^<]+)<', tr_html)
+        else:
+            item_ids = [n[0] for n in notices]
+            labels   = []
+        labels_raw = re.findall(r'class="[^"]*info-button[^"]*"[^>]*>([^<]+)<', tr_html)
+        # 公開開始日
+        pub_m = re.search(r"(令和|平成|昭和)(\d{1,2})年(\d{1,2})月(\d{1,2})日公開開始", tr_html)
+        published_at = _reiwa_date(pub_m.group(0).replace("公開開始", "")) if pub_m else ""
+        # 落札公示があれば result の id を分離
+        award_id = ""
+        main_id  = ""
+        for item_id, label in zip(item_ids, labels_raw):
+            if "落札" in label or "rakusatu" in label:
+                award_id = item_id
+            elif not main_id:
+                main_id = item_id
+        if not main_id and item_ids:
+            main_id = item_ids[0]
+        if main_id:
+            rows.append({
+                "case_no": case_no, "title": title, "org": org, "pref": pref,
+                "main_id": main_id, "award_id": award_id,
+                "published_at": published_at, "labels": labels_raw,
+            })
+    return rows
+
+
+async def scrape_portal(days_back: int = 3) -> List[Dict]:
+    """調達ポータルから差分（直近 days_back 日分）を取得する。
+
+    1セッションで GET フォーム → POST 検索 → ページング の順に取得。
+    落札公示が存在する行は result_url にそのアイテム ID を記録。
+    """
+    from datetime import date, timedelta
+    results: List[Dict] = []
+    seen: set = set()
+    date_from = (date.today() - timedelta(days=days_back)).strftime("%Y/%m/%d")
+
+    async with aiohttp.ClientSession(cookie_jar=aiohttp.CookieJar()) as session:
+        form_data = await _portal_get_form_data(session)
+        if not form_data:
+            logger.warning("調達ポータル: フォーム取得失敗")
+            return results
+
+        form_data["searchConditionBean.caseDivision"] = "0"
+        form_data["searchConditionBean.publicStartDateFrom"] = date_from
+        form_data["OAA0102"] = "検索"
+        ph = {**HEADERS, "Referer": PORTAL_FORM,
+              "Content-Type": "application/x-www-form-urlencoded"}
+
+        # 初回 POST で検索実行
+        await asyncio.sleep(0.7)
+        async with session.post(PORTAL_SEARCH, data=form_data, headers=ph,
+                                allow_redirects=True) as resp:
+            page_html = await resp.text(encoding="utf-8", errors="replace")
+            result_url_base = str(resp.url)
+
+        # 件数抽出（例: "335 件"）
+        total_m = re.search(r"(\d[\d,]*)\s*件", BeautifulSoup(page_html, "html.parser").get_text())
+        total = int(total_m.group(1).replace(",", "")) if total_m else 0
+        pages = max(1, -(-total // 50))  # ceiling division
+        logger.info(f"調達ポータル: {total}件 / {pages}ページ (from {date_from})")
+
+        for page in range(pages):
+            if page > 0:
+                await asyncio.sleep(0.7)
+                async with session.get(
+                    result_url_base.split("?")[0] + f"?page={page}&size=50",
+                    headers=HEADERS
+                ) as resp2:
+                    page_html = await resp2.text(encoding="utf-8", errors="replace")
+
+            soup = BeautifulSoup(page_html, "html.parser")
+            rows = _portal_parse_rows(soup)
+
+            for row in rows:
+                if row["case_no"] in seen:
+                    continue
+                seen.add(row["case_no"])
+
+                url = _portal_item_url(row["main_id"])
+                result_url = _portal_item_url(row["award_id"]) if row["award_id"] else ""
+                tags = generate_tags(row["title"], row["org"])
+                results.append({
+                    "title":        row["title"],
+                    "category":     "入札・公募",  # 詳細取得後に上書き
+                    "organization": row["org"],
+                    "deadline":     "",           # 詳細取得後に補完
+                    "published_at": row["published_at"],
+                    "result_date":  "",
+                    "result_url":   result_url,
+                    "project_code": row["case_no"],
+                    "awardee":      "",
+                    "url":          url,
+                    "prefecture":   row["pref"],
+                    "source":       "PORTAL",
+                    "amount":       "",
+                    "summary":      "",
+                    "detail":       "",
+                    "tags":         ",".join(tags),
+                })
+
+    logger.info(f"調達ポータル: {len(results)}件取得")
+    return results
+
+
+def fetch_portal_detail(url: str) -> Dict[str, str]:
+    """調達ポータル詳細ページを同期取得し、調達種別・締切・概要・添付を返す。
+
+    CSRF + セッション管理のため GET フォーム → POST 詳細の2ステップで取得する。
+    """
+    import http.cookiejar
+    import urllib.request as _req
+
+    item_id = _portal_item_id_from_url(url)
+    if not item_id:
+        return {}
+
+    jar = http.cookiejar.CookieJar()
+    opener = _req.build_opener(_req.HTTPCookieProcessor(jar))
+    opener.addheaders = [(k, v) for k, v in HEADERS.items()]
+
+    # 1. GET フォームページ（セッション確立 + CSRF 取得）
+    try:
+        with opener.open(PORTAL_FORM, timeout=20) as resp:
+            form_html = resp.read().decode("utf-8", "replace")
+    except Exception as e:
+        logger.error(f"ポータル詳細フォーム取得失敗 {url}: {e}")
+        return {}
+
+    soup_form = BeautifulSoup(form_html, "html.parser")
+    csrf_inp = soup_form.find("input", {"name": "_csrf"})
+    if not csrf_inp:
+        return {}
+    csrf = csrf_inp["value"]
+
+    # 2. POST で詳細取得
+    import urllib.parse
+    post_data = urllib.parse.urlencode({
+        "_csrf": csrf, "procurementItemInfoId": item_id, "SyFromFlg": "1"
+    }).encode("utf-8")
+    try:
+        req = _req.Request(PORTAL_DETAIL, data=post_data,
+                           headers={"Content-Type": "application/x-www-form-urlencoded",
+                                    "Referer": PORTAL_FORM})
+        with opener.open(req, timeout=25) as resp:
+            detail_html = resp.read().decode("utf-8", "replace")
+    except Exception as e:
+        logger.error(f"ポータル詳細取得失敗 {url}: {e}")
+        return {}
+
+    soup = BeautifulSoup(detail_html, "html.parser")
+    text = soup.get_text("\n", strip=True)
+
+    # 調達種別
+    choutatsushu = ""
+    for m in re.finditer(r"調達種別\s*[\n\s]*(.+)", text):
+        choutatsushu = m.group(1).strip()[:60]
+        break
+
+    # 公開終了日 = 締切
+    deadline = ""
+    for m in re.finditer(r"公開終了日\s*[\n\s]*(.{3,30})", text):
+        deadline = _reiwa_date(m.group(1))
+        if deadline:
+            break
+
+    # 公告内容（概要）
+    detail_text = ""
+    for m in re.finditer(r"公告内容\s*[\n\s]*(.{10,500})", text):
+        detail_text = m.group(1).strip()[:500]
+        break
+
+    # 添付ファイル（調達資料）
+    attachments = []
+    for a in soup.find_all("a", href=re.compile(r"download|資料|\.pdf", re.I)):
+        label = a.get_text(" ", strip=True)
+        href = a.get("href", "")
+        if href and label:
+            kind = next((k for key, k in _ATTACH_KINDS if key in label), "調達資料")
+            full = href if href.startswith("http") else PORTAL_BASE + href
+            attachments.append({"name": label, "url": full, "kind": kind})
+
+    return {
+        "category":    _portal_category(choutatsushu),
+        "detail":      detail_text,
+        "budget":      "",   # ポータル本文には予算記載なし（添付PDF参照）
+        "schedule":    [],
+        "attachments": attachments,
+        "deadline":    deadline,
+        "choutatsushu": choutatsushu,
+    }
+
+
+def fetch_portal_award(url: str) -> Dict[str, str]:
+    """調達ポータル落札公示ページから落札者・落札日を返す。"""
+    import http.cookiejar, urllib.request as _req, urllib.parse
+
+    item_id = _portal_item_id_from_url(url)
+    if not item_id:
+        return {}
+
+    jar = http.cookiejar.CookieJar()
+    opener = _req.build_opener(_req.HTTPCookieProcessor(jar))
+    opener.addheaders = [(k, v) for k, v in HEADERS.items()]
+    try:
+        with opener.open(PORTAL_FORM, timeout=20) as resp:
+            form_html = resp.read().decode("utf-8", "replace")
+    except Exception as e:
+        logger.error(f"ポータル落札フォーム取得失敗 {url}: {e}")
+        return {}
+    csrf_inp = BeautifulSoup(form_html, "html.parser").find("input", {"name": "_csrf"})
+    if not csrf_inp:
+        return {}
+    post_data = urllib.parse.urlencode({
+        "_csrf": csrf_inp["value"], "procurementItemInfoId": item_id, "SyFromFlg": "1"
+    }).encode("utf-8")
+    try:
+        req = _req.Request(PORTAL_DETAIL, data=post_data,
+                           headers={"Content-Type": "application/x-www-form-urlencoded",
+                                    "Referer": PORTAL_FORM})
+        with opener.open(req, timeout=25) as resp:
+            detail_html = resp.read().decode("utf-8", "replace")
+    except Exception as e:
+        logger.error(f"ポータル落札詳細取得失敗 {url}: {e}")
+        return {}
+
+    text = BeautifulSoup(detail_html, "html.parser").get_text("\n", strip=True)
+    awardee = _extract_awardee(text)
+    # 落札日
+    result_date = ""
+    for kw in ["落札日", "契約日", "決定日"]:
+        m = re.search(kw + r"[^\n]{0,30}", text)
+        if m:
+            result_date = _reiwa_date(m.group())
+            if result_date:
+                break
+    return {"awardee": awardee, "result_date": result_date}
+
+
+# ---------------------------------------------------------------------------
 # 全スクレイパー統合
 # ---------------------------------------------------------------------------
 async def run_all_scrapers() -> List[Dict]:
@@ -735,6 +1065,7 @@ async def run_all_scrapers() -> List[Dict]:
     tasks = [
         scrape_nedo(),
         scrape_jst(),
+        scrape_portal(),
     ]
 
     scraped = await asyncio.gather(*tasks, return_exceptions=True)

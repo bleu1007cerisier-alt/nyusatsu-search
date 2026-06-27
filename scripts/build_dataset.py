@@ -26,7 +26,8 @@ sys.path.insert(0, os.path.join(ROOT, "backend"))
 
 from scraper import (  # noqa: E402
     run_all_scrapers, fetch_nedo_detail, fetch_nedo_result,
-    fetch_jst_detail, _extract_pdf_budget,
+    fetch_jst_detail, fetch_portal_detail, fetch_portal_award,
+    _extract_pdf_budget,
 )
 import storage  # noqa: E402
 
@@ -207,7 +208,7 @@ def main():
 
     # 【増分】概要が未取得、または予算が未取得で未確認の案件だけ取得。
     # 本文に予算が無ければ公募要領PDFから補完。一度確認した案件は再取得しない。
-    _FETCH_SOURCES = {"NEDO", "JST"}
+    _FETCH_SOURCES = {"NEDO", "JST", "PORTAL"}
 
     def needs_fetch(r):
         if r.get("source") not in _FETCH_SOURCES or not r.get("url"):
@@ -226,6 +227,8 @@ def main():
         src = r.get("source", "")
         if src == "JST":
             info = fetch_jst_detail(r["url"])
+        elif src == "PORTAL":
+            info = fetch_portal_detail(r["url"])
         else:
             info = fetch_nedo_detail(r["url"])  # 概要＋予算（本文→無ければPDF）＋予定
         if info:  # ページ取得成功
@@ -235,6 +238,12 @@ def main():
                 r["amount"] = info["budget"]
             if info.get("schedule") and not (r.get("schedule") or "").strip():
                 r["schedule"] = json.dumps(info["schedule"], ensure_ascii=False)
+            # PORTAL: 調達種別→category / 公開終了日→deadline を上書き
+            if src == "PORTAL":
+                if info.get("category"):
+                    r["category"] = info["category"]
+                if info.get("deadline") and not (r.get("deadline") or "").strip():
+                    r["deadline"] = info["deadline"]
             r["budget_checked"] = "1"  # 予算確認済み（空でも再取得しない）
             # 添付ファイル（仕様書・公募要領・評価基準）をR2へ保存（有効時のみ・未保存のみ）
             if storage.r2_enabled() and (r.get("attachments_checked") or "") != "1":
@@ -249,16 +258,24 @@ def main():
         row = merged.get(_row_key(item))
         if not row:
             continue
-        if not (row.get("result_date") or "").strip():
-            continue
         if (row.get("awardee") or "").strip() or (row.get("awardee_checked") or "").strip() == "1":
             continue
         if not item.get("result_url"):
             continue
-        info = fetch_nedo_result(item["result_url"])
-        if info:  # ページ取得成功（社名が無くても確認済みにして再取得を防ぐ）
+        src_aw = row.get("source", "")
+        if src_aw == "PORTAL":
+            info = fetch_portal_award(item["result_url"])
+        elif src_aw == "NEDO":
+            if not (row.get("result_date") or "").strip():
+                continue
+            info = fetch_nedo_result(item["result_url"])
+        else:
+            continue
+        if info:
             if info.get("awardee"):
                 row["awardee"] = info["awardee"]
+            if info.get("result_date") and not (row.get("result_date") or "").strip():
+                row["result_date"] = info["result_date"]
             row["awardee_checked"] = "1"
             aw_count += 1
             time.sleep(DETAIL_SLEEP)
