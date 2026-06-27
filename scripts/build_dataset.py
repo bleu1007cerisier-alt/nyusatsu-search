@@ -267,23 +267,39 @@ def main():
 
     # 既存CSVタイトルから【事業コード】プレフィックスを除去（整合性維持）
     import re as _re
+    _GARBAGE_DETAIL = _re.compile(r'^[口□・　\s]+$')  # 記号のみのゴミdetect
+
     for r in merged.values():
         if r.get("title"):
             r["title"] = _re.sub(r"^\s*【[^】]+】\s*", "", r["title"]).strip()
+
+    # PORTAL: 旧URLフォーマット(?id=)を新形式(?procurementItemInfoId=)に移行
+    url_migrated = 0
+    for r in merged.values():
+        if r.get("source") == "PORTAL" and r.get("url"):
+            old_url = r["url"]
+            if "?id=" in old_url and "procurementItemInfoId" not in old_url:
+                item_id = old_url.split("?id=")[-1]
+                r["url"] = f"https://www.p-portal.go.jp/pps-web-biz/UAA01/OAA0104?procurementItemInfoId={item_id}"
+                url_migrated += 1
+    if url_migrated:
+        print(f"PORTAL: URL旧形式→新形式移行 {url_migrated}件")
 
     # 【増分】概要が未取得、または予算が未取得で未確認の案件だけ取得。
     # 本文に予算が無ければ公募要領PDFから補完。一度確認した案件は再取得しない。
     _FETCH_SOURCES = {"NEDO", "JST", "PORTAL"}
 
-    # PORTAL: budget_checked=1 でも detail が空の案件は、改善された概要抽出で再試行させる
+    # PORTAL: detail が空またはゴミ記号のみの案件をリセット
     portal_retry = 0
     for r in merged.values():
         if r.get("source") == "PORTAL" and (r.get("budget_checked") or "") == "1":
-            if not (r.get("detail") or "").strip():
+            det = (r.get("detail") or "").strip()
+            if not det or _GARBAGE_DETAIL.match(det):
                 r["budget_checked"] = ""  # リセット → needs_fetch が True になる
+                r["detail"] = ""          # ゴミdetailもクリア
                 portal_retry += 1
     if portal_retry:
-        print(f"PORTAL: detail空({portal_retry}件)を再取得対象にリセット")
+        print(f"PORTAL: detail空・ゴミ({portal_retry}件)を再取得対象にリセット")
 
     def needs_fetch(r):
         if r.get("source") not in _FETCH_SOURCES or not r.get("url"):
@@ -307,8 +323,11 @@ def main():
         else:
             info = fetch_nedo_detail(r["url"])  # 概要＋予算（本文→無ければPDF）＋予定
         if info:  # ページ取得成功
-            if info.get("detail") and not (r.get("detail") or "").strip():
-                r["detail"] = info["detail"]
+            new_detail = info.get("detail", "")
+            cur_detail = (r.get("detail") or "").strip()
+            # PORTAL はゴミdetailをリセット済みなので常に上書き。他ソースは空のときのみ
+            if new_detail and (not cur_detail or r.get("source") == "PORTAL"):
+                r["detail"] = new_detail
             if info.get("budget") and not (r.get("amount") or "").strip():
                 r["amount"] = info["budget"]
             if info.get("schedule") and not (r.get("schedule") or "").strip():
