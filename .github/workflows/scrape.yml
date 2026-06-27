@@ -7,7 +7,7 @@ on:
     # 1日3回（日本時間 JST = UTC+9）。UTCで指定する。
     - cron: "30 0 * * *"   # 09:30 JST
     - cron: "30 4 * * *"   # 13:30 JST
-    - cron: "30 6 * * *"   # 15:30 JST
+    - cron: "0 8 * * *"    # 17:00 JST
   workflow_dispatch: {}
 
 permissions:
