@@ -22,8 +22,9 @@ import asyncio
 from datetime import date
 
 
-_PHONE_RE = _re_summary.compile(r'\d{2,5}[-－ ]\d{1,4}[-－ ]\d{3,4}')
+_PHONE_RE = _re_summary.compile(r'\(?\d{2,5}\)?[-－ ．]?\d{1,4}[-－ ．]\d{3,4}')
 _EMAIL_RE_OUT = _re_summary.compile(r'[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}')
+_HEADER_PREFIX = _re_summary.compile(r'^[#＃]+\s*(要約|概要|まとめ)[：:]*\s*\n*', _re_summary.MULTILINE)
 
 
 def _ai_summary(raw_text: str, title: str = "") -> str:
@@ -59,9 +60,11 @@ def _ai_summary(raw_text: str, title: str = "") -> str:
             messages=[{"role": "user", "content": prompt}],
         )
         summary = msg.content[0].text.strip()
-        # 電話番号・メールアドレスを後処理で除去
+        # 見出し・電話番号・メールアドレスを後処理で除去
+        summary = _HEADER_PREFIX.sub('', summary)
         summary = _PHONE_RE.sub('', summary)
         summary = _EMAIL_RE_OUT.sub('', summary)
+        summary = summary.strip()
         return summary[:600] if summary else ""
     except Exception as e:
         print(f"AI要約失敗: {e}")
