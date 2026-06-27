@@ -16,9 +16,14 @@ import os
 import sys
 import csv
 import json
+import re as _re_summary
 import time
 import asyncio
 from datetime import date
+
+
+_PHONE_RE = _re_summary.compile(r'\d{2,5}[-－ ]\d{1,4}[-－ ]\d{3,4}')
+_EMAIL_RE_OUT = _re_summary.compile(r'[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}')
 
 
 def _ai_summary(raw_text: str, title: str = "") -> str:
@@ -32,13 +37,21 @@ def _ai_summary(raw_text: str, title: str = "") -> str:
         import anthropic
         client = anthropic.Anthropic(api_key=api_key)
         prompt = (
-            "以下の入札公告・公募のテキストを300〜500文字程度の自然な日本語で要約してください。\n"
-            "箇条書きや見出しは不要です。調達・業務の目的と内容、履行期限、競争参加資格、"
-            "入札・開札日程など重要な情報を含めた、読みやすい要約文を作成してください。\n"
-            "「入　札　公　告」のような書式タイトルは省いてください。\n\n"
+            "以下の入札公告・公募・研究開発事業のテキストを300〜500文字程度の自然な日本語で要約してください。\n\n"
+            "【必須ルール】\n"
+            "・「要約」「概要」「#」などの見出しやラベルは一切つけない\n"
+            "・業務名・タイトルの繰り返しは不要\n"
+            "・電話番号・メールアドレスは含めない\n"
+            "・箇条書きは使わず、読みやすい連続した文章にする\n\n"
+            "【できる限り含める情報】\n"
+            "・調達・業務・研究の目的と具体的な内容\n"
+            "・履行期間・事業期間\n"
+            "・競争参加資格・応募要件\n"
+            "・入札・開札・応募締切の日程\n"
+            "・予算規模・上限額\n\n"
             f"タイトル: {title}\n\n"
             f"テキスト:\n{raw_text[:8000]}\n\n"
-            "要約（300〜500文字）:"
+            "要約文:"
         )
         msg = client.messages.create(
             model="claude-haiku-4-5-20251001",
@@ -46,6 +59,9 @@ def _ai_summary(raw_text: str, title: str = "") -> str:
             messages=[{"role": "user", "content": prompt}],
         )
         summary = msg.content[0].text.strip()
+        # 電話番号・メールアドレスを後処理で除去
+        summary = _PHONE_RE.sub('', summary)
+        summary = _EMAIL_RE_OUT.sub('', summary)
         return summary[:600] if summary else ""
     except Exception as e:
         print(f"AI要約失敗: {e}")
