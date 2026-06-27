@@ -173,24 +173,64 @@ MAX_DETAIL_PER_RUN = 200
 DETAIL_SLEEP = 0.4
 
 
+import re as _re_key
+
+_PORTAL_OLD_URL = _re_key.compile(r'[?&]id=(\d+)$')
+
+
+def _normalize_url(url: str) -> str:
+    """ポータルの旧URL形式(?id=xxx)を新形式に正規化（マージキー用）。"""
+    if "p-portal.go.jp" in url:
+        m = _PORTAL_OLD_URL.search(url)
+        if m:
+            return (
+                "https://www.p-portal.go.jp/pps-web-biz/UAA01/OAA0104"
+                f"?procurementItemInfoId={m.group(1)}"
+            )
+    return url
+
+
 def _row_key(row: dict) -> str:
-    """マージ用の一意キー。URLがあればURL、無ければ主要項目の組み合わせ。"""
+    """マージ用の一意キー。URLがあればURL（正規化済み）、無ければ主要項目の組み合わせ。"""
     url = (row.get("url") or "").strip()
     if url:
-        return "u:" + url
+        return "u:" + _normalize_url(url)
     return "k:" + "|".join([
         row.get("title", ""), row.get("published_at", ""),
         row.get("deadline", ""), row.get("result_date", ""),
     ])
 
 
+def _row_score(row: dict) -> tuple:
+    """重複解決用スコア。大きいほどデータが豊富。"""
+    return (
+        int((row.get("budget_checked") or "") == "1"),
+        int(bool((row.get("detail") or "").strip())),
+        int(bool((row.get("amount") or "").strip())),
+        -int(row.get("id") or 999999),  # IDが小さい（古い）ほど優先
+    )
+
+
 def load_existing() -> dict:
     if not os.path.exists(CSV_PATH):
         return {}
     out = {}
+    dupe_count = 0
     with open(CSV_PATH, "r", encoding="utf-8-sig", newline="") as f:
         for row in csv.DictReader(f):
-            out[_row_key(row)] = row
+            # URL フィールド自体も正規化（旧形式 ?id= を消去）
+            if "p-portal.go.jp" in (row.get("url") or ""):
+                row["url"] = _normalize_url(row["url"])
+            key = _row_key(row)
+            if key in out:
+                # 重複: スコアが高い方（データが豊富）を残す
+                if _row_score(row) > _row_score(out[key]):
+                    out[key] = row
+                dupe_count += 1
+            else:
+                out[key] = row
+    if dupe_count:
+        print(f"重複レコード除去（CSV読込時）: {dupe_count}件")
     return out
 
 
@@ -289,17 +329,18 @@ def main():
     # 本文に予算が無ければ公募要領PDFから補完。一度確認した案件は再取得しない。
     _FETCH_SOURCES = {"NEDO", "JST", "PORTAL"}
 
-    # PORTAL: detail が空またはゴミ記号のみの案件をリセット
+    # PORTAL: ゴミ記号のみの detail（非空だが無意味）の案件だけをリセット。
+    # 空の detail は「取得済みだが portal 側に情報がない」ため再取得しない（無限ループ防止）。
     portal_retry = 0
     for r in merged.values():
         if r.get("source") == "PORTAL" and (r.get("budget_checked") or "") == "1":
             det = (r.get("detail") or "").strip()
-            if not det or _GARBAGE_DETAIL.match(det):
-                r["budget_checked"] = ""  # リセット → needs_fetch が True になる
-                r["detail"] = ""          # ゴミdetailもクリア
+            if det and _GARBAGE_DETAIL.match(det):  # 空ならスキップ、ゴミだけリセット
+                r["budget_checked"] = ""
+                r["detail"] = ""
                 portal_retry += 1
     if portal_retry:
-        print(f"PORTAL: detail空・ゴミ({portal_retry}件)を再取得対象にリセット")
+        print(f"PORTAL: ゴミdetail({portal_retry}件)を再取得対象にリセット")
 
     def needs_fetch(r):
         if r.get("source") not in _FETCH_SOURCES or not r.get("url"):
