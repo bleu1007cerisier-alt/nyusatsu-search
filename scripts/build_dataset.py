@@ -25,7 +25,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "backend"))
 
 from scraper import (  # noqa: E402
-    run_all_scrapers, fetch_nedo_detail, fetch_nedo_result, _extract_pdf_budget,
+    run_all_scrapers, fetch_nedo_detail, fetch_nedo_result,
+    fetch_jst_detail, _extract_pdf_budget,
 )
 import storage  # noqa: E402
 
@@ -64,7 +65,8 @@ def _store_attachments(row, attachments):
             continue
         safe = _re.sub(r"[^A-Za-z0-9_.-]", "_", att["url"].split("/")[-1]) or f"file{i}.pdf"
         pub_date = (row.get("published_at") or "unknown").replace("/", "-")
-        key = f"nedo/{pub_date}_{row['id']}/{att['kind']}_{safe}"
+        src_prefix = (row.get("source") or "misc").lower()
+        key = f"{src_prefix}/{pub_date}_{row['id']}/{att['kind']}_{safe}"
         public = storage.upload_bytes(key, data, "application/pdf")
         # 公開URL（http...）のときだけ表示用urlに採用。非公開保存時は原文リンクにフォールバック
         url = public if public.startswith("http") else ""
@@ -205,8 +207,10 @@ def main():
 
     # 【増分】概要が未取得、または予算が未取得で未確認の案件だけ取得。
     # 本文に予算が無ければ公募要領PDFから補完。一度確認した案件は再取得しない。
+    _FETCH_SOURCES = {"NEDO", "JST"}
+
     def needs_fetch(r):
-        if r.get("source") != "NEDO" or not r.get("url"):
+        if r.get("source") not in _FETCH_SOURCES or not r.get("url"):
             return False
         if not (r.get("detail") or "").strip():
             return True  # 概要未取得（新規等）
@@ -219,7 +223,11 @@ def main():
     targets = [r for r in merged.values() if needs_fetch(r)]
     print(f"概要/予算を取得（増分）: {min(len(targets), MAX_DETAIL_PER_RUN)}件")
     for r in targets[:MAX_DETAIL_PER_RUN]:
-        info = fetch_nedo_detail(r["url"])  # 概要＋予算（本文→無ければPDF）＋予定
+        src = r.get("source", "")
+        if src == "JST":
+            info = fetch_jst_detail(r["url"])
+        else:
+            info = fetch_nedo_detail(r["url"])  # 概要＋予算（本文→無ければPDF）＋予定
         if info:  # ページ取得成功
             if info.get("detail") and not (r.get("detail") or "").strip():
                 r["detail"] = info["detail"]

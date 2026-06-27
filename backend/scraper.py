@@ -9,6 +9,7 @@
 
 現在の対象:
   - NEDO（新エネルギー・産業技術総合開発機構）公募情報
+  - JST（科学技術振興機構）公募情報
 """
 
 import aiohttp
@@ -554,19 +555,30 @@ def _extract_pdf_budget(text: str) -> str:
     return ""
 
 
-def _pdf_budget_from_soup(soup) -> str:
+def _pdf_budget_from_soup(soup, page_url: str = "") -> str:
     """公募ページ内の公募要領PDFを探して予算を抽出する（本文に予算が無い場合のフォールバック）。"""
     import io
     import urllib.request
+    from urllib.parse import urljoin
+
+    def _resolve(href: str) -> str:
+        if not href:
+            return ""
+        if href.startswith("http"):
+            return href
+        if page_url:
+            return urljoin(page_url, href)
+        return _abs(href)
+
     pdf_url = ""
     for a in soup.find_all("a", href=re.compile(r"\.pdf", re.I)):
         label = a.get_text(strip=True)
         href = a.get("href", "")
         if any(k in label for k in ("公募要領", "募集要項", "仕様書")):
-            pdf_url = _abs(href)
+            pdf_url = _resolve(href)
             break
         if not pdf_url:
-            pdf_url = _abs(href)
+            pdf_url = _resolve(href)
     if not pdf_url:
         return ""
     try:
@@ -582,12 +594,147 @@ def _pdf_budget_from_soup(soup) -> str:
     return _extract_pdf_budget(text)
 
 
+# ---------------------------------------------------------------------------
+# JST（科学技術振興機構）
+# ---------------------------------------------------------------------------
+JST_BASE = "https://www.jst.go.jp"
+JST_BOSYU = "/bosyu/bosyu.html"
+
+
+def _jst_abs(href: str, page_url: str = "") -> str:
+    """JST サイト内の相対パスを絶対 URL に変換する。"""
+    if not href:
+        return ""
+    if href.startswith("http"):
+        return href
+    if href.startswith("/"):
+        return JST_BASE + href
+    # ページ URL 基準の相対パス（../inter/... 等）
+    from urllib.parse import urljoin
+    base = page_url or (JST_BASE + JST_BOSYU)
+    return urljoin(base, href)
+
+
+async def scrape_jst() -> List[Dict]:
+    """JST 公募情報を一覧ページから取得する。
+
+    一覧テーブル: 締切日 | 分野 | タイトル（リンク、掲載日付き）
+    外部ドメインへのリンク行はスキップ（JST が取りまとめている外部機関公募は別途検討）。
+    """
+    results: List[Dict] = []
+    seen: set = set()
+
+    async with aiohttp.ClientSession() as session:
+        raw, ct = await fetch_bytes(session, JST_BASE + JST_BOSYU)
+        if not raw:
+            logger.warning("JST: 一覧ページ取得失敗")
+            return results
+        soup = BeautifulSoup(_decode(raw, ct), "html.parser")
+
+        for table in soup.find_all("table"):
+            for tr in table.find_all("tr"):
+                tds = tr.find_all("td")
+                if len(tds) < 3:
+                    continue
+
+                shimekiri = _normalize_date(tds[0].get_text())
+                field = tds[1].get_text(strip=True)
+
+                # タイトルとリンクを取得
+                a = tds[2].find("a")
+                if not a:
+                    continue
+                title = a.get_text(strip=True)
+                href = a.get("href", "")
+                if not href:
+                    continue
+
+                url = _jst_abs(href)
+
+                # 外部ドメイン（JST 以外）はスキップ
+                if not ("jst.go.jp" in url or url.startswith("/")):
+                    continue
+
+                # 掲載日を括弧内テキストから抽出（例: 「（2026年06月10日掲載）」）
+                td_text = tds[2].get_text()
+                pub_match = re.search(r"(\d{4}年\d{1,2}月\d{1,2}日)", td_text)
+                published_at = _normalize_date(pub_match.group(1)) if pub_match else ""
+
+                if url in seen:
+                    continue
+                seen.add(url)
+
+                tags = generate_tags(title, field, extra=[field] if field else None)
+                results.append({
+                    "title": title,
+                    "category": "プロポーザル",
+                    "organization": "JST（科学技術振興機構）",
+                    "deadline": shimekiri,
+                    "published_at": published_at,
+                    "result_date": "",
+                    "result_url": "",
+                    "project_code": "",
+                    "awardee": "",
+                    "url": url,
+                    "prefecture": "国",
+                    "source": "JST",
+                    "amount": "",
+                    "summary": field,
+                    "detail": "",
+                    "tags": ",".join(tags),
+                })
+
+    logger.info(f"JST: {len(results)}件取得")
+    return results
+
+
+def _jst_extract_attachments(soup, page_url: str):
+    """JST 詳細ページから添付 PDF（公募要領・仕様書等）のリンクを抽出する。"""
+    out = []
+    seen = set()
+    for a in soup.find_all("a", href=re.compile(r"\.pdf", re.I)):
+        label = a.get_text(" ", strip=True)
+        kind = next((k for key, k in _ATTACH_KINDS if key in label), "")
+        if not kind:
+            continue
+        href = _jst_abs(a.get("href", ""), page_url)
+        if not href or href in seen:
+            continue
+        seen.add(href)
+        out.append({"name": label, "url": href, "kind": kind})
+    return out
+
+
+def fetch_jst_detail(url: str) -> Dict[str, str]:
+    """JST 公募詳細ページを同期取得し、概要・予算・予定・添付を返す。
+
+    NEDO と同じ汎用抽出関数を流用。本文に予算が無ければ同ページの PDF から補完する。
+    """
+    soup = _fetch_soup(url)
+    if soup is None:
+        return {}
+    text = soup.get_text("\n", strip=True)
+    budget = _extract_budget(text)
+    if not budget:
+        budget = _pdf_budget_from_soup(soup, url)  # JST: ページ URL を渡して相対パスを正解決
+    return {
+        "detail": _extract_overview(soup),
+        "budget": budget,
+        "schedule": _extract_schedule(text),
+        "attachments": _jst_extract_attachments(soup, url),
+    }
+
+
+# ---------------------------------------------------------------------------
+# 全スクレイパー統合
+# ---------------------------------------------------------------------------
 async def run_all_scrapers() -> List[Dict]:
     """全スクレイパーを実行して取得結果（生データ）を返す。"""
     all_results: List[Dict] = []
 
     tasks = [
         scrape_nedo(),
+        scrape_jst(),
     ]
 
     scraped = await asyncio.gather(*tasks, return_exceptions=True)
