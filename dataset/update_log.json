@@ -1,0 +1,18 @@
+{
+  "runs": [
+    {
+      "at": "2026-06-28T10:31:48+00:00",
+      "scraped": 449,
+      "new": 0,
+      "updated": 449,
+      "total": 1010,
+      "portal_retry": 0,
+      "repaired": 0,
+      "ai_calls": 107,
+      "ai_input_tokens": 225256,
+      "ai_output_tokens": 39934,
+      "ai_cost_usd": 0.4249
+    }
+  ],
+  "cumulative_cost_usd_recent": 0.4249
+}
