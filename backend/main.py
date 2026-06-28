@@ -291,6 +291,8 @@ def get_stats(db: Session = Depends(get_db)):
         "sources": sorted(sources),
         "tags": [{"name": name, "count": cnt} for name, cnt in top_tags],
         "organizations": [{"name": name, "count": cnt} for name, cnt in top_orgs],
+        # 開発者リンクの表示可否（環境変数 DEV_PAGE_PUBLIC=0 で非表示）
+        "dev_link_visible": os.environ.get("DEV_PAGE_PUBLIC", "1") != "0",
     }
 
 
