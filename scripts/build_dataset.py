@@ -24,7 +24,25 @@ from datetime import date
 
 _PHONE_RE = _re_summary.compile(r'\(?\d{2,5}\)?[-－ ．]?\d{1,4}[-－ ．]\d{3,4}')
 _EMAIL_RE_OUT = _re_summary.compile(r'[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}')
-_HEADER_PREFIX = _re_summary.compile(r'^[#＃]+\s*(要約|概要|まとめ)[：:]*\s*\n*', _re_summary.MULTILINE)
+# 先頭のマークダウン見出し行（「# タイトル」「# ○○の要約」等）を行ごと除去
+_HEADER_PREFIX = _re_summary.compile(r'^\s*[#＃]+[^\n]*\n+')
+# 電話・メール除去後に残る空（中身が記号・空白・電話ラベルのみ）の括弧を除去
+_EMPTY_PAREN = _re_summary.compile(
+    r'[（(][\s　、。:：・ー―\-]*(?:TEL|FAX|電話|℡|内線)?[\s　:：．.\-－]*[)）]',
+    _re_summary.IGNORECASE)
+
+
+def _clean_summary(s: str) -> str:
+    """AI要約の後処理：見出し・電話番号・メール・空括弧を除去し整形する。"""
+    if not s:
+        return ""
+    s = _HEADER_PREFIX.sub('', s)            # 先頭見出し行を除去
+    s = _EMAIL_RE_OUT.sub('', s)             # メールアドレス
+    s = _PHONE_RE.sub('', s)                 # 電話番号
+    s = _EMPTY_PAREN.sub('', s)              # 空になった括弧
+    s = _re_summary.sub(r'[ 　]{2,}', ' ', s)   # 連続スペースを1つに
+    s = _re_summary.sub(r'\n{3,}', '\n\n', s)   # 連続改行を詰める
+    return s.strip()
 
 
 def _ai_summary(raw_text: str, title: str = "") -> str:
@@ -40,9 +58,9 @@ def _ai_summary(raw_text: str, title: str = "") -> str:
         prompt = (
             "以下の入札公告・公募・研究開発事業のテキストを300〜500文字程度の自然な日本語で要約してください。\n\n"
             "【必須ルール】\n"
-            "・「要約」「概要」「#」などの見出しやラベルは一切つけない\n"
+            "・冒頭にタイトルや見出し行を付けない（「#」で始まる行や「○○の要約」等は禁止。本文だけを書く）\n"
             "・業務名・タイトルの繰り返しは不要\n"
-            "・電話番号・メールアドレスは含めない\n"
+            "・電話番号・メールアドレス、およびそれらを囲む括弧は含めない\n"
             "・箇条書きは使わず、読みやすい文章にする\n"
             "・2〜3文ごとに改行を入れて段落に分ける\n\n"
             "【できる限り含める情報】\n"
@@ -60,12 +78,7 @@ def _ai_summary(raw_text: str, title: str = "") -> str:
             max_tokens=800,
             messages=[{"role": "user", "content": prompt}],
         )
-        summary = msg.content[0].text.strip()
-        # 見出し・電話番号・メールアドレスを後処理で除去
-        summary = _HEADER_PREFIX.sub('', summary)
-        summary = _PHONE_RE.sub('', summary)
-        summary = _EMAIL_RE_OUT.sub('', summary)
-        summary = summary.strip()
+        summary = _clean_summary(msg.content[0].text.strip())
         return summary[:600] if summary else ""
     except Exception as e:
         print(f"AI要約失敗: {e}")
