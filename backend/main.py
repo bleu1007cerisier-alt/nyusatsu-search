@@ -294,6 +294,85 @@ def get_stats(db: Session = Depends(get_db)):
     }
 
 
+# 参照しているデータソース（スクレイピング対象サイト）
+DEV_SOURCES = [
+    {"code": "PORTAL", "label": "調達ポータル",
+     "url": "https://www.p-portal.go.jp/pps-web-biz/", "desc": "各府省庁の入札・公募"},
+    {"code": "NEDO", "label": "NEDO",
+     "url": "https://www.nedo.go.jp/koubo/", "desc": "新エネルギー・産業技術総合開発機構の公募"},
+    {"code": "JST", "label": "JST",
+     "url": "https://www.jst.go.jp/", "desc": "科学技術振興機構の公募"},
+]
+
+
+@app.get("/api/dev/status")
+def dev_status():
+    """開発者ページ用：自動更新履歴・データソースの取得状況・AIコスト推定を返す。"""
+    today = date.today().isoformat()
+
+    # ソース別の取得状況をCSVから集計（last_seen はDB未保持のためCSVを直接読む）
+    by_source = {}
+    total = 0
+    if os.path.exists(DATASET_CSV):
+        with open(DATASET_CSV, encoding="utf-8-sig", newline="") as f:
+            for row in csv.DictReader(f):
+                total += 1
+                s = row.get("source") or "?"
+                d = by_source.setdefault(s, {"count": 0, "last_seen": "", "open": 0})
+                d["count"] += 1
+                ls = (row.get("last_seen") or "")
+                if ls > d["last_seen"]:
+                    d["last_seen"] = ls
+                # 募集中＝結果未確定 かつ 締切が今日以降（または未設定）
+                result_date = (row.get("result_date") or "").strip()
+                deadline = (row.get("deadline") or "").strip()
+                if not result_date and (not deadline or deadline >= today):
+                    d["open"] += 1
+
+    sources = []
+    for src in DEV_SOURCES:
+        info = by_source.get(src["code"], {"count": 0, "last_seen": "", "open": 0})
+        last_seen = info["last_seen"]
+        healthy = False
+        if last_seen[:10]:
+            try:
+                healthy = (date.fromisoformat(today) -
+                           date.fromisoformat(last_seen[:10])).days <= 3
+            except ValueError:
+                healthy = False
+        sources.append({
+            **src,
+            "count": info["count"],
+            "open": info["open"],
+            "last_seen": last_seen,
+            "healthy": healthy,
+        })
+
+    # 自動更新履歴・AIコスト
+    log_path = os.path.join(os.path.dirname(__file__), "../dataset/update_log.json")
+    runs, cost_recent = [], 0.0
+    if os.path.exists(log_path):
+        try:
+            with open(log_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            runs = data.get("runs", [])
+            cost_recent = data.get("cumulative_cost_usd_recent", 0.0)
+        except (ValueError, OSError):
+            pass
+
+    ai_enabled = bool(os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("CLAUDE_API_KEY"))
+
+    return {
+        "total": total,
+        "sources": sources,
+        "runs": list(reversed(runs))[:30],  # 新しい順
+        "ai_enabled": ai_enabled,
+        "ai_cost_recent_usd": cost_recent,
+        "ai_model": "claude-haiku-4-5",
+        "console_url": "https://console.anthropic.com/settings/billing",
+    }
+
+
 @app.post("/api/refresh")
 def refresh_data():
     """蓄積済みCSVを再読み込みする（スクレイピングはしない）。"""
@@ -310,6 +389,12 @@ def root():
 def tender_page(tender_id: int):
     """案件詳細ページ（独立ページ）。JS側でIDを読み取り内容を表示する。"""
     return FileResponse(os.path.join(os.path.dirname(__file__), "../frontend/detail.html"))
+
+
+@app.get("/dev")
+def dev_page():
+    """開発者向けステータスページ。"""
+    return FileResponse(os.path.join(os.path.dirname(__file__), "../frontend/dev.html"))
 
 
 # フロントエンドの静的ファイルを配信

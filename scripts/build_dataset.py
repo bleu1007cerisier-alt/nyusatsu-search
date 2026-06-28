@@ -58,6 +58,13 @@ def _has_corrupt_latin(s: str) -> bool:
     return False
 
 
+# AI使用量の累積（1回の実行内）。開発ページのコスト推定に使う。
+_AI_USAGE = {"calls": 0, "input_tokens": 0, "output_tokens": 0}
+# Claude Haiku 4.5 の料金（USD / 100万トークン）
+_HAIKU_IN_PER_M = 1.00
+_HAIKU_OUT_PER_M = 5.00
+
+
 _SUMMARY_PROMPT = (
     "以下の入札公告・公募・研究開発事業のテキストを300〜500文字程度の自然な日本語で要約してください。\n\n"
     "【必須ルール】\n"
@@ -98,6 +105,13 @@ def _ai_summary(raw_text: str, title: str = "") -> str:
                 max_tokens=800,
                 messages=[{"role": "user", "content": prompt}],
             )
+            # 使用トークンを累積（コスト推定用）
+            try:
+                _AI_USAGE["calls"] += 1
+                _AI_USAGE["input_tokens"] += int(getattr(msg.usage, "input_tokens", 0) or 0)
+                _AI_USAGE["output_tokens"] += int(getattr(msg.usage, "output_tokens", 0) or 0)
+            except Exception:
+                pass
             summary = _clean_summary(msg.content[0].text.strip())[:600]
             if not summary:
                 continue
@@ -544,8 +558,8 @@ def main():
 
     # 【日次セーフティ】既存要約に英字混入の誤生成が残っていれば、原文から再要約して修復。
     # 1回の実行で上限件数だけ処理（コスト・実行時間を抑制）。
+    repaired = 0
     if os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("CLAUDE_API_KEY"):
-        repaired = 0
         for r in merged.values():
             if repaired >= MAX_AI_REPAIR_PER_RUN:
                 break
@@ -571,6 +585,57 @@ def main():
             writer.writerow({k: r.get(k, "") for k in FIELDNAMES})
 
     print(f"書き出し完了: {CSV_PATH} ({len(rows)}件)")
+
+    # 実行履歴ログ（開発ページ用）。直近50件をローリング保存する。
+    try:
+        _write_update_log(
+            scraped=len(scraped),
+            new=new_count,
+            updated=update_count,
+            total=len(rows),
+            portal_retry=portal_retry,
+            repaired=repaired,
+        )
+    except Exception as e:  # noqa: BLE001
+        print(f"実行ログ書き出し失敗: {e}")
+
+
+def _write_update_log(scraped, new, updated, total, portal_retry, repaired):
+    """実行ごとの統計を dataset/update_log.json に追記する（直近50件）。"""
+    from datetime import datetime, timezone
+    log_path = os.path.join(DATASET_DIR, "update_log.json")
+    in_tok = _AI_USAGE["input_tokens"]
+    out_tok = _AI_USAGE["output_tokens"]
+    cost = in_tok / 1_000_000 * _HAIKU_IN_PER_M + out_tok / 1_000_000 * _HAIKU_OUT_PER_M
+    entry = {
+        "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "scraped": scraped,
+        "new": new,
+        "updated": updated,
+        "total": total,
+        "portal_retry": portal_retry,
+        "repaired": repaired,
+        "ai_calls": _AI_USAGE["calls"],
+        "ai_input_tokens": in_tok,
+        "ai_output_tokens": out_tok,
+        "ai_cost_usd": round(cost, 4),
+    }
+    history = []
+    if os.path.exists(log_path):
+        try:
+            with open(log_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                history = data.get("runs", []) if isinstance(data, dict) else []
+        except (ValueError, OSError):
+            history = []
+    history.append(entry)
+    history = history[-50:]  # 直近50件のみ保持
+    # 累計コスト（全履歴の合計）
+    total_cost = round(sum(float(r.get("ai_cost_usd") or 0) for r in history), 4)
+    with open(log_path, "w", encoding="utf-8") as f:
+        json.dump({"runs": history, "cumulative_cost_usd_recent": total_cost}, f,
+                  ensure_ascii=False, indent=2)
+    print(f"実行ログ更新: AI {entry['ai_calls']}回 / 推定コスト ${entry['ai_cost_usd']}")
 
 
 if __name__ == "__main__":

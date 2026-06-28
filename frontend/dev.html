@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>開発者ステータス | 入札・プロポーザル検索</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-50 min-h-screen">
+
+  <header class="bg-gray-800 text-white shadow">
+    <div class="max-w-5xl mx-auto px-4 py-4 flex items-center justify-between">
+      <span class="font-semibold">🛠️ 開発者ステータス</span>
+      <a href="/" class="text-gray-300 hover:text-white text-sm">← サイトへ戻る</a>
+    </div>
+  </header>
+
+  <main class="max-w-5xl mx-auto px-4 py-6 space-y-6">
+    <div id="loading" class="text-center py-16 text-gray-400">読み込み中...</div>
+
+    <div id="content" class="hidden space-y-6">
+
+      <!-- サマリー -->
+      <section class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div class="bg-white border rounded-xl p-4">
+          <div class="text-xs text-gray-500">総案件数</div>
+          <div id="m-total" class="text-2xl font-bold text-gray-800">—</div>
+        </div>
+        <div class="bg-white border rounded-xl p-4">
+          <div class="text-xs text-gray-500">最終更新</div>
+          <div id="m-last" class="text-sm font-medium text-gray-800 mt-1">—</div>
+        </div>
+        <div class="bg-white border rounded-xl p-4">
+          <div class="text-xs text-gray-500">AI要約</div>
+          <div id="m-ai" class="text-sm font-medium mt-1">—</div>
+        </div>
+        <div class="bg-white border rounded-xl p-4">
+          <div class="text-xs text-gray-500">推定AIコスト(直近)</div>
+          <div id="m-cost" class="text-2xl font-bold text-gray-800">—</div>
+        </div>
+      </section>
+
+      <!-- データソース -->
+      <section class="bg-white border rounded-xl p-5">
+        <h2 class="text-sm font-semibold text-gray-700 mb-3">📡 参照中のデータソースと取得状況</h2>
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead>
+              <tr class="text-left text-gray-500 border-b">
+                <th class="py-2 pr-3">状態</th>
+                <th class="py-2 pr-3">ソース</th>
+                <th class="py-2 pr-3 text-right">件数</th>
+                <th class="py-2 pr-3 text-right">募集中</th>
+                <th class="py-2 pr-3">最終取得</th>
+                <th class="py-2">リンク</th>
+              </tr>
+            </thead>
+            <tbody id="sources"></tbody>
+          </table>
+        </div>
+        <p class="text-xs text-gray-400 mt-2">「最終取得」が3日以内なら正常（🟢）。古い場合はスクレイパーの確認が必要です。</p>
+      </section>
+
+      <!-- AIコスト -->
+      <section class="bg-white border rounded-xl p-5">
+        <h2 class="text-sm font-semibold text-gray-700 mb-3">🤖 AI要約（Claude）</h2>
+        <div id="ai-status" class="text-sm text-gray-700 mb-2"></div>
+        <p class="text-xs text-gray-500 leading-relaxed">
+          コストは記録した使用トークンからの<strong>推定値</strong>です（モデル: <span id="ai-model">—</span>、入力 $1.00 / 出力 $5.00 per 1M）。
+          残高そのものはAPIで取得できないため、正確な残高は
+          <a id="console-link" href="#" target="_blank" rel="noopener" class="text-blue-600 hover:underline">Anthropicコンソール</a>
+          で確認してください。
+        </p>
+      </section>
+
+      <!-- 更新履歴 -->
+      <section class="bg-white border rounded-xl p-5">
+        <h2 class="text-sm font-semibold text-gray-700 mb-3">🕒 自動更新の履歴（新しい順・直近30回）</h2>
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead>
+              <tr class="text-left text-gray-500 border-b">
+                <th class="py-2 pr-3">日時(JST)</th>
+                <th class="py-2 pr-3 text-right">新規</th>
+                <th class="py-2 pr-3 text-right">更新</th>
+                <th class="py-2 pr-3 text-right">合計</th>
+                <th class="py-2 pr-3 text-right">AI要約</th>
+                <th class="py-2 text-right">推定コスト</th>
+              </tr>
+            </thead>
+            <tbody id="runs"></tbody>
+          </table>
+        </div>
+        <p id="no-runs" class="hidden text-xs text-gray-400 mt-2">まだ更新履歴がありません（次回の自動実行後に表示されます）。</p>
+      </section>
+
+    </div>
+  </main>
+
+  <script>
+    function esc(s){return (s==null?'':String(s)).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+    function jst(iso){
+      if(!iso) return '—';
+      try{
+        const d=new Date(iso);
+        return d.toLocaleString('ja-JP',{timeZone:'Asia/Tokyo',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'});
+      }catch(e){return iso;}
+    }
+
+    async function load(){
+      const res=await fetch('/api/dev/status');
+      const d=await res.json();
+      document.getElementById('loading').classList.add('hidden');
+      document.getElementById('content').classList.remove('hidden');
+
+      document.getElementById('m-total').textContent=d.total.toLocaleString();
+      const latest=(d.runs&&d.runs[0])||null;
+      document.getElementById('m-last').textContent=latest?jst(latest.at):'—';
+      document.getElementById('m-ai').innerHTML = d.ai_enabled
+        ? '<span class="text-green-600">有効</span>'
+        : '<span class="text-amber-600">無効(生テキスト)</span>';
+      document.getElementById('m-cost').textContent='$'+(d.ai_cost_recent_usd||0).toFixed(2);
+      document.getElementById('ai-model').textContent=d.ai_model||'—';
+      document.getElementById('console-link').href=d.console_url||'#';
+
+      document.getElementById('ai-status').innerHTML = d.ai_enabled
+        ? `APIキーは設定されています。直近${(d.runs||[]).length}回の累計推定コストは <strong>$${(d.ai_cost_recent_usd||0).toFixed(4)}</strong> です。`
+        : 'APIキーが未設定のため、AI要約は行われず公告の生テキストがそのまま表示されます。';
+
+      // ソース
+      document.getElementById('sources').innerHTML=(d.sources||[]).map(s=>`
+        <tr class="border-b last:border-0">
+          <td class="py-2 pr-3">${s.healthy?'🟢':'🔴'}</td>
+          <td class="py-2 pr-3 font-medium text-gray-800">${esc(s.label)}<div class="text-xs text-gray-400">${esc(s.desc)}</div></td>
+          <td class="py-2 pr-3 text-right">${s.count.toLocaleString()}</td>
+          <td class="py-2 pr-3 text-right text-green-700">${s.open.toLocaleString()}</td>
+          <td class="py-2 pr-3">${esc(s.last_seen||'—')}</td>
+          <td class="py-2"><a href="${esc(s.url)}" target="_blank" rel="noopener" class="text-blue-600 hover:underline">開く ↗</a></td>
+        </tr>`).join('');
+
+      // 履歴
+      const runs=d.runs||[];
+      if(!runs.length){document.getElementById('no-runs').classList.remove('hidden');}
+      document.getElementById('runs').innerHTML=runs.map(r=>`
+        <tr class="border-b last:border-0">
+          <td class="py-2 pr-3 whitespace-nowrap">${jst(r.at)}</td>
+          <td class="py-2 pr-3 text-right">${(r.new||0).toLocaleString()}</td>
+          <td class="py-2 pr-3 text-right">${(r.updated||0).toLocaleString()}</td>
+          <td class="py-2 pr-3 text-right">${(r.total||0).toLocaleString()}</td>
+          <td class="py-2 pr-3 text-right">${(r.ai_calls||0).toLocaleString()}</td>
+          <td class="py-2 text-right">$${(r.ai_cost_usd||0).toFixed(4)}</td>
+        </tr>`).join('');
+    }
+    load().catch(e=>{document.getElementById('loading').textContent='読み込みに失敗しました: '+e;});
+  </script>
+</body>
+</html>
