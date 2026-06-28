@@ -66,7 +66,9 @@
         <h2 class="text-sm font-semibold text-gray-700 mb-3">🤖 AI要約（Claude）</h2>
         <div id="ai-status" class="text-sm text-gray-700 mb-2"></div>
         <p class="text-xs text-gray-500 leading-relaxed">
-          コストは記録した使用トークンからの<strong>推定値</strong>です（モデル: <span id="ai-model">—</span>、入力 $1.00 / 出力 $5.00 per 1M）。
+          要約は <strong>GitHub Actions</strong>（自動更新）側で生成され、CSVに保存されます。
+          このサイト(Render)自体はAPIを呼びません。コストは記録した使用トークンからの<strong>推定値</strong>です
+          （モデル: <span id="ai-model">—</span>、入力 $1.00 / 出力 $5.00 per 1M）。
           残高そのものはAPIで取得できないため、正確な残高は
           <a id="console-link" href="#" target="_blank" rel="noopener" class="text-blue-600 hover:underline">Anthropicコンソール</a>
           で確認してください。
@@ -116,16 +118,17 @@
       document.getElementById('m-total').textContent=d.total.toLocaleString();
       const latest=(d.runs&&d.runs[0])||null;
       document.getElementById('m-last').textContent=latest?jst(latest.at):'—';
-      document.getElementById('m-ai').innerHTML = d.ai_enabled
-        ? '<span class="text-green-600">有効</span>'
-        : '<span class="text-amber-600">無効(生テキスト)</span>';
+      const cov = d.summary_eligible ? Math.round(d.summarized / d.summary_eligible * 100) : 0;
+      document.getElementById('m-ai').innerHTML = d.ai_active
+        ? `<span class="text-green-600">動作中</span> <span class="text-xs text-gray-400">${cov}%</span>`
+        : '<span class="text-amber-600">未生成</span>';
       document.getElementById('m-cost').textContent='$'+(d.ai_cost_recent_usd||0).toFixed(2);
       document.getElementById('ai-model').textContent=d.ai_model||'—';
       document.getElementById('console-link').href=d.console_url||'#';
 
-      document.getElementById('ai-status').innerHTML = d.ai_enabled
-        ? `APIキーは設定されています。直近${(d.runs||[]).length}回の累計推定コストは <strong>$${(d.ai_cost_recent_usd||0).toFixed(4)}</strong> です。`
-        : 'APIキーが未設定のため、AI要約は行われず公告の生テキストがそのまま表示されます。';
+      document.getElementById('ai-status').innerHTML = d.ai_active
+        ? `要約は生成・保存されています：<strong>${(d.summarized||0).toLocaleString()}</strong> 件（要約対象 ${(d.summary_eligible||0).toLocaleString()} 件中・カバレッジ ${cov}%）。`
+        : 'まだ要約が生成されていません。GitHub Secrets に ANTHROPIC_API_KEY が設定されていれば、次回の自動更新で生成されます。';
 
       // ソース
       document.getElementById('sources').innerHTML=(d.sources||[]).map(s=>`
