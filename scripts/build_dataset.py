@@ -341,8 +341,11 @@ def load_existing() -> dict:
 
 
 def main():
+    from datetime import datetime, timezone
     os.makedirs(DATASET_DIR, exist_ok=True)
     today = date.today().isoformat()
+    # last_seen 用の日時（JST = UTC+9、分まで）
+    now_jst = (datetime.now(timezone.utc) + timedelta(hours=9)).strftime("%Y-%m-%d %H:%M")
 
     existing = load_existing()
     print(f"既存データ: {len(existing)}件")
@@ -397,7 +400,7 @@ def main():
                 "summary": item.get("summary") or prev.get("summary", ""),
                 "tags": item.get("tags") or prev.get("tags", ""),
                 "source": item.get("source", prev.get("source", "")),
-                "last_seen": today,
+                "last_seen": now_jst,
             })
             update_count += 1
         else:
@@ -405,7 +408,7 @@ def main():
             row = {k: item.get(k, "") for k in FIELDNAMES}
             row["id"] = str(max_id)
             row["first_seen"] = today
-            row["last_seen"] = today
+            row["last_seen"] = now_jst
             merged[key] = row
             new_count += 1
 

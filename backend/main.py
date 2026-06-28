@@ -315,6 +315,8 @@ def dev_status():
     # ソース別の取得状況をCSVから集計（last_seen はDB未保持のためCSVを直接読む）
     by_source = {}
     total = 0
+    summarized = 0          # AI要約が入っている件数
+    summary_eligible = 0    # 本文(detail)があり要約対象になりうる件数
     if os.path.exists(DATASET_CSV):
         with open(DATASET_CSV, encoding="utf-8-sig", newline="") as f:
             for row in csv.DictReader(f):
@@ -330,6 +332,11 @@ def dev_status():
                 deadline = (row.get("deadline") or "").strip()
                 if not result_date and (not deadline or deadline >= today):
                     d["open"] += 1
+                # AI要約のカバレッジ
+                if len((row.get("detail") or "").strip()) >= 100:
+                    summary_eligible += 1
+                if (row.get("summary") or "").strip():
+                    summarized += 1
 
     sources = []
     for src in DEV_SOURCES:
@@ -362,13 +369,17 @@ def dev_status():
         except (ValueError, OSError):
             pass
 
-    ai_enabled = bool(os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("CLAUDE_API_KEY"))
+    # 要約は GitHub Actions 側で生成される。Web サーバー(Render)の環境変数ではなく、
+    # 実際にデータへ要約が入っているか（カバレッジ）で「動作中か」を判定する。
+    ai_active = summarized > 0
 
     return {
         "total": total,
         "sources": sources,
         "runs": list(reversed(runs))[:30],  # 新しい順
-        "ai_enabled": ai_enabled,
+        "ai_active": ai_active,
+        "summarized": summarized,
+        "summary_eligible": summary_eligible,
         "ai_cost_recent_usd": cost_recent,
         "ai_model": "claude-haiku-4-5",
         "console_url": "https://console.anthropic.com/settings/billing",
