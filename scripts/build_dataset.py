@@ -465,6 +465,8 @@ def main():
             info = fetch_jst_detail(r["url"])
         elif src == "PORTAL":
             info = fetch_portal_detail(r["url"])
+        elif src == "JOGMEC":
+            info = fetch_jogmec_detail(r["url"])
         else:
             info = fetch_nedo_detail(r["url"])  # 概要＋予算（本文→無ければPDF）＋予定
         if info:  # ページ取得成功
