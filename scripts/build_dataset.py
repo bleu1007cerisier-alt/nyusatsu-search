@@ -162,31 +162,12 @@ def _download(url: str) -> bytes:
 
 
 def _store_attachments(row, attachments):
-    """添付PDFをR2へ保存し、保存先情報を row['attachments'] に記録する（R2有効時のみ）。
+    """添付ファイルのURL情報を row['attachments'] に記録する。
 
-    GEPS(geps.go.jp)など認証必須リンクはPDFが返らないためR2スキップ。
-    その場合でも source_url はメタデータとして保存し、UIでリンク表示に使う。
+    PDFのダウンロード・R2保存は行わず、元URLをそのまま保持してUIでリンク表示する。
     """
-    if not storage.r2_enabled():
-        return  # 鍵未設定なら何もしない（attachments_checkedも立てず、有効化後に処理）
-    import re as _re
-    stored = []
-    for i, att in enumerate(attachments):
-        data = _download(att["url"])
-        r2_url = ""
-        r2_key = ""
-        # PDFマジックナンバー確認（認証必要なURLはHTMLが返るためスキップ）
-        if data and data.lstrip()[:4] == b"%PDF":
-            safe = _re.sub(r"[^A-Za-z0-9_.-]", "_", att["url"].split("/")[-1]) or f"file{i}.pdf"
-            pub_date = (row.get("published_at") or "unknown").replace("/", "-")
-            src_prefix = (row.get("source") or "misc").lower()
-            key = f"{src_prefix}/{pub_date}_{row['id']}/{att['kind']}_{safe}"
-            public = storage.upload_bytes(key, data, "application/pdf")
-            r2_url = public if public.startswith("http") else ""
-            r2_key = key
-        # PDFでなくても source_url をメタデータとして保存（UIでリンク表示可能）
-        stored.append({"name": att["name"], "kind": att["kind"],
-                       "url": r2_url, "key": r2_key, "source_url": att["url"]})
+    stored = [{"name": att["name"], "kind": att["kind"], "source_url": att["url"]}
+              for att in attachments]
     row["attachments"] = json.dumps(stored, ensure_ascii=False)
     row["attachments_checked"] = "1"
 
@@ -474,9 +455,6 @@ def main():
         # budget_checked=1 が「詳細取得を一度試みた」フラグ。立っていなければ必ず取得する
         if (r.get("budget_checked") or "") != "1":
             return True
-        # R2有効で添付ファイルがまだ未保存の場合のみ再取得
-        if storage.r2_enabled() and (r.get("attachments_checked") or "") != "1":
-            return True
         return False
 
     targets = [r for r in merged.values() if needs_fetch(r)]
@@ -511,8 +489,7 @@ def main():
                 if info.get("deadline") and not (r.get("deadline") or "").strip():
                     r["deadline"] = info["deadline"]
             r["budget_checked"] = "1"  # 予算確認済み（空でも再取得しない）
-            # 添付ファイル（仕様書・公募要領・評価基準）をR2へ保存（有効時のみ・未保存のみ）
-            if storage.r2_enabled() and (r.get("attachments_checked") or "") != "1":
+            if (r.get("attachments_checked") or "") != "1":
                 _store_attachments(r, info.get("attachments", []))
         time.sleep(DETAIL_SLEEP)
 
