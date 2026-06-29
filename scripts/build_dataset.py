@@ -481,8 +481,9 @@ def main():
             # PORTAL はゴミdetailをリセット済みなので常に上書き。他ソースは空のときのみ
             if new_detail and (not cur_detail or r.get("source") == "PORTAL"):
                 r["detail"] = new_detail  # 生テキストを保持
-            # 長い公告テキスト（100文字超）はAI要約してsummaryフィールドへ（未生成のときのみ）
-            if new_detail and len(new_detail) > 100 and not (r.get("summary") or "").strip():
+            # 長い公告テキスト（100文字超）はAI要約してsummaryフィールドへ
+            # summaryが短い（≤100文字）場合はAI未要約（分野名・生テキスト等）とみなして再生成する
+            if new_detail and len(new_detail) > 100 and len((r.get("summary") or "")) <= 100:
                 summarized = _ai_summary(new_detail, r.get("title", ""))
                 if summarized:
                     r["summary"] = summarized
