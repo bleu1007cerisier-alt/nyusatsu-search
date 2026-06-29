@@ -174,7 +174,8 @@
       document.getElementById('tags').innerHTML = tags.map(tag =>
         `<a href="/?tag=${encodeURIComponent(tag)}" class="text-xs px-2.5 py-1 rounded-full bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-100">#${esc(tag)}</a>`).join('');
 
-      document.getElementById('detail').textContent = t.summary || t.detail || '（詳しい内容は公式ページをご確認ください）';
+      const detailText = t.summary || t.detail || '（詳しい内容は公式ページをご確認ください）';
+      document.getElementById('detail').innerHTML = esc(detailText).replace(/\n\n/g, '<br><br>').replace(/\n/g, '<br>');
 
       // 予定（説明会・各種期限）を時系列で表示
       const sched = t.schedule || [];
