@@ -1129,13 +1129,163 @@ def fetch_portal_award(url: str) -> Dict[str, str]:
 
 
 # ---------------------------------------------------------------------------
+# JOGMEC（エネルギー・金属鉱物資源機構）
+# ---------------------------------------------------------------------------
+# 連番URL /bid/bid_XXXXX.html を直接クロール。
+# 一覧ページのページネーションがJS動的なため、既知の最大IDを超えた範囲を
+# 毎回チェックして新着を取得する。初回バックフィル用に from_id を指定可能。
+
+JOGMEC_BASE = "https://www.jogmec.go.jp"
+# 既知の最大ID（初回バックフィル後はCSVから自動算出）
+JOGMEC_BACKFILL_FROM = 65   # 2025年以降の最初のID
+
+def _parse_jp_date(s: str) -> str:
+    m = re.search(r"(\d{4})年(\d{1,2})月(\d{1,2})日", s or "")
+    if m:
+        return f"{m.group(1)}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+    return ""
+
+
+def fetch_jogmec_detail(url: str) -> Optional[Dict]:
+    """JOGMECの案件詳細ページから情報を取得する（同期）。"""
+    import urllib.request
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": HEADERS["User-Agent"]})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            soup = BeautifulSoup(r.read(), "html.parser")
+    except Exception as e:
+        logger.debug(f"JOGMEC fetch失敗 {url}: {e}")
+        return None
+
+    title = soup.find("h1")
+    title = title.get_text(strip=True) if title else ""
+
+    # th/td テーブルから情報取得
+    info: Dict[str, str] = {}
+    for tr in soup.find_all("tr"):
+        cells = tr.find_all(["th", "td"])
+        if len(cells) >= 2:
+            info[cells[0].get_text(strip=True)] = cells[1].get_text(strip=True)
+
+    published_at = _parse_jp_date(info.get("公告日", ""))
+    deadline = _parse_jp_date(info.get("入札日", "") or info.get("締切日", ""))
+    category_raw = info.get("種別", "")
+
+    # 概要テキスト（ページ本文）
+    main = soup.find("div", id=re.compile(r"main|contents|article", re.I)) or \
+           soup.find("div", class_=re.compile(r"main|contents|article", re.I))
+    detail_text = main.get_text(separator="\n", strip=True)[:2000] if main else ""
+
+    # 添付PDF
+    attachments = []
+    for a in soup.find_all("a", href=True):
+        href = a["href"]
+        if "/content/" in href and ".pdf" in href.lower():
+            name = a.get_text(strip=True)
+            kind = "公募要領" if "公募" in name else \
+                   "仕様書" if "仕様" in name else \
+                   "評価基準" if "評価" in name else "公告文"
+            full_url = JOGMEC_BASE + href if href.startswith("/") else href
+            attachments.append({"name": name, "kind": kind, "url": full_url})
+
+    return {
+        "title": title,
+        "published_at": published_at,
+        "deadline": deadline,
+        "category_raw": category_raw,
+        "detail": detail_text,
+        "attachments": attachments,
+    }
+
+
+async def scrape_jogmec(max_id: int = 0) -> List[Dict]:
+    """JOGMECの案件一覧を連番クロールで取得する。
+
+    max_id: 既存CSVの最大JOGMEC ID。これより大きいIDのみ取得（増分）。
+            0 の場合は JOGMEC_BACKFILL_FROM から現在の最大IDまで全取得。
+    """
+    import urllib.request
+    import time as _time
+
+    results = []
+    # 増分モード: max_id+1 から先を探索。初回: BACKFILL_FROM から探索。
+    start = max(max_id + 1, JOGMEC_BACKFILL_FROM)
+    # 404が10連続したら打ち切り（最大IDを超えたと判断）
+    consecutive_404 = 0
+    num = start
+
+    while consecutive_404 < 10:
+        url = f"{JOGMEC_BASE}/bid/bid_{num:05d}.html"
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": HEADERS["User-Agent"]})
+            with urllib.request.urlopen(req, timeout=10) as r:
+                soup = BeautifulSoup(r.read(), "html.parser")
+            consecutive_404 = 0
+
+            title_tag = soup.find("h1")
+            title = title_tag.get_text(strip=True) if title_tag else ""
+            if not title:
+                num += 1
+                continue
+
+            info: Dict[str, str] = {}
+            for tr in soup.find_all("tr"):
+                cells = tr.find_all(["th", "td"])
+                if len(cells) >= 2:
+                    info[cells[0].get_text(strip=True)] = cells[1].get_text(strip=True)
+
+            published_at = _parse_jp_date(info.get("公告日", ""))
+            # 2025年以前はスキップ
+            if published_at and published_at < "2025-01-01":
+                num += 1
+                _time.sleep(0.3)
+                continue
+
+            category_raw = info.get("種別", "")
+            # 企画競争・公募・参加意思確認公募 → プロポーザル / それ以外 → 入札
+            category = "プロポーザル" if category_raw in (
+                "企画競争", "公募", "参加意思確認公募", "総合評価落札方式"
+            ) else "入札"
+
+            tags = generate_tags(title, category_raw)
+
+            results.append({
+                "title":           title,
+                "category":        category,
+                "organization":    "JOGMEC（エネルギー・金属鉱物資源機構）",
+                "prefecture":      "国",
+                "published_at":    published_at,
+                "deadline":        _parse_jp_date(info.get("入札日", "") or info.get("締切日", "")),
+                "result_date":     "",
+                "result_url":      "",
+                "project_code":    f"JOGMEC-{num:05d}",
+                "awardee":         "",
+                "url":             url,
+                "source":          "JOGMEC",
+                "amount":          "",
+                "source_category": category_raw,
+                "summary":         "",
+                "detail":          "",
+                "tags":            ",".join(tags),
+            })
+        except Exception:
+            consecutive_404 += 1
+
+        num += 1
+        _time.sleep(0.3)
+
+    logger.info(f"JOGMEC: {len(results)}件取得（bid_{start:05d}〜bid_{num-1:05d}）")
+    return results
+
+
+# ---------------------------------------------------------------------------
 # 全スクレイパー統合
 # ---------------------------------------------------------------------------
-async def run_all_scrapers(portal_date_from: str = "") -> List[Dict]:
+async def run_all_scrapers(portal_date_from: str = "", jogmec_max_id: int = 0) -> List[Dict]:
     """全スクレイパーを実行して取得結果（生データ）を返す。
 
     portal_date_from: 調達ポータルの取得開始日（YYYY/MM/DD）。
-    build_dataset.py が既存CSVの最終PORTAL掲載日から算出して渡す。
+    jogmec_max_id: 既存CSVのJOGMEC最大ID。増分取得に使用。
     """
     all_results: List[Dict] = []
 
@@ -1143,6 +1293,7 @@ async def run_all_scrapers(portal_date_from: str = "") -> List[Dict]:
         scrape_nedo(),
         scrape_jst(),
         scrape_portal(date_from=portal_date_from),
+        scrape_jogmec(max_id=jogmec_max_id),
     ]
 
     scraped = await asyncio.gather(*tasks, return_exceptions=True)

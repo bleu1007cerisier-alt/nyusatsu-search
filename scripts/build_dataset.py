@@ -132,7 +132,7 @@ sys.path.insert(0, os.path.join(ROOT, "backend"))
 from scraper import (  # noqa: E402
     run_all_scrapers, fetch_nedo_detail, fetch_nedo_result,
     fetch_jst_detail, fetch_portal_detail, fetch_portal_award,
-    _extract_pdf_budget,
+    fetch_jogmec_detail, _extract_pdf_budget,
 )
 from datetime import date, timedelta
 import storage  # noqa: E402
@@ -366,7 +366,18 @@ def main():
         portal_from = (date.today() - timedelta(days=7)).strftime("%Y/%m/%d")  # 初回のみ7日分
     print(f"調達ポータル取得開始日: {portal_from}")
 
-    scraped = asyncio.run(run_all_scrapers(portal_date_from=portal_from))
+    # JOGMEC: 既存CSVの project_code（JOGMEC-XXXXX）から最大IDを算出（増分取得）
+    jogmec_ids = []
+    for r in existing.values():
+        if r.get("source") == "JOGMEC" and (r.get("project_code") or "").startswith("JOGMEC-"):
+            try:
+                jogmec_ids.append(int(r["project_code"].split("-")[1]))
+            except ValueError:
+                pass
+    jogmec_max_id = max(jogmec_ids) if jogmec_ids else 0
+    print(f"JOGMEC最大取得済みID: {jogmec_max_id}")
+
+    scraped = asyncio.run(run_all_scrapers(portal_date_from=portal_from, jogmec_max_id=jogmec_max_id))
     print(f"スクレイピング取得: {len(scraped)}件")
     if not scraped:
         print("取得0件のため既存データを保持して終了")
