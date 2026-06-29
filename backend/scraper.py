@@ -431,7 +431,8 @@ async def scrape_nedo() -> List[Dict]:
                     "prefecture": "国",
                     "source": "NEDO",
                     "amount": "",
-                    "summary": field_name,
+                    "source_category": field_name,
+                    "summary": "",
                     "detail": "",
                     "tags": ",".join(tags),
                 })
@@ -694,7 +695,8 @@ async def scrape_jst() -> List[Dict]:
                     "prefecture": "国",
                     "source": "JST",
                     "amount": "",
-                    "summary": field,
+                    "source_category": field,
+                    "summary": "",
                     "detail": "",
                     "tags": ",".join(tags),
                 })
@@ -934,6 +936,7 @@ async def scrape_portal(date_from: str = "") -> List[Dict]:
                     "prefecture":   row["pref"],
                     "source":       "PORTAL",
                     "amount":       "",
+                    "source_category": "",
                     "summary":      "",
                     "detail":       "",
                     "tags":         ",".join(tags),

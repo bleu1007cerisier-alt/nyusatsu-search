@@ -32,8 +32,9 @@ class Tender(Base):
     awardee = Column(String(300))        # 決定事業者（実施予定先）。分かる場合のみ
     amount = Column(String(100))         # 予算規模 / 予定価格
     url = Column(String(1000))           # 元URLリンク
-    summary = Column(Text)               # 概要（短い説明・分野名）
-    detail = Column(Text)                # 詳細本文（アプリ内詳細表示用・連絡先は除外）
+    source_category = Column(String(200))  # ソース側の分野名・カテゴリ（NEDO分野名等）
+    summary = Column(Text)               # AI要約文（空=未要約）
+    detail = Column(Text)                # 詳細本文（AI要約の原文・連絡先は除外）
     schedule = Column(Text)              # 予定（説明会・各種期限）JSON文字列
     attachments = Column(Text)           # 添付ファイル（R2保存先）JSON文字列
     tags = Column(String(500))           # タグ（カンマ区切り）
@@ -61,6 +62,7 @@ def init_db():
             ("awardee", "ALTER TABLE tenders ADD COLUMN awardee VARCHAR(300)"),
             ("schedule", "ALTER TABLE tenders ADD COLUMN schedule TEXT"),
             ("attachments", "ALTER TABLE tenders ADD COLUMN attachments TEXT"),
+            ("source_category", "ALTER TABLE tenders ADD COLUMN source_category VARCHAR(200)"),
         ]
         for col, ddl in migrations:
             if col not in existing:

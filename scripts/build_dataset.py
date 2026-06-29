@@ -143,7 +143,8 @@ CSV_PATH = os.path.join(DATASET_DIR, "tenders.csv")
 FIELDNAMES = [
     "id", "title", "category", "organization", "prefecture",
     "published_at", "deadline", "result_date", "project_code", "awardee",
-    "awardee_checked", "amount", "budget_checked", "url", "summary", "summary_checked", "detail",
+    "awardee_checked", "amount", "budget_checked", "url",
+    "source_category", "summary", "detail",
     "schedule", "attachments", "attachments_checked", "tags", "source",
     "first_seen", "last_seen",
 ]
@@ -398,7 +399,8 @@ def main():
                 "result_date": item.get("result_date") or prev.get("result_date", ""),
                 "project_code": item.get("project_code") or prev.get("project_code", ""),
                 "amount": item.get("amount") or prev.get("amount", ""),
-                "summary": item.get("summary") or prev.get("summary", ""),
+                "source_category": item.get("source_category") or prev.get("source_category", ""),
+                # summary はAI要約専用のため、スクレイパーの値で上書きしない
                 "tags": item.get("tags") or prev.get("tags", ""),
                 "source": item.get("source", prev.get("source", "")),
                 "last_seen": now_jst,
@@ -482,13 +484,11 @@ def main():
             # PORTAL はゴミdetailをリセット済みなので常に上書き。他ソースは空のときのみ
             if new_detail and (not cur_detail or r.get("source") == "PORTAL"):
                 r["detail"] = new_detail  # 生テキストを保持
-            # 長い公告テキスト（100文字超）はAI要約してsummaryフィールドへ
-            # summary_checked=1 のときはAI要約済みのためスキップ
-            if new_detail and len(new_detail) > 100 and (r.get("summary_checked") or "") != "1":
+            # 長い公告テキスト（100文字超）はAI要約してsummaryフィールドへ（未要約のときのみ）
+            if new_detail and len(new_detail) > 100 and not (r.get("summary") or "").strip():
                 summarized = _ai_summary(new_detail, r.get("title", ""))
                 if summarized:
                     r["summary"] = summarized
-                    r["summary_checked"] = "1"
             if info.get("budget") and not (r.get("amount") or "").strip():
                 r["amount"] = info["budget"]
             if info.get("schedule") and not (r.get("schedule") or "").strip():
@@ -562,23 +562,22 @@ def main():
             r2_detail_count += 1
     print(f"R2 PDFから概要補完: {r2_detail_count}件")
 
-    # 【増分】detailはあるがsummary_checkedが未設定の案件をAI要約する。
+    # 【増分】detailはあるがsummaryが空の案件をAI要約する。
     # needs_fetch()を通らない既存案件（budget_checked=1済み）もここでカバーする。
-    # APIキー未設定時はスキップ（_ai_summaryが""を返しsummary_checkedが立たない無限ループを防ぐ）
+    # APIキー未設定時はスキップ（無限ループ防止）
     summarized_count = 0
     if os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("CLAUDE_API_KEY"):
         for r in merged.values():
             if summarized_count >= MAX_AI_SUMMARY_PER_RUN:
                 break
-            if (r.get("summary_checked") or "") == "1":
-                continue
+            if (r.get("summary") or "").strip():
+                continue  # summary に値あり = AI要約済み
             det = (r.get("detail") or "").strip()
             if len(det) < 100:
                 continue
             new = _ai_summary(det, r.get("title", ""))
             if new:
                 r["summary"] = new
-                r["summary_checked"] = "1"
                 summarized_count += 1
         if summarized_count:
             print(f"AI要約（増分）: {summarized_count}件")
@@ -599,7 +598,6 @@ def main():
             new = _ai_summary(det, r.get("title", ""))
             if new and not _has_corrupt_latin(new):
                 r["summary"] = new
-                r["summary_checked"] = "1"
                 repaired += 1
         if repaired:
             print(f"英字混入の要約を再生成（修復）: {repaired}件")
