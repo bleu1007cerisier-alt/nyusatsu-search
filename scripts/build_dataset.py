@@ -561,6 +561,25 @@ def main():
             r2_detail_count += 1
     print(f"R2 PDFから概要補完: {r2_detail_count}件")
 
+    # 【増分】detailはあるがsummary_checkedが未設定の案件をAI要約する。
+    # needs_fetch()を通らない既存案件（budget_checked=1済み）もここでカバーする。
+    summarized_count = 0
+    for r in merged.values():
+        if summarized_count >= MAX_DETAIL_PER_RUN:
+            break
+        if (r.get("summary_checked") or "") == "1":
+            continue
+        det = (r.get("detail") or "").strip()
+        if len(det) < 100:
+            continue
+        new = _ai_summary(det, r.get("title", ""))
+        if new:
+            r["summary"] = new
+            r["summary_checked"] = "1"
+            summarized_count += 1
+    if summarized_count:
+        print(f"AI要約（増分）: {summarized_count}件")
+
     # 【日次セーフティ】既存要約に英字混入の誤生成が残っていれば、原文から再要約して修復。
     # 1回の実行で上限件数だけ処理（コスト・実行時間を抑制）。
     repaired = 0

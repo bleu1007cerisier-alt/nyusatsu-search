@@ -97,8 +97,9 @@
 | amount | 予算規模（万円表記） | 例: `2,000万円以内` `1件あたり1,500万円程度` |
 | budget_checked | 1=確認済み | 再取得しない制御フラグ |
 | url | 公募詳細ページURL | |
-| summary | NEDO分野名 | 一覧ページで取得 |
-| detail | 概要文（業務内容） | 連絡先・メール除外済み |
+| summary | AI要約文（300〜500文字） | AI未設定時は分野名等の短いテキストが入る場合あり |
+| summary_checked | 1=AI要約済み | 空=未要約。次回AI有効実行時に detail から自動要約される |
+| detail | 概要文（業務内容・生テキスト） | 連絡先・メール除外済み。AI要約の原文 |
 | schedule | 予定リスト（JSON） | `[{label, date, raw}]` |
 | attachments | R2保存情報（JSON） | `[{name, kind, url, key, source_url}]` |
 | attachments_checked | 1=確認済み | 再アップロードしない制御フラグ |
@@ -135,11 +136,17 @@ nedo/{published_at}_{id}/{kind}_{filename}
 ```
 
 ### 5-5. 増分更新フラグの仕組み
-- `budget_checked=1` → 予算確認済み（空でも再取得しない）
+- `budget_checked=1` → 詳細ページ取得済み（予算が空でも再取得しない）
 - `awardee_checked=1` → 決定事業者確認済み
 - `attachments_checked=1` → R2保存済み
+- `summary_checked=1` → AI要約済み（空=未要約。ANTHROPIC_API_KEY有効時に detail から自動要約）
 
-**フラグを空にリセット → 次回実行時に再取得される**
+**フラグを空にリセット → 次回実行時に再取得・再生成される**
+
+> **AI要約のフロー：**
+> needs_fetch()対象案件 → 詳細取得 → summary_checked未設定なら要約
+> needs_fetch()対象外（budget_checked=1済み）→ 別ループで detail から要約
+> いずれも summary_checked=1 が立ったら以後スキップ（コスト重複なし）
 
 ### 5-6. キャッシュ防止
 全APIレスポンスに `Cache-Control: no-store` ヘッダを付与（`add_no_cache_headers` ミドルウェア）。
