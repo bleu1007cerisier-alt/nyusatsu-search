@@ -143,7 +143,7 @@ CSV_PATH = os.path.join(DATASET_DIR, "tenders.csv")
 FIELDNAMES = [
     "id", "title", "category", "organization", "prefecture",
     "published_at", "deadline", "result_date", "project_code", "awardee",
-    "awardee_checked", "amount", "budget_checked", "url", "summary", "detail",
+    "awardee_checked", "amount", "budget_checked", "url", "summary", "summary_checked", "detail",
     "schedule", "attachments", "attachments_checked", "tags", "source",
     "first_seen", "last_seen",
 ]
@@ -482,11 +482,12 @@ def main():
             if new_detail and (not cur_detail or r.get("source") == "PORTAL"):
                 r["detail"] = new_detail  # 生テキストを保持
             # 長い公告テキスト（100文字超）はAI要約してsummaryフィールドへ
-            # summaryが短い（≤100文字）場合はAI未要約（分野名・生テキスト等）とみなして再生成する
-            if new_detail and len(new_detail) > 100 and len((r.get("summary") or "")) <= 100:
+            # summary_checked=1 のときはAI要約済みのためスキップ
+            if new_detail and len(new_detail) > 100 and (r.get("summary_checked") or "") != "1":
                 summarized = _ai_summary(new_detail, r.get("title", ""))
                 if summarized:
                     r["summary"] = summarized
+                    r["summary_checked"] = "1"
             if info.get("budget") and not (r.get("amount") or "").strip():
                 r["amount"] = info["budget"]
             if info.get("schedule") and not (r.get("schedule") or "").strip():
@@ -576,6 +577,7 @@ def main():
             new = _ai_summary(det, r.get("title", ""))
             if new and not _has_corrupt_latin(new):
                 r["summary"] = new
+                r["summary_checked"] = "1"
                 repaired += 1
         if repaired:
             print(f"英字混入の要約を再生成（修復）: {repaired}件")
