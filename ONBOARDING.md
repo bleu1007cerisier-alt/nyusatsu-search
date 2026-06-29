@@ -185,13 +185,16 @@ R2_SECRET_ACCESS_KEY=（オーナーに確認）
 R2_BUCKET=nyusatsu-docs
 ```
 
-### GitHub PAT（コードpush用）
+### GitHub PAT（コードpush・Actions手動実行用）
 - スコープ: `repo` + `workflow`
-- 保存場所: Windows資格情報マネージャー（`git:https://github.com`）
-- Actions手動実行: `gh workflow run scrape.yml --repo bleu1007cerisier-alt/nyusatsu-search`
-  または GitHub REST API:
+- トークン名: `nyusatsu-deploy4`（有効期限: 2026-09-27）
+- 保存場所: ローカルの `.env` ファイル（`GITHUB_PAT=ghp_...`）
+- Actions手動実行（PowerShell）:
   ```powershell
-  $headers = @{ Authorization = "token ghp_..."; Accept = "application/vnd.github.v3+json" }
+  # .envからトークンを読み込んでトリガー
+  $env = Get-Content .env | Where-Object { $_ -match "^GITHUB_PAT=" }
+  $token = $env -replace "^GITHUB_PAT=", ""
+  $headers = @{ Authorization = "token $token"; Accept = "application/vnd.github.v3+json" }
   Invoke-RestMethod -Method POST -Uri "https://api.github.com/repos/bleu1007cerisier-alt/nyusatsu-search/actions/workflows/scrape.yml/dispatches" -Headers $headers -Body '{"ref":"main"}' -ContentType "application/json"
   ```
 
