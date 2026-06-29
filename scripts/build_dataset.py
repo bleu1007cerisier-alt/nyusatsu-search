@@ -275,7 +275,8 @@ def _budget_from_r2(row: dict) -> str:
 
 # 1回の実行で詳細/結果ページを取得する最大件数（負荷・実行時間対策。未取得分を順次埋める）
 MAX_DETAIL_PER_RUN = 200
-MAX_AI_REPAIR_PER_RUN = 30  # 1実行あたり英字混入要約の再生成上限
+MAX_AI_SUMMARY_PER_RUN = 50   # 1実行あたりAI要約（増分）の上限（コスト分散）
+MAX_AI_REPAIR_PER_RUN = 30    # 1実行あたり英字混入要約の再生成上限
 DETAIL_SLEEP = 0.4
 
 
@@ -563,22 +564,24 @@ def main():
 
     # 【増分】detailはあるがsummary_checkedが未設定の案件をAI要約する。
     # needs_fetch()を通らない既存案件（budget_checked=1済み）もここでカバーする。
+    # APIキー未設定時はスキップ（_ai_summaryが""を返しsummary_checkedが立たない無限ループを防ぐ）
     summarized_count = 0
-    for r in merged.values():
-        if summarized_count >= MAX_DETAIL_PER_RUN:
-            break
-        if (r.get("summary_checked") or "") == "1":
-            continue
-        det = (r.get("detail") or "").strip()
-        if len(det) < 100:
-            continue
-        new = _ai_summary(det, r.get("title", ""))
-        if new:
-            r["summary"] = new
-            r["summary_checked"] = "1"
-            summarized_count += 1
-    if summarized_count:
-        print(f"AI要約（増分）: {summarized_count}件")
+    if os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("CLAUDE_API_KEY"):
+        for r in merged.values():
+            if summarized_count >= MAX_AI_SUMMARY_PER_RUN:
+                break
+            if (r.get("summary_checked") or "") == "1":
+                continue
+            det = (r.get("detail") or "").strip()
+            if len(det) < 100:
+                continue
+            new = _ai_summary(det, r.get("title", ""))
+            if new:
+                r["summary"] = new
+                r["summary_checked"] = "1"
+                summarized_count += 1
+        if summarized_count:
+            print(f"AI要約（増分）: {summarized_count}件")
 
     # 【日次セーフティ】既存要約に英字混入の誤生成が残っていれば、原文から再要約して修復。
     # 1回の実行で上限件数だけ処理（コスト・実行時間を抑制）。
