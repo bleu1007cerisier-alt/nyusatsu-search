@@ -4,10 +4,8 @@ name: データ更新（スクレイピング）
 # CSVが更新されると Render が自動で再デプロイし、サイトに反映される。
 on:
   schedule:
-    # 1日3回（日本時間 JST = UTC+9）。UTCで指定する。
+    # 1日1回（日本時間 09:30 JST = UTC 00:30）
     - cron: "30 0 * * *"   # 09:30 JST
-    - cron: "30 4 * * *"   # 13:30 JST
-    - cron: "0 8 * * *"    # 17:00 JST
   workflow_dispatch: {}
 
 permissions:
