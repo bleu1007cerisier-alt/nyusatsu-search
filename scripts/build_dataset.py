@@ -448,7 +448,7 @@ def main():
 
     # 【増分】概要が未取得、または予算が未取得で未確認の案件だけ取得。
     # 本文に予算が無ければ公募要領PDFから補完。一度確認した案件は再取得しない。
-    _FETCH_SOURCES = {"NEDO", "JST", "PORTAL"}
+    _FETCH_SOURCES = {"NEDO", "JST", "PORTAL", "JOGMEC"}
 
     # PORTAL: ゴミ記号・ヘッダーのみの detail をリセット（→ 再取得 & AI要約の対象に）。
     # 空の detail は「取得済みだが portal 側に情報がない」ため再取得しない（無限ループ防止）。
