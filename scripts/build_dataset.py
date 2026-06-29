@@ -162,12 +162,29 @@ def _download(url: str) -> bytes:
 
 
 def _store_attachments(row, attachments):
-    """添付ファイルのURL情報を row['attachments'] に記録する。
+    """添付PDFをR2へ保存し、保存先情報を row['attachments'] に記録する。
 
-    PDFのダウンロード・R2保存は行わず、元URLをそのまま保持してUIでリンク表示する。
+    PDFマジックナンバー確認済みのものだけR2に保存。
+    認証必須URL（GEPSなど）はHTMLが返るため自動的にスキップされ、source_urlのみ保持。
+    R2未設定時は source_url のみ記録（UIでリンク表示）。
     """
-    stored = [{"name": att["name"], "kind": att["kind"], "source_url": att["url"]}
-              for att in attachments]
+    import re as _re
+    stored = []
+    for i, att in enumerate(attachments):
+        r2_url = ""
+        r2_key = ""
+        if storage.r2_enabled():
+            data = _download(att["url"])
+            if data and data.lstrip()[:4] == b"%PDF":
+                safe = _re.sub(r"[^A-Za-z0-9_.-]", "_", att["url"].split("/")[-1]) or f"file{i}.pdf"
+                pub_date = (row.get("published_at") or "unknown").replace("/", "-")
+                src_prefix = (row.get("source") or "misc").lower()
+                key = f"{src_prefix}/{pub_date}_{row['id']}/{att['kind']}_{safe}"
+                public = storage.upload_bytes(key, data, "application/pdf")
+                r2_url = public if public.startswith("http") else ""
+                r2_key = key
+        stored.append({"name": att["name"], "kind": att["kind"],
+                       "url": r2_url, "key": r2_key, "source_url": att["url"]})
     row["attachments"] = json.dumps(stored, ensure_ascii=False)
     row["attachments_checked"] = "1"
 
