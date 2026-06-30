@@ -17,7 +17,7 @@
 ## 1. システム構成（全体像）
 
 ```
-【収集層】毎日3回自動実行（GitHub Actions cron）
+【収集層】毎日1回自動実行（cron-job.org → GitHub Actions）
   NEDO公式サイト
     ↓ HTML巡回・PDF取得
   GitHub Actions (scrape.yml → build_dataset.py + scraper.py)
@@ -197,6 +197,15 @@ R2_BUCKET=nyusatsu-docs
   $headers = @{ Authorization = "token $token"; Accept = "application/vnd.github.v3+json" }
   Invoke-RestMethod -Method POST -Uri "https://api.github.com/repos/bleu1007cerisier-alt/nyusatsu-search/actions/workflows/scrape.yml/dispatches" -Headers $headers -Body '{"ref":"main"}' -ContentType "application/json"
   ```
+
+### cron-job.org（毎日自動スクレイピング）
+- サービス: https://cron-job.org（無料）
+- ジョブ名: `nyusatsu-scrape`
+- 実行時刻: 毎日 09:30 JST（UTC 00:30）
+- 役割: GitHub ActionsのWorkflow Dispatchを毎日叩く（PCが起動していなくても動作）
+- APIキー: ローカルの `.env` ファイル（`CRONJOB_API_KEY=...`）に保存済み
+- ログイン: bleu1007cerisier@gmail.com
+- **注意**: 長期間ログインしないとジョブが無効化される場合あり。数ヶ月に1回ダッシュボードを確認すること
 
 ### Render.com
 - Start Command: `uvicorn backend.main:app --host 0.0.0.0 --port $PORT`（**$PORT必須**）
