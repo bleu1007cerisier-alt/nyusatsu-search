@@ -726,6 +726,7 @@ def fetch_jst_detail(url: str) -> Dict[str, str]:
     """JST 公募詳細ページを同期取得し、概要・予算・予定・添付を返す。
 
     NEDO と同じ汎用抽出関数を流用。本文に予算が無ければ同ページの PDF から補完する。
+    採択結果リンクが見つかれば result_url も返す（公募終了後に追記される）。
     """
     soup = _fetch_soup(url)
     if soup is None:
@@ -733,12 +734,25 @@ def fetch_jst_detail(url: str) -> Dict[str, str]:
     text = soup.get_text("\n", strip=True)
     budget = _extract_budget(text)
     if not budget:
-        budget = _pdf_budget_from_soup(soup, url)  # JST: ページ URL を渡して相対パスを正解決
+        budget = _pdf_budget_from_soup(soup, url)
+
+    # 採択・選定結果ページへのリンクを探す
+    _RESULT_KEYWORDS = ["採択課題", "採択結果", "選定結果", "採択者", "採択一覧", "実施予定先", "採択プロジェクト"]
+    result_url = ""
+    from urllib.parse import urljoin
+    for a in soup.find_all("a", href=True):
+        label = a.get_text(strip=True)
+        if any(kw in label for kw in _RESULT_KEYWORDS):
+            href = a["href"]
+            result_url = href if href.startswith("http") else urljoin(url, href)
+            break
+
     return {
         "detail": _extract_overview(soup),
         "budget": budget,
         "schedule": _extract_schedule(text),
         "attachments": _jst_extract_attachments(soup, url),
+        "result_url": result_url,
     }
 
 

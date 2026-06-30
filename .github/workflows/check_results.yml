@@ -1,0 +1,48 @@
+name: 事業者決定チェック
+
+# 週2回（水・金 17:30 JST = UTC 08:30）＋手動実行
+# build_dataset.py（毎朝スクレイピング）とは別ジョブ。
+# 目的: 公募結果（事業者決定）の追跡。awardeeが空の案件を定期確認する。
+on:
+  schedule:
+    - cron: "30 8 * * 3"   # 水曜 17:30 JST
+    - cron: "30 8 * * 5"   # 金曜 17:30 JST
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: チェックアウト
+        uses: actions/checkout@v4
+
+      - name: Python セットアップ
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: 依存インストール
+        run: pip install -r requirements.txt
+
+      - name: 事業者決定チェック
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python scripts/check_results.py
+
+      - name: 変更があればコミット
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git stash
+          git pull --rebase origin main
+          git stash pop
+          git add dataset/tenders.csv
+          if git diff --staged --quiet; then
+            echo "更新なし"
+          else
+            git commit -m "事業者決定チェック $(date -u +%Y-%m-%d)"
+            git push
+          fi
