@@ -47,7 +47,8 @@
 | データ蓄積 | build_dataset.py（Actions専用） | `scripts/build_dataset.py` |
 | PDFストレージ | Cloudflare R2（S3互換） | `backend/storage.py` |
 | デプロイ | Render.com 無料プラン | `render.yaml` |
-| 自動更新 | GitHub Actions cron | `.github/workflows/scrape.yml` |
+| 自動更新（スクレイピング） | GitHub Actions cron | `.github/workflows/scrape.yml` |
+| 自動更新（事業者決定チェック） | GitHub Actions cron | `.github/workflows/check_results.yml` |
 
 ---
 
@@ -283,8 +284,14 @@ nyusatsu-search/
    - 未取得24件はPDFに予算記載なし or テキスト抽出不可（スキャンPDF等）
    - 表組み内の金額はpypdfで取れないケースがある
 
-3. **コンソーシアム決定事業者**の社名連結問題
-   - 複数社が連結表記されるケースで区切り推定が困難
+3. **事業者決定チェック**（check_results.py）の設計
+   - 水・金 17:30 JSTに `.github/workflows/check_results.yml` で実行
+   - `awardee` が空 かつ `awardee_checked != "1"` の案件を最大50件確認
+   - `result_url` あり（NEDO/PORTAL）→ 結果ページを直接取得
+   - JST案件で `result_url` なし → 公募ページを再取得して採択リンクを探す
+   - `published_at` から1年超で `awardee` 空 → `awardee_checked="1"` で監視終了
+   - 取得できた場合のみ `awardee_checked="1"` をセット（空の場合は次回も再確認）
+   - 複数社名は `_ai_split_awardee()` でClaudeが分割し `｜` 区切りで保存、UIで1社ずつ表示
 
 4. **Render無料プラン**の休止問題
    - 15分無アクセスで休止→初回表示10秒程度かかる

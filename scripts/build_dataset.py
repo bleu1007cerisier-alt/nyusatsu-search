@@ -572,9 +572,9 @@ def main():
         if info:
             if info.get("awardee"):
                 row["awardee"] = _ai_split_awardee(info["awardee"])
+                row["awardee_checked"] = "1"  # 取得できた時だけ監視終了
             if info.get("result_date") and not (row.get("result_date") or "").strip():
                 row["result_date"] = info["result_date"]
-            row["awardee_checked"] = "1"
             aw_count += 1
             time.sleep(DETAIL_SLEEP)
     print(f"決定事業者を確認（増分）: {aw_count}件")
