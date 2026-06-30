@@ -165,8 +165,10 @@
       ];
       if (t.result_date)
         cells.push(`<div>📆 <span class="text-gray-500">事業者決定日</span><br><span class="text-purple-700 font-medium">${esc(t.result_date)}</span></div>`);
-      if (t.awardee)
-        cells.push(`<div class="sm:col-span-2">🏆 <span class="text-gray-500">決定事業者</span><br><span class="text-purple-700 font-semibold">${esc(t.awardee)}</span></div>`);
+      if (t.awardee) {
+        const awardeeHtml = esc(t.awardee).split('｜').map(a => `<span class="block">${a.trim()}</span>`).join('');
+        cells.push(`<div class="sm:col-span-2">🏆 <span class="text-gray-500">決定事業者</span><br><span class="text-purple-700 font-semibold">${awardeeHtml}</span></div>`);
+      }
       document.getElementById('meta').innerHTML = cells.join('');
 
       const tags = t.tags || [];
