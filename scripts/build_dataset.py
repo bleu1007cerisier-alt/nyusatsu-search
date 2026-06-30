@@ -125,6 +125,42 @@ def _ai_summary(raw_text: str, title: str = "") -> str:
         return ""
 
 
+def _ai_split_awardee(awardee: str) -> str:
+    """複数社が連結された事業者名をAIで分割し、'｜'区切りで返す。
+    1社だけの場合はそのまま返す。失敗時は元の文字列を返す。
+    """
+    api_key = os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("CLAUDE_API_KEY")
+    if not api_key:
+        return awardee
+    # 区切り文字がすでにある・短い場合はスキップ
+    if "｜" in awardee or len(awardee) < 10:
+        return awardee
+    try:
+        import anthropic
+        client = anthropic.Anthropic(api_key=api_key)
+        prompt = (
+            "以下のテキストは、複数の会社・法人名が区切り文字なしで連結されたものです。\n"
+            "各法人名を正確に分割して、'｜'（全角パイプ）で区切って出力してください。\n"
+            "1社だけの場合はそのまま出力してください。\n"
+            "法人名以外のテキスト（説明文・記号・改行など）は含めないでください。\n\n"
+            f"入力: {awardee}\n"
+            "出力:"
+        )
+        msg = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=200,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        result = msg.content[0].text.strip()
+        _AI_USAGE["calls"] += 1
+        _AI_USAGE["input_tokens"] += msg.usage.input_tokens
+        _AI_USAGE["output_tokens"] += msg.usage.output_tokens
+        return result if result else awardee
+    except Exception as e:
+        print(f"AI事業者分割失敗: {e}")
+        return awardee
+
+
 # backend をインポートできるようにする
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "backend"))
@@ -535,13 +571,26 @@ def main():
             continue
         if info:
             if info.get("awardee"):
-                row["awardee"] = info["awardee"]
+                row["awardee"] = _ai_split_awardee(info["awardee"])
             if info.get("result_date") and not (row.get("result_date") or "").strip():
                 row["result_date"] = info["result_date"]
             row["awardee_checked"] = "1"
             aw_count += 1
             time.sleep(DETAIL_SLEEP)
     print(f"決定事業者を確認（増分）: {aw_count}件")
+
+    # 既存の事業者名が未分割（｜なし・長い）のものをAIで分割
+    split_count = 0
+    for r in merged.values():
+        aw = (r.get("awardee") or "").strip()
+        if not aw or "｜" in aw or len(aw) < 20:
+            continue
+        new_aw = _ai_split_awardee(aw)
+        if new_aw != aw:
+            r["awardee"] = new_aw
+            split_count += 1
+    if split_count:
+        print(f"事業者名をAI分割（バックフィル）: {split_count}件")
 
     # R2保存済みPDFから予算を補完（添付あり・予算未取得の案件）
     r2_budget_count = 0
