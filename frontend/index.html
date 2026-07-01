@@ -3,43 +3,71 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>入札・プロポーザル検索</title>
+  <title>公募ナビ｜官公庁・自治体の公募・入札情報を一元検索</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
     .badge-nyusatsu { background:#dbeafe; color:#1d4ed8; }
     .badge-proposal { background:#fce7f3; color:#9d174d; }
     .badge-rfi { background:#fef9c3; color:#854d0e; }
     .badge-zuii { background:#f1f5f9; color:#475569; }
-    .deadline-near { color:#dc2626; font-weight:600; }
+    .gradient-header { background: linear-gradient(135deg, #1e3a8a 0%, #1d4ed8 60%, #2563eb 100%); }
+    .card-hover { transition: box-shadow .15s, border-color .15s, transform .1s; }
+    .card-hover:hover { box-shadow: 0 4px 20px rgba(37,99,235,.12); border-color: #93c5fd; transform: translateY(-1px); }
+    .summary-text { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+    @media (max-width: 640px) {
+      #filter-panel { display: none; }
+      #filter-panel.open { display: flex; }
+    }
   </style>
 </head>
-<body class="bg-gray-50 min-h-screen">
+<body class="bg-slate-50 min-h-screen">
 
   <!-- ヘッダー -->
-  <header class="bg-blue-700 text-white shadow">
-    <div class="max-w-6xl mx-auto px-4 py-4 flex items-center justify-between">
+  <header class="gradient-header text-white shadow-lg">
+    <div class="max-w-6xl mx-auto px-4 py-5 flex items-center justify-between">
       <div>
-        <h1 class="text-2xl font-bold">🏛️ 入札・プロポーザル検索</h1>
-        <p class="text-blue-200 text-sm mt-0.5">日本全国の官公庁・自治体の公募情報を一元検索</p>
+        <a href="/" class="block">
+          <div class="flex items-center gap-2">
+            <span class="text-2xl">🧭</span>
+            <div>
+              <h1 class="text-2xl font-bold tracking-tight leading-none">公募ナビ</h1>
+              <p class="text-blue-200 text-xs mt-0.5 tracking-wide">KOUBO NAVI</p>
+            </div>
+          </div>
+          <p class="text-blue-200 text-xs mt-1.5">官公庁・自治体の公募・入札情報を AI でナビゲート</p>
+        </a>
       </div>
       <div class="flex items-center gap-4">
-        <div id="stats-badge" class="text-right text-sm text-blue-100"></div>
-        <a href="/dev" class="text-xs text-blue-200 hover:text-white border border-blue-400 hover:border-white rounded px-2 py-1 transition-colors">🛠️ 開発者</a>
+        <div id="stats-badge" class="text-right text-sm text-blue-100 hidden sm:block"></div>
+        <a href="/dev" class="text-xs text-blue-200 hover:text-white border border-blue-400 hover:border-white rounded-lg px-3 py-1.5 transition-colors">🛠️ 開発者</a>
       </div>
     </div>
   </header>
 
   <!-- 検索エリア -->
-  <div class="bg-white border-b shadow-sm">
-    <div class="max-w-6xl mx-auto px-4 py-4">
-      <div class="flex flex-wrap gap-3">
-        <!-- キーワード -->
-        <input id="q" type="text" placeholder="キーワード（例：システム開発、道路工事、委託）"
-          class="flex-1 min-w-60 border rounded-lg px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
-          onkeydown="if(event.key==='Enter') search()">
+  <div class="bg-white border-b shadow-sm sticky top-0 z-10">
+    <div class="max-w-6xl mx-auto px-4 py-3">
 
+      <!-- キーワード + 検索ボタン (常時表示) -->
+      <div class="flex gap-2">
+        <input id="q" type="text" placeholder="キーワードで検索（例：システム開発、脱炭素、委託）"
+          class="flex-1 border border-slate-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 bg-slate-50"
+          onkeydown="if(event.key==='Enter') search()">
+        <button onclick="search()"
+          class="bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-xl text-sm font-medium transition shrink-0">
+          🔍 検索
+        </button>
+        <!-- スマホ: 絞り込みトグル -->
+        <button onclick="toggleFilter()"
+          class="sm:hidden border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-600 px-3 py-2.5 rounded-xl text-sm transition shrink-0">
+          ⚙️
+        </button>
+      </div>
+
+      <!-- フィルターパネル (PC: 常時, スマホ: トグル) -->
+      <div id="filter-panel" class="flex flex-wrap gap-2 mt-2.5">
         <!-- 種別 -->
-        <select id="category" class="border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400">
+        <select id="category" class="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-slate-50 focus:outline-none focus:ring-2 focus:ring-blue-400">
           <option value="">すべての種別</option>
           <option value="入札">入札</option>
           <option value="プロポーザル">プロポーザル</option>
@@ -48,114 +76,82 @@
         </select>
 
         <!-- 都道府県 -->
-        <select id="prefecture" class="border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400">
+        <select id="prefecture" class="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-slate-50 focus:outline-none focus:ring-2 focus:ring-blue-400">
           <option value="">すべての地域</option>
           <option value="国">国（省庁）</option>
-          <option value="北海道">北海道</option>
-          <option value="青森県">青森県</option>
-          <option value="岩手県">岩手県</option>
-          <option value="宮城県">宮城県</option>
-          <option value="秋田県">秋田県</option>
-          <option value="山形県">山形県</option>
-          <option value="福島県">福島県</option>
-          <option value="茨城県">茨城県</option>
-          <option value="栃木県">栃木県</option>
-          <option value="群馬県">群馬県</option>
-          <option value="埼玉県">埼玉県</option>
-          <option value="千葉県">千葉県</option>
-          <option value="東京都">東京都</option>
-          <option value="神奈川県">神奈川県</option>
-          <option value="新潟県">新潟県</option>
-          <option value="富山県">富山県</option>
-          <option value="石川県">石川県</option>
-          <option value="福井県">福井県</option>
-          <option value="山梨県">山梨県</option>
-          <option value="長野県">長野県</option>
-          <option value="岐阜県">岐阜県</option>
-          <option value="静岡県">静岡県</option>
-          <option value="愛知県">愛知県</option>
-          <option value="三重県">三重県</option>
-          <option value="滋賀県">滋賀県</option>
-          <option value="京都府">京都府</option>
-          <option value="大阪府">大阪府</option>
-          <option value="兵庫県">兵庫県</option>
-          <option value="奈良県">奈良県</option>
-          <option value="和歌山県">和歌山県</option>
-          <option value="鳥取県">鳥取県</option>
-          <option value="島根県">島根県</option>
-          <option value="岡山県">岡山県</option>
-          <option value="広島県">広島県</option>
-          <option value="山口県">山口県</option>
-          <option value="徳島県">徳島県</option>
-          <option value="香川県">香川県</option>
-          <option value="愛媛県">愛媛県</option>
-          <option value="高知県">高知県</option>
-          <option value="福岡県">福岡県</option>
-          <option value="佐賀県">佐賀県</option>
-          <option value="長崎県">長崎県</option>
-          <option value="熊本県">熊本県</option>
-          <option value="大分県">大分県</option>
-          <option value="宮崎県">宮崎県</option>
-          <option value="鹿児島県">鹿児島県</option>
+          <option value="北海道">北海道</option><option value="青森県">青森県</option>
+          <option value="岩手県">岩手県</option><option value="宮城県">宮城県</option>
+          <option value="秋田県">秋田県</option><option value="山形県">山形県</option>
+          <option value="福島県">福島県</option><option value="茨城県">茨城県</option>
+          <option value="栃木県">栃木県</option><option value="群馬県">群馬県</option>
+          <option value="埼玉県">埼玉県</option><option value="千葉県">千葉県</option>
+          <option value="東京都">東京都</option><option value="神奈川県">神奈川県</option>
+          <option value="新潟県">新潟県</option><option value="富山県">富山県</option>
+          <option value="石川県">石川県</option><option value="福井県">福井県</option>
+          <option value="山梨県">山梨県</option><option value="長野県">長野県</option>
+          <option value="岐阜県">岐阜県</option><option value="静岡県">静岡県</option>
+          <option value="愛知県">愛知県</option><option value="三重県">三重県</option>
+          <option value="滋賀県">滋賀県</option><option value="京都府">京都府</option>
+          <option value="大阪府">大阪府</option><option value="兵庫県">兵庫県</option>
+          <option value="奈良県">奈良県</option><option value="和歌山県">和歌山県</option>
+          <option value="鳥取県">鳥取県</option><option value="島根県">島根県</option>
+          <option value="岡山県">岡山県</option><option value="広島県">広島県</option>
+          <option value="山口県">山口県</option><option value="徳島県">徳島県</option>
+          <option value="香川県">香川県</option><option value="愛媛県">愛媛県</option>
+          <option value="高知県">高知県</option><option value="福岡県">福岡県</option>
+          <option value="佐賀県">佐賀県</option><option value="長崎県">長崎県</option>
+          <option value="熊本県">熊本県</option><option value="大分県">大分県</option>
+          <option value="宮崎県">宮崎県</option><option value="鹿児島県">鹿児島県</option>
           <option value="沖縄県">沖縄県</option>
         </select>
 
-        <!-- 発注機関（府省庁等） -->
-        <select id="ministry" class="border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400">
+        <!-- 発注機関 -->
+        <select id="ministry" class="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-slate-50 focus:outline-none focus:ring-2 focus:ring-blue-400">
           <option value="">すべての機関</option>
         </select>
 
-        <!-- 検索ボタン -->
-        <button onclick="search()"
-          class="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg text-sm font-medium transition">
-          🔍 検索
-        </button>
-
         <!-- リセット -->
         <button onclick="reset()"
-          class="border border-gray-300 hover:bg-gray-100 text-gray-600 px-4 py-2 rounded-lg text-sm transition">
+          class="border border-slate-200 hover:bg-slate-100 text-slate-500 px-4 py-2 rounded-lg text-sm transition">
           リセット
         </button>
       </div>
     </div>
   </div>
 
-  <!-- 状態フィルタ -->
-  <div class="max-w-6xl mx-auto px-4 pt-4">
+  <!-- 状態フィルタ & タグバー -->
+  <div class="max-w-6xl mx-auto px-4 pt-4 space-y-2">
     <div id="status-bar" class="flex flex-wrap gap-2"></div>
-  </div>
-
-  <!-- タグバー -->
-  <div class="max-w-6xl mx-auto px-4 pt-3">
-    <div id="tag-bar" class="flex flex-wrap gap-2"></div>
-    <div id="active-tag" class="hidden mt-2 text-sm"></div>
+    <div id="tag-bar" class="flex flex-wrap gap-1.5"></div>
+    <div id="active-tag" class="hidden text-sm text-slate-500"></div>
   </div>
 
   <!-- 結果エリア -->
-  <main class="max-w-6xl mx-auto px-4 py-6">
-    <div id="result-summary" class="text-sm text-gray-500 mb-4"></div>
+  <main class="max-w-6xl mx-auto px-4 py-5">
+    <div id="result-summary" class="text-sm text-slate-400 mb-3"></div>
     <div id="results" class="space-y-3"></div>
-    <div id="loading" class="hidden text-center py-10 text-gray-400">読み込み中...</div>
-    <div id="no-results" class="hidden text-center py-10 text-gray-400">
-      <p class="text-4xl mb-2">📭</p>
+    <div id="loading" class="hidden text-center py-14 text-slate-400">
+      <div class="inline-block w-6 h-6 border-2 border-blue-400 border-t-transparent rounded-full animate-spin mb-3"></div>
+      <p>読み込み中...</p>
+    </div>
+    <div id="no-results" class="hidden text-center py-14 text-slate-400">
+      <p class="text-4xl mb-3">📭</p>
       <p>該当する案件が見つかりませんでした</p>
     </div>
 
     <!-- ページネーション -->
-    <div id="pagination" class="flex justify-center gap-2 mt-8"></div>
+    <div id="pagination" class="flex justify-center gap-1.5 mt-8"></div>
 
     <!-- 注意書き -->
-    <p class="mt-10 text-xs text-gray-400 leading-relaxed border-t pt-4">
+    <p class="mt-10 text-xs text-slate-400 leading-relaxed border-t border-slate-100 pt-4">
       ⚠️ 本サイトの情報は各機関の公開情報を自動収集・整形したものです。誤りや古い情報、リンク切れが含まれる場合があります。
       応募・正確な内容の確認は必ず各案件の掲載元（公式ページ）をご確認ください。
     </p>
 
-    <!-- 開発者リンク（環境変数 DEV_PAGE_PUBLIC=0 で非表示にできる） -->
     <div id="dev-link-wrap" class="hidden mt-4 text-right">
-      <a href="/dev" class="text-xs text-gray-300 hover:text-gray-500">🛠️ 開発者ステータス</a>
+      <a href="/dev" class="text-xs text-slate-300 hover:text-slate-500">🛠️ 開発者ステータス</a>
     </div>
   </main>
-
 
   <script>
     let currentPage = 0;
@@ -169,67 +165,77 @@
         .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
     }
 
-    // データソースの表示名（コード→日本語ラベル）
-    const SOURCE_LABEL = { 'PORTAL': '調達ポータル', 'NEDO': 'NEDO', 'JST': 'JST' };
+    function toggleFilter() {
+      const p = document.getElementById('filter-panel');
+      p.classList.toggle('open');
+    }
+
+    const SOURCE_LABEL = { 'PORTAL': '調達ポータル', 'NEDO': 'NEDO', 'JST': 'JST', 'JOGMEC': 'JOGMEC' };
     function srcLabel(s) { return SOURCE_LABEL[s] || s || ''; }
 
-    // 状態（募集中／受付終了／事業者決定）の見た目
+    const SOURCE_COLOR = {
+      'NEDO':   'bg-orange-50 text-orange-600 border-orange-100',
+      'JST':    'bg-teal-50 text-teal-600 border-teal-100',
+      'JOGMEC': 'bg-amber-50 text-amber-700 border-amber-100',
+      'PORTAL': 'bg-slate-50 text-slate-500 border-slate-200',
+    };
+
     const STATUS_STYLE = {
-      '募集中':   { cls: 'bg-green-100 text-green-700', icon: '🟢' },
-      '受付終了': { cls: 'bg-gray-200 text-gray-600',   icon: '⚪' },
-      '事業者決定': { cls: 'bg-purple-100 text-purple-700', icon: '🟣' },
+      '募集中':     { cls: 'bg-emerald-100 text-emerald-700', icon: '🟢' },
+      '受付終了':   { cls: 'bg-slate-200 text-slate-500',     icon: '⚪' },
+      '事業者決定': { cls: 'bg-violet-100 text-violet-700',   icon: '🏆' },
     };
     function statusBadge(status) {
-      const s = STATUS_STYLE[status] || { cls: 'bg-gray-100 text-gray-600', icon: '' };
+      const s = STATUS_STYLE[status] || { cls: 'bg-slate-100 text-slate-500', icon: '' };
       return `<span class="text-xs font-medium px-2 py-0.5 rounded-full ${s.cls} whitespace-nowrap">${s.icon} ${esc(status)}</span>`;
     }
 
-    // 締切日の状態を返す（受付終了 / 締切間近 / 通常）
     function deadlineStatus(deadline) {
-      if (!deadline) return { label: '締切: 未定', cls: 'text-gray-400', badge: '' };
+      if (!deadline) return { label: '締切: 未定', cls: 'text-slate-400', badge: '' };
       const today = new Date(); today.setHours(0, 0, 0, 0);
       const d = new Date(deadline + 'T00:00:00');
       const days = Math.round((d - today) / 86400000);
-      if (days < 0) return { label: `締切: ${deadline}`, cls: 'text-gray-400', badge: '' };
-      if (days <= 7) return { label: `締切: ${deadline}`, cls: 'text-red-600 font-semibold', badge: `<span class="text-xs px-1.5 py-0.5 rounded bg-red-100 text-red-700 ml-1">あと${days}日</span>` };
-      return { label: `締切: ${deadline}`, cls: 'text-gray-700', badge: '' };
-    }
-
-    function tagChip(name, onclick) {
-      return `<button onclick="${onclick}" class="text-xs px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-100 transition">#${esc(name)}</button>`;
+      if (days < 0) return { label: `締切: ${deadline}`, cls: 'text-slate-400', badge: '' };
+      if (days === 0) return { label: `締切: ${deadline}`, cls: 'text-red-600 font-semibold', badge: `<span class="text-xs px-1.5 py-0.5 rounded-full bg-red-100 text-red-700 ml-1 font-bold">今日！</span>` };
+      if (days <= 7) return { label: `締切: ${deadline}`, cls: 'text-red-600 font-semibold', badge: `<span class="text-xs px-1.5 py-0.5 rounded-full bg-red-100 text-red-700 ml-1">あと${days}日</span>` };
+      if (days <= 14) return { label: `締切: ${deadline}`, cls: 'text-amber-600', badge: `<span class="text-xs px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-600 ml-1">あと${days}日</span>` };
+      return { label: `締切: ${deadline}`, cls: 'text-slate-600', badge: '' };
     }
 
     async function loadStats() {
       const res = await fetch('/api/stats');
       const data = await res.json();
-      document.getElementById('stats-badge').innerHTML =
-        `<div>総件数: <strong>${data.total.toLocaleString()}</strong>件</div>
-         <div class="text-xs mt-0.5">入札 ${data.nyusatsu}件 ／ プロポーザル ${data.proposal}件</div>`;
 
-      // 状態フィルタ（件数つき）
+      document.getElementById('stats-badge').innerHTML =
+        `<div class="font-semibold">${data.total.toLocaleString()} 件</div>
+         <div class="text-xs text-blue-200 mt-0.5">入札 ${data.nyusatsu} ／ プロポーザル ${data.proposal}</div>`;
+      document.getElementById('stats-badge').classList.remove('hidden');
+
+      // 状態フィルタ
       const sc = data.status || {};
       const statusBar = document.getElementById('status-bar');
       const btn = (label, count) => {
         const active = currentStatus === label;
         const base = label === '' ? 'すべて' : `${(STATUS_STYLE[label]||{}).icon||''} ${label}`;
-        const cnt = (label === '' ? data.total : (count || 0));
+        const cnt = label === '' ? data.total : (count || 0);
         return `<button onclick="filterByStatus('${label}')"
-          class="text-sm px-3 py-1.5 rounded-lg border transition ${active ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-700 hover:bg-gray-50 border-gray-300'}">
-          ${base} <span class="${active ? 'text-blue-100' : 'text-gray-400'}">${cnt}</span></button>`;
+          class="text-sm px-3 py-1.5 rounded-lg border transition ${active ? 'bg-blue-600 text-white border-blue-600 shadow-sm' : 'bg-white text-slate-600 hover:bg-slate-50 border-slate-200'}">
+          ${base} <span class="${active ? 'text-blue-100' : 'text-slate-400'} text-xs">${cnt.toLocaleString()}</span></button>`;
       };
       statusBar.innerHTML =
-        `<span class="text-xs text-gray-400 self-center mr-1">状態:</span>` +
+        `<span class="text-xs text-slate-400 self-center mr-1">状態:</span>` +
         btn('', data.total) + btn('募集中', sc['募集中']) + btn('受付終了', sc['受付終了']) + btn('事業者決定', sc['事業者決定']);
 
-      // タグバー（件数の多い上位を表示）
+      // タグバー
       const bar = document.getElementById('tag-bar');
       const tags = (data.tags || []).slice(0, 20);
       bar.innerHTML = tags.length
-        ? `<span class="text-xs text-gray-400 self-center mr-1">タグで絞り込み:</span>` +
-          tags.map(t => `<button onclick="filterByTag('${esc(t.name)}')" class="text-xs px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-100 transition">#${esc(t.name)} <span class="text-indigo-400">${t.count}</span></button>`).join('')
+        ? `<span class="text-xs text-slate-400 self-center mr-1">タグ:</span>` +
+          tags.map(t => `<button onclick="filterByTag('${esc(t.name)}')"
+            class="text-xs px-2.5 py-1 rounded-full bg-indigo-50 text-indigo-600 hover:bg-indigo-100 border border-indigo-100 transition">#${esc(t.name)} <span class="text-indigo-300">${t.count}</span></button>`).join('')
         : '';
 
-      // 発注機関プルダウン（初回のみ生成。件数の多い順）
+      // 発注機関プルダウン
       const msel = document.getElementById('ministry');
       if (msel && !msel.dataset.filled && (data.organizations || []).length) {
         const cur = msel.value;
@@ -240,14 +246,13 @@
         msel.dataset.filled = '1';
       }
 
-      // 開発者リンクの表示（環境変数で制御）
       const devWrap = document.getElementById('dev-link-wrap');
       if (devWrap && data.dev_link_visible) devWrap.classList.remove('hidden');
     }
 
     function filterByStatus(status) {
       currentStatus = (currentStatus === status) ? '' : status;
-      loadStats();   // ボタンのハイライト更新
+      loadStats();
       search(0);
     }
 
@@ -256,10 +261,10 @@
       const at = document.getElementById('active-tag');
       if (currentTag) {
         at.classList.remove('hidden');
-        at.innerHTML = `絞り込み中: <span class="font-semibold text-indigo-700">#${esc(currentTag)}</span> <button onclick="filterByTag('${esc(currentTag)}')" class="ml-1 text-gray-400 hover:text-gray-700 underline">解除</button>`;
+        at.innerHTML = `絞り込み中: <span class="font-semibold text-indigo-600">#${esc(currentTag)}</span>
+          <button onclick="filterByTag('${esc(currentTag)}')" class="ml-2 text-slate-400 hover:text-slate-600 underline text-xs">解除</button>`;
       } else {
         at.classList.add('hidden');
-        at.innerHTML = '';
       }
       search(0);
     }
@@ -271,10 +276,7 @@
       const prefecture = document.getElementById('prefecture').value;
       const ministry = document.getElementById('ministry').value;
 
-      const params = new URLSearchParams({
-        skip: page * PAGE_SIZE,
-        limit: PAGE_SIZE,
-      });
+      const params = new URLSearchParams({ skip: page * PAGE_SIZE, limit: PAGE_SIZE });
       if (q) params.append('q', q);
       if (category) params.append('category', category);
       if (prefecture) params.append('prefecture', prefecture);
@@ -301,9 +303,7 @@
       document.getElementById('result-summary').textContent =
         `${data.total.toLocaleString()}件中 ${page * PAGE_SIZE + 1}〜${Math.min((page + 1) * PAGE_SIZE, data.total)}件を表示`;
 
-      const container = document.getElementById('results');
-      container.innerHTML = data.items.map(t => renderCard(t)).join('');
-
+      document.getElementById('results').innerHTML = data.items.map(t => renderCard(t)).join('');
       renderPagination(data.total, page);
     }
 
@@ -313,51 +313,54 @@
         : t.category === '随意契約' ? 'badge-zuii'
         : 'badge-proposal';
       const ds = deadlineStatus(t.deadline);
-      const pubHtml = t.published_at
-        ? `<span class="text-xs text-gray-500">掲載日: ${t.published_at}</span>` : '';
-      // 締切表示（事業者決定の場合は結果日も併記）
-      const resultHtml = (t.status === '事業者決定' && t.result_date)
-        ? `<span class="text-xs text-purple-600">決定: ${t.result_date}</span>` : '';
+      const srcColor = SOURCE_COLOR[t.source] || 'bg-slate-50 text-slate-500 border-slate-200';
+
       const awardeeHtml = t.awardee
-        ? `<span class="text-xs text-purple-700">🏆 決定事業者: ${esc(t.awardee)}</span>` : '';
-      const dlHtml = `<span class="text-xs ${ds.cls}">${ds.label}${ds.badge}</span>`;
+        ? `<div class="mt-2 text-xs text-violet-700 font-medium">🏆 決定事業者: ${esc(t.awardee)}</div>` : '';
       const amountHtml = t.amount
-        ? `<span class="text-xs text-gray-500">予算規模: ${esc(t.amount)}</span>` : '';
+        ? `<span class="text-xs text-slate-500 bg-slate-50 border border-slate-100 rounded px-1.5 py-0.5">💴 ${esc(t.amount)}</span>` : '';
       const tagsHtml = (t.tags && t.tags.length)
-        ? `<div class="mt-2 flex flex-wrap gap-1.5">${t.tags.map(tag =>
+        ? `<div class="flex flex-wrap gap-1">${t.tags.map(tag =>
             `<span onclick="event.stopPropagation(); filterByTag('${esc(tag)}')"
-                   class="cursor-pointer text-xs px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-100">#${esc(tag)}</span>`).join('')}</div>`
+                   class="cursor-pointer text-xs px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-600 hover:bg-indigo-100 border border-indigo-100">#${esc(tag)}</span>`).join('')}</div>`
+        : '';
+
+      // AI要約（目立つように）
+      const summaryHtml = t.summary
+        ? `<div class="mt-3 bg-blue-50 border border-blue-100 rounded-lg px-3 py-2">
+             <p class="text-xs text-blue-400 font-medium mb-0.5">✨ AI要約</p>
+             <p class="text-sm text-slate-700 leading-relaxed summary-text">${esc(t.summary)}</p>
+           </div>`
         : '';
 
       return `
         <div onclick="location.href='/tender/${t.id}'"
-             class="bg-white border rounded-xl p-4 hover:shadow-md hover:border-blue-300 transition cursor-pointer">
+             class="bg-white border border-slate-200 rounded-2xl p-4 card-hover cursor-pointer">
           <div class="flex items-start gap-3">
-            <div class="flex flex-col gap-1 mt-0.5 shrink-0">
+            <div class="flex flex-col gap-1.5 mt-0.5 shrink-0">
               ${statusBadge(t.status)}
-              <span class="inline-block text-center text-xs font-medium px-2 py-0.5 rounded-full ${badgeClass} whitespace-nowrap">${esc(t.category)}</span>
+              <span class="text-center text-xs font-medium px-2 py-0.5 rounded-full ${badgeClass}">${esc(t.category)}</span>
             </div>
             <div class="flex-1 min-w-0">
-              <p class="text-blue-700 font-medium text-sm leading-snug">${esc(t.title.replace(/^【[^】]*】\s*/, ''))}</p>
-              <div class="mt-1.5 flex flex-wrap gap-x-4 gap-y-1 items-center">
-                <span class="text-xs text-gray-600">🏢 ${esc(t.organization) || '—'}</span>
-                <span class="text-xs text-gray-400">${esc(t.prefecture) || ''}</span>
-                ${pubHtml}
-                ${dlHtml}
-                ${resultHtml}
+              <p class="text-blue-700 font-semibold text-sm leading-snug">${esc(t.title.replace(/^【[^】]*】\s*/, ''))}</p>
+              <div class="mt-2 flex flex-wrap gap-x-3 gap-y-1 items-center">
+                <span class="text-xs text-slate-600 font-medium">🏢 ${esc(t.organization) || '—'}</span>
+                ${t.published_at ? `<span class="text-xs text-slate-400">掲載: ${t.published_at}</span>` : ''}
+                <span class="text-xs ${ds.cls}">${ds.label}${ds.badge}</span>
+                ${(t.status === '事業者決定' && t.result_date) ? `<span class="text-xs text-violet-500">決定: ${t.result_date}</span>` : ''}
                 ${amountHtml}
-                ${awardeeHtml}
               </div>
-              ${t.summary ? `<p class="text-xs text-gray-500 mt-1.5 line-clamp-2">${esc(t.summary)}</p>` : ''}
-              ${tagsHtml}
-              <div class="mt-1.5">
-                <span class="text-xs text-gray-300">出典: ${esc(srcLabel(t.source))} ・ クリックで詳細</span>
+              ${awardeeHtml}
+              ${summaryHtml}
+              ${tagsHtml ? `<div class="mt-2">${tagsHtml}</div>` : ''}
+              <div class="mt-2 flex items-center justify-between">
+                <span class="text-xs border ${srcColor} rounded px-1.5 py-0.5">${esc(srcLabel(t.source))}</span>
+                <span class="text-xs text-slate-300">クリックで詳細 →</span>
               </div>
             </div>
           </div>
         </div>`;
     }
-
 
     function renderPagination(total, currentPage) {
       const totalPages = Math.ceil(total / PAGE_SIZE);
@@ -368,15 +371,15 @@
       const end = Math.min(totalPages - 1, currentPage + 2);
 
       if (currentPage > 0)
-        html += `<button onclick="search(${currentPage - 1})" class="px-3 py-1 border rounded text-sm hover:bg-gray-100">‹ 前</button>`;
-
+        html += `<button onclick="search(${currentPage - 1})" class="px-3 py-1.5 border border-slate-200 rounded-lg text-sm hover:bg-slate-50 transition">‹ 前</button>`;
       for (let i = start; i <= end; i++) {
-        const active = i === currentPage ? 'bg-blue-600 text-white' : 'hover:bg-gray-100';
-        html += `<button onclick="search(${i})" class="px-3 py-1 border rounded text-sm ${active}">${i + 1}</button>`;
+        const active = i === currentPage
+          ? 'bg-blue-600 text-white border-blue-600 shadow-sm'
+          : 'border-slate-200 hover:bg-slate-50';
+        html += `<button onclick="search(${i})" class="px-3 py-1.5 border rounded-lg text-sm transition ${active}">${i + 1}</button>`;
       }
-
       if (currentPage < totalPages - 1)
-        html += `<button onclick="search(${currentPage + 1})" class="px-3 py-1 border rounded text-sm hover:bg-gray-100">次 ›</button>`;
+        html += `<button onclick="search(${currentPage + 1})" class="px-3 py-1.5 border border-slate-200 rounded-lg text-sm hover:bg-slate-50 transition">次 ›</button>`;
 
       document.getElementById('pagination').innerHTML = html;
     }
@@ -393,7 +396,6 @@
       search();
     }
 
-    // 初期表示（詳細ページ等から ?tag= で来た場合はそのタグで絞り込む）
     (function init() {
       const params = new URLSearchParams(location.search);
       const tag = params.get('tag');
@@ -404,7 +406,8 @@
         currentTag = tag;
         const at = document.getElementById('active-tag');
         at.classList.remove('hidden');
-        at.innerHTML = `絞り込み中: <span class="font-semibold text-indigo-700">#${esc(currentTag)}</span> <button onclick="filterByTag('${esc(currentTag)}')" class="ml-1 text-gray-400 hover:text-gray-700 underline">解除</button>`;
+        at.innerHTML = `絞り込み中: <span class="font-semibold text-indigo-600">#${esc(currentTag)}</span>
+          <button onclick="filterByTag('${esc(currentTag)}')" class="ml-2 text-slate-400 hover:text-slate-600 underline text-xs">解除</button>`;
       }
       search();
     })();

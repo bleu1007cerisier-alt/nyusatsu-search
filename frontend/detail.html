@@ -3,19 +3,27 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>案件詳細 | 入札・プロポーザル検索</title>
+  <title>案件詳細 | 公募ナビ</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
     .badge-nyusatsu { background:#dbeafe; color:#1d4ed8; }
     .badge-proposal { background:#fce7f3; color:#9d174d; }
+    .gradient-header { background: linear-gradient(135deg, #1e3a8a 0%, #1d4ed8 60%, #2563eb 100%); }
   </style>
 </head>
-<body class="bg-gray-50 min-h-screen">
+<body class="bg-slate-50 min-h-screen">
 
   <!-- ヘッダー -->
-  <header class="bg-blue-700 text-white shadow">
-    <div class="max-w-4xl mx-auto px-4 py-4">
-      <a href="/" class="text-blue-100 hover:text-white text-sm">🏛️ 入札・プロポーザル検索</a>
+  <header class="gradient-header text-white shadow-lg">
+    <div class="max-w-4xl mx-auto px-4 py-4 flex items-center gap-3">
+      <a href="/" class="flex items-center gap-2 hover:opacity-80 transition">
+        <span class="text-xl">🧭</span>
+        <div>
+          <span class="font-bold text-lg leading-none">公募ナビ</span>
+          <span class="text-blue-300 text-xs ml-2">KOUBO NAVI</span>
+        </div>
+      </a>
+      <span class="text-blue-300 text-sm ml-2">/ 案件詳細</span>
     </div>
   </header>
 
