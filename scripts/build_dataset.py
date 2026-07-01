@@ -60,9 +60,9 @@ def _has_corrupt_latin(s: str) -> bool:
 
 # AI使用量の累積（1回の実行内）。開発ページのコスト推定に使う。
 _AI_USAGE = {"calls": 0, "input_tokens": 0, "output_tokens": 0}
-# Claude Haiku 4.5 の料金（USD / 100万トークン）
-_HAIKU_IN_PER_M = 1.00
-_HAIKU_OUT_PER_M = 5.00
+# Claude Haiku 4.5 の料金（USD / 100万トークン）https://www.anthropic.com/pricing
+_HAIKU_IN_PER_M = 0.80
+_HAIKU_OUT_PER_M = 4.00
 
 
 _SUMMARY_PROMPT = (
