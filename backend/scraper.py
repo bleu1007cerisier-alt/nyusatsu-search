@@ -318,13 +318,18 @@ def _extract_awardee(text: str) -> str:
     会社名が添付資料にしか無いページでは空文字を返す（HTMLに無いものは取得しない）。
     """
     flat = re.sub(r"\s+", "", text)
-    for m in re.finditer(r"(?:実施予定先|委託予定先|委託先|採択予定先|採択先|代表機関)[：:]?", flat):
+    for m in re.finditer(
+        r"(?:実施予定先|委託予定先|委託先|採択予定先|採択先|採択事業者|代表機関|落札者)[：:]?", flat
+    ):
         seg = flat[m.end():m.end() + 160]
         # ラベル直後が会社・機関名で始まる箇所のみ採用（説明文や添付参照を除外）
         if not re.match(_ORG_RE, seg):
             continue
         # 次の節（番号付き見出し等）までを決定事業者の記載とみなす
-        seg = re.split(r"\d[．.]|事業期間|募集要項|技術・事業分野|お問|（法人番号|採択審査|なお[、，]", seg)[0]
+        seg = re.split(
+            r"\d[．.]|事業期間|募集要項|技術・事業分野|お問|（法人番号|採択審査|なお[、，]|住所",
+            seg,
+        )[0]
         seg = seg.strip("、，・。.（）()　 ")
         if "新エネルギー・産業技術総合開発機構" in seg:
             continue
@@ -1349,6 +1354,75 @@ async def scrape_jogmec(max_id: int = 0) -> List[Dict]:
 
     logger.info(f"JOGMEC: {len(results)}件取得（bid_{start:05d}〜bid_{num-1:05d}）")
     return results
+
+
+def fetch_jogmec_result_url(page_url: str) -> str:
+    """JOGMEC公募ページを再取得し、結果PDFのURLを返す。なければ空文字。"""
+    import urllib.request
+    try:
+        req = urllib.request.Request(page_url, headers={"User-Agent": HEADERS["User-Agent"]})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            soup = BeautifulSoup(r.read(), "html.parser")
+    except Exception as e:
+        logger.debug(f"JOGMEC結果URL取得失敗 {page_url}: {e}")
+        return ""
+    for a in soup.find_all("a", href=True):
+        label = a.get_text(strip=True)
+        href = a["href"]
+        if "結果" in label and href.endswith(".pdf"):
+            base = "https://www.jogmec.go.jp"
+            return href if href.startswith("http") else base + href
+    return ""
+
+
+def fetch_jogmec_result(pdf_url: str) -> Dict[str, str]:
+    """JOGMEC結果PDFから事業者名と決定日を抽出する。"""
+    import io as _io
+    import unicodedata as _ud
+    import urllib.request
+    try:
+        from pypdf import PdfReader as _PdfReader
+    except ImportError:
+        return {}
+    try:
+        req = urllib.request.Request(pdf_url, headers={"User-Agent": HEADERS["User-Agent"]})
+        with urllib.request.urlopen(req, timeout=20) as r:
+            data = r.read()
+        text = _ud.normalize("NFKC", "\n".join(
+            p.extract_text() or "" for p in _PdfReader(_io.BytesIO(data)).pages
+        ))
+        flat = re.sub(r"\s+", "", text).translate(str.maketrans("０１２３４５６７８９", "0123456789"))
+    except Exception as e:
+        logger.debug(f"JOGMEC結果PDF取得失敗 {pdf_url}: {e}")
+        return {}
+
+    awardee = _extract_awardee(text)
+    # 住所が会社名に連結して取れる場合（住所：キーワードなし）を除去
+    if awardee:
+        _PREF = (
+            r"北海道|青森県|岩手県|宮城県|秋田県|山形県|福島県|茨城県|栃木県|群馬県|"
+            r"埼玉県|千葉県|東京都|神奈川県|新潟県|富山県|石川県|福井県|山梨県|長野県|"
+            r"岐阜県|静岡県|愛知県|三重県|滋賀県|京都府|大阪府|兵庫県|奈良県|和歌山県|"
+            r"鳥取県|島根県|岡山県|広島県|山口県|徳島県|香川県|愛媛県|高知県|"
+            r"福岡県|佐賀県|長崎県|熊本県|大分県|宮崎県|鹿児島県|沖縄県"
+        )
+        awardee = re.split(_PREF, awardee)[0].strip("　 、，")
+
+    # 決定日：通知日・選定日・落札日・決定日キーワード付近の令和日付
+    result_date = ""
+    for kw in ["通知日", "選定日", "落札日", "決定日", "契約日"]:
+        m = re.search(rf"{kw}[：:\s]*(令和\d+年\d{{1,2}}月\d{{1,2}}日)", flat)
+        if m:
+            result_date = _reiwa_date(m.group(1))
+            if result_date:
+                break
+    # キーワードなければ最初の令和日付をフォールバック
+    if not result_date:
+        m = re.search(r"令和\d+年\d{1,2}月\d{1,2}日", flat)
+        if m:
+            result_date = _reiwa_date(m.group())
+
+    return {"awardee": awardee, "result_date": result_date}
 
 
 # ---------------------------------------------------------------------------
