@@ -880,10 +880,11 @@ def _portal_parse_rows(soup: BeautifulSoup):
     return rows
 
 
-async def scrape_portal(date_from: str = "") -> List[Dict]:
+async def scrape_portal(date_from: str = "", date_to: str = "") -> List[Dict]:
     """調達ポータルから差分を取得する。
 
     date_from: 取得開始日（YYYY/MM/DD 形式）。省略時は当日のみ。
+    date_to:   取得終了日（YYYY/MM/DD 形式）。省略時は指定なし（上限なし）。
     build_dataset.py 側で「前回PORTAL取得日 − 1日」を計算して渡すことで
     必要最小限の差分のみを取得する。
 
@@ -904,6 +905,8 @@ async def scrape_portal(date_from: str = "") -> List[Dict]:
 
         form_data["searchConditionBean.caseDivision"] = "0"
         form_data["searchConditionBean.publicStartDateFrom"] = date_from
+        if date_to:
+            form_data["searchConditionBean.publicStartDateTo"] = date_to
         form_data["OAA0102"] = "検索"
         ph = {**HEADERS, "Referer": PORTAL_FORM,
               "Content-Type": "application/x-www-form-urlencoded"}
