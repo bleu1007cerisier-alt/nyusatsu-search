@@ -39,7 +39,7 @@ jobs:
           git stash
           git pull --rebase origin main
           git stash pop
-          git add dataset/tenders.csv
+          git add dataset/tenders.csv dataset/check_results_log.json
           if git diff --staged --quiet; then
             echo "更新なし"
           else
