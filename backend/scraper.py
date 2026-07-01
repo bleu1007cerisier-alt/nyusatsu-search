@@ -938,7 +938,7 @@ async def scrape_portal(date_from: str = "") -> List[Dict]:
                 tags = generate_tags(row["title"], row["org"])
                 results.append({
                     "title":        row["title"],
-                    "category":     "入札・公募",  # 詳細取得後に上書き
+                    "category":     "入札",  # 詳細取得後に上書き
                     "organization": row["org"],
                     "deadline":     "",           # 詳細取得後に補完
                     "published_at": row["published_at"],
