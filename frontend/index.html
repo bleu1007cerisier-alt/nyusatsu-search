@@ -4,20 +4,60 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>全国AI公募ナビ｜官公庁・自治体の公募・入札情報を一元検索</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet">
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
-    .badge-nyusatsu { background:#dbeafe; color:#1d4ed8; }
-    .badge-proposal { background:#fce7f3; color:#9d174d; }
-    .badge-rfi { background:#fef9c3; color:#854d0e; }
-    .badge-zuii { background:#f1f5f9; color:#475569; }
-    .gradient-header { background: linear-gradient(135deg, #1e3a8a 0%, #1d4ed8 60%, #2563eb 100%); }
-    .card-hover { transition: box-shadow .15s, border-color .15s, transform .1s; }
-    .card-hover:hover { box-shadow: 0 4px 20px rgba(37,99,235,.12); border-color: #93c5fd; transform: translateY(-1px); }
+    body { font-family: 'Noto Sans JP', sans-serif; }
+
+    /* カラーパレット: ネイビー基調・アクセントはインディゴ・アンバー */
+    :root {
+      --c-navy:   #0f172a;
+      --c-brand:  #3730a3; /* インディゴ700 */
+      --c-accent: #f59e0b; /* アンバー */
+      --c-text:   #1e293b;
+      --c-muted:  #64748b;
+      --c-bg:     #f8fafc;
+      --c-card:   #ffffff;
+    }
+
+    /* ヘッダー */
+    .gradient-header {
+      background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #312e81 100%);
+    }
+
+    /* カード */
+    .card-hover { transition: box-shadow .18s ease, border-color .18s ease, transform .12s ease; }
+    .card-hover:hover {
+      box-shadow: 0 6px 24px rgba(55,48,163,.10);
+      border-color: #a5b4fc;
+      transform: translateY(-2px);
+    }
+
+    /* 種別バッジ: 2色に絞る */
+    .badge-nyusatsu { background:#ede9fe; color:#4338ca; }  /* 入札: インディゴ */
+    .badge-proposal { background:#ede9fe; color:#4338ca; }  /* プロポーザル: 同系 */
+    .badge-rfi      { background:#fef3c7; color:#b45309; }  /* RFI: アンバー */
+    .badge-zuii     { background:#f1f5f9; color:#475569; }  /* 随意: スレート */
+
+    /* AI要約ブロック */
+    .summary-block {
+      background: linear-gradient(135deg, #eef2ff 0%, #e0e7ff 100%);
+      border-left: 3px solid #818cf8;
+    }
     .summary-text { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+
+    /* フィルタパネル */
     @media (max-width: 640px) {
       #filter-panel { display: none; }
       #filter-panel.open { display: flex; }
     }
+
+    /* 状態ボタン active */
+    .status-btn-active { background: #3730a3; color: #fff; border-color: #3730a3; }
+    .status-btn { background: #fff; color: #334155; border-color: #e2e8f0; }
+    .status-btn:hover { background: #f8fafc; }
   </style>
 </head>
 <body class="bg-slate-50 min-h-screen">
@@ -174,16 +214,16 @@
     function srcLabel(s) { return SOURCE_LABEL[s] || s || ''; }
 
     const SOURCE_COLOR = {
-      'NEDO':   'bg-orange-50 text-orange-600 border-orange-100',
-      'JST':    'bg-teal-50 text-teal-600 border-teal-100',
-      'JOGMEC': 'bg-amber-50 text-amber-700 border-amber-100',
+      'NEDO':   'bg-amber-50 text-amber-700 border-amber-200',
+      'JST':    'bg-indigo-50 text-indigo-600 border-indigo-100',
+      'JOGMEC': 'bg-amber-50 text-amber-700 border-amber-200',
       'PORTAL': 'bg-slate-50 text-slate-500 border-slate-200',
     };
 
     const STATUS_STYLE = {
-      '募集中':     { cls: 'bg-emerald-100 text-emerald-700', icon: '🟢' },
-      '受付終了':   { cls: 'bg-slate-200 text-slate-500',     icon: '⚪' },
-      '事業者決定': { cls: 'bg-violet-100 text-violet-700',   icon: '🏆' },
+      '募集中':     { cls: 'bg-emerald-50 text-emerald-700 border border-emerald-200', icon: '●' },
+      '受付終了':   { cls: 'bg-slate-100 text-slate-400 border border-slate-200',     icon: '○' },
+      '事業者決定': { cls: 'bg-indigo-50 text-indigo-600 border border-indigo-200',   icon: '✓' },
     };
     function statusBadge(status) {
       const s = STATUS_STYLE[status] || { cls: 'bg-slate-100 text-slate-500', icon: '' };
@@ -219,8 +259,8 @@
         const base = label === '' ? 'すべて' : `${(STATUS_STYLE[label]||{}).icon||''} ${label}`;
         const cnt = label === '' ? data.total : (count || 0);
         return `<button onclick="filterByStatus('${label}')"
-          class="text-sm px-3 py-1.5 rounded-lg border transition ${active ? 'bg-blue-600 text-white border-blue-600 shadow-sm' : 'bg-white text-slate-600 hover:bg-slate-50 border-slate-200'}">
-          ${base} <span class="${active ? 'text-blue-100' : 'text-slate-400'} text-xs">${cnt.toLocaleString()}</span></button>`;
+          class="text-sm px-3 py-1.5 rounded-lg border transition font-medium ${active ? 'status-btn-active shadow-sm' : 'status-btn'}">
+          ${base} <span class="${active ? 'opacity-70' : 'text-slate-400'} text-xs font-normal">${cnt.toLocaleString()}</span></button>`;
       };
       statusBar.innerHTML =
         `<span class="text-xs text-slate-400 self-center mr-1">状態:</span>` +
@@ -325,10 +365,10 @@
                    class="cursor-pointer text-xs px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-600 hover:bg-indigo-100 border border-indigo-100">#${esc(tag)}</span>`).join('')}</div>`
         : '';
 
-      // AI要約（目立つように）
+      // AI要約
       const summaryHtml = t.summary
-        ? `<div class="mt-3 bg-blue-50 border border-blue-100 rounded-lg px-3 py-2">
-             <p class="text-xs text-blue-400 font-medium mb-0.5">✨ AI要約</p>
+        ? `<div class="mt-3 summary-block rounded-lg px-3 py-2.5">
+             <p class="text-xs text-indigo-400 font-medium mb-1 tracking-wide">✦ AI要約</p>
              <p class="text-sm text-slate-700 leading-relaxed summary-text">${esc(t.summary)}</p>
            </div>`
         : '';
