@@ -88,11 +88,20 @@ def startup_event():
 
 
 def compute_status(t: Tender, today: str) -> str:
-    """状態を判定：結果あり→事業者決定、締切超過→受付終了、それ以外→募集中。"""
+    """状態を判定：結果あり→事業者決定、締切超過→受付終了、それ以外→募集中。
+    締切が空欄の場合は掲載日から180日超で受付終了とみなす。"""
     if (t.result_date or "").strip():
         return STATUS_DECIDED
     if (t.deadline or "").strip() and t.deadline < today:
         return STATUS_CLOSED
+    if not (t.deadline or "").strip() and (t.published_at or "").strip():
+        from datetime import date as _date, timedelta
+        try:
+            pub = _date.fromisoformat(t.published_at[:10])
+            if (_date.fromisoformat(today) - pub).days > 180:
+                return STATUS_CLOSED
+        except ValueError:
+            pass
     return STATUS_OPEN
 
 
