@@ -244,8 +244,8 @@ def _overview_from_r2(row: dict) -> str:
         aws_secret_access_key=os.environ.get("R2_SECRET_ACCESS_KEY", ""),
     )
     bucket = os.environ.get("R2_BUCKET", "")
-    # 公募要領→仕様書→調達資料の順に試行（意味ある文章が得られるまで）
-    priority = ["公募要領", "仕様書", "調達資料", "審査基準", "評価基準"]
+    # 公告文→公募要領→仕様書→調達資料の順に試行（意味ある文章が得られるまで）
+    priority = ["公告文", "公募要領", "仕様書", "調達資料", "審査基準", "評価基準"]
     atts_sorted = sorted(atts, key=lambda a: next(
         (i for i, k in enumerate(priority) if k == a.get("kind")), 99))
     for att in atts_sorted:
@@ -256,12 +256,12 @@ def _overview_from_r2(row: dict) -> str:
             obj = s3.get_object(Bucket=bucket, Key=key)
             data = obj["Body"].read()
             reader = PdfReader(io.BytesIO(data))
-            # 先頭5ページのテキストから意味ある行だけ結合
-            text = "\n".join((p.extract_text() or "") for p in reader.pages[:5])
+            # 先頭8ページのテキストから意味ある行だけ結合（AI要約の材料として十分な量を確保）
+            text = "\n".join((p.extract_text() or "") for p in reader.pages[:8])
             lines = [ln.strip() for ln in text.split("\n")
                      if ln.strip() and len(ln.strip()) > 8]
             if lines:
-                return " ".join(lines[:15])[:500]
+                return "\n".join(lines[:50])[:3000]
         except Exception as e:
             print(f"R2 PDF概要読込失敗 {key}: {e}")
     return ""
@@ -605,16 +605,23 @@ def main():
             r2_budget_count += 1
     print(f"R2 PDFから予算補完: {r2_budget_count}件")
 
-    # R2保存済みPDFから概要を補完（添付あり・detail未記入の案件）
+    # R2保存済みPDFから概要を補完
+    # - detail未記入の案件（全ソース）
+    # - JOGMECでdetailが薄い案件（HTMLはナビ文字列程度しか取れないため400文字未満はPDFで上書き）
     r2_detail_count = 0
     for r in merged.values():
-        if (r.get("detail") or "").strip():
-            continue  # 既に概要あり
         if not (r.get("attachments") or "").strip():
             continue  # R2にPDFなし
+        det = (r.get("detail") or "").strip()
+        is_thin_jogmec = r.get("source") == "JOGMEC" and len(det) < 400
+        if det and not is_thin_jogmec:
+            continue  # 十分なdetailあり
         overview = _overview_from_r2(r)
         if overview:
             r["detail"] = overview
+            # 薄いdetailをPDFで上書きした場合はsummaryもリセットして再要約させる
+            if is_thin_jogmec and det:
+                r["summary"] = ""
             r2_detail_count += 1
     print(f"R2 PDFから概要補完: {r2_detail_count}件")
 
