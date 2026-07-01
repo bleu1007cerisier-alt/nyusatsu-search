@@ -51,8 +51,8 @@
       </div>
 
       <div class="mb-6">
-        <h2 class="text-sm font-semibold text-gray-700 mb-2">📋 概要</h2>
-        <p id="detail" class="text-sm text-gray-600 whitespace-pre-wrap leading-relaxed"></p>
+        <h2 id="detail-label" class="text-sm font-semibold text-gray-700 mb-2">📋 概要</h2>
+        <div id="detail" class="text-sm text-gray-600 leading-relaxed"></div>
       </div>
 
       <div id="schedule-wrap" class="mb-6 hidden">
@@ -188,8 +188,32 @@
       document.getElementById('tags').innerHTML = tags.map(tag =>
         `<a href="/?tag=${encodeURIComponent(tag)}" class="text-xs px-2.5 py-1 rounded-full bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-100">#${esc(tag)}</a>`).join('');
 
-      const detailText = t.summary || t.detail || '（詳しい内容は公式ページをご確認ください）';
-      document.getElementById('detail').innerHTML = esc(detailText).replace(/\n\n/g, '<br><br>').replace(/\n/g, '<br>');
+      const summaryText = (t.summary || '').trim();
+      const detailEl = document.getElementById('detail');
+      const detailLabel = document.getElementById('detail-label');
+      if (summaryText && (summaryText.startsWith('・') || summaryText.includes('\n・'))) {
+        detailLabel.textContent = '📋 AI要約（箇条書き）';
+        const lines = summaryText.split('\n').filter(l => l.trim());
+        const ul = document.createElement('ul');
+        ul.className = 'space-y-1';
+        lines.forEach(l => {
+          const li = document.createElement('li');
+          li.className = 'text-sm text-gray-700 flex gap-2';
+          const label = l.replace(/^・/, '');
+          const colonIdx = label.indexOf(':');
+          if (colonIdx > 0) {
+            li.innerHTML = `<span class="text-indigo-500 shrink-0">・</span><span><span class="font-medium text-gray-800">${esc(label.slice(0, colonIdx + 1))}</span>${esc(label.slice(colonIdx + 1))}</span>`;
+          } else {
+            li.innerHTML = `<span class="text-indigo-500 shrink-0">・</span><span>${esc(label)}</span>`;
+          }
+          ul.appendChild(li);
+        });
+        detailEl.innerHTML = '';
+        detailEl.appendChild(ul);
+      } else {
+        const raw = summaryText || (t.detail || '').trim() || '（詳しい内容は公式ページをご確認ください）';
+        detailEl.innerHTML = esc(raw).replace(/\n\n/g, '<br><br>').replace(/\n/g, '<br>');
+      }
 
       // 予定（説明会・各種期限）を時系列で表示
       const sched = t.schedule || [];

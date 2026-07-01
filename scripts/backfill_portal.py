@@ -19,6 +19,15 @@ from calendar import monthrange
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "backend"))
 
+# ローカル実行時の .env 読み込み
+_env_path = os.path.join(ROOT, ".env")
+if os.path.exists(_env_path):
+    for _line in open(_env_path, encoding="utf-8"):
+        _line = _line.strip()
+        if _line and not _line.startswith("#") and "=" in _line:
+            _k, _v = _line.split("=", 1)
+            os.environ.setdefault(_k.strip(), _v.strip())
+
 from scraper import scrape_portal, fetch_portal_detail, generate_tags  # noqa: E402
 
 DATASET_DIR   = os.path.join(ROOT, "dataset")
@@ -30,33 +39,75 @@ DETAIL_SLEEP   = 1.2
 
 _AI_USAGE = {"calls": 0, "input_tokens": 0, "output_tokens": 0}
 
+_EXTRACT_PROMPT = """\
+以下は入札公告・公募情報のテキストです。下記のJSON形式のみで出力してください（前後の説明文は不要）。
 
-def _ai_summary(raw_text: str, title: str = "") -> str:
-    """Claude Haiku で概要テキストを要約する。"""
-    import os as _os
+{
+  "deadline": "YYYY-MM-DD または null",
+  "amount": "金額文字列 または null",
+  "schedule": [
+    {"date": "YYYY-MM-DD", "label": "ラベル", "raw": "原文の日付表現"}
+  ],
+  "bullets": [
+    "事業内容: ...",
+    "履行場所: ...",
+    "履行期間: ...",
+    "落札方式: ...",
+    "参加資格: ...",
+    "予算規模: ...",
+    "入札締切: ...",
+    "開札予定: ...",
+    "担当: ..."
+  ]
+}
+
+【抽出ルール】
+- deadline: 入札書提出期限・応募締切・提出期限の日付を YYYY-MM-DD に変換。令和7=2025, 令和8=2026, 令和9=2027, 令和10=2028。不明はnull
+- amount: 予算上限額・概算額・契約上限額の文字列（例: "約1,200万円"）。不明はnull
+- schedule: 説明会・仕様書配布・質問受付・提出期限・開札日時など日付のある予定を全て抽出。和暦→西暦変換
+- bullets: 8〜12項目を「ラベル: 値」形式で。不明は「記載なし」。電話番号・メールアドレス不要
+- 日本語の単語に英字を混入させない（GEPS/AI/IT等の一般的な略語のみ可）\
+"""
+
+
+def _ai_extract(raw_text: str, title: str = "") -> dict:
+    """Claude Haiku で構造化情報を抽出する。"""
+    import os as _os, json as _json, re as _re
     api_key = _os.environ.get("ANTHROPIC_API_KEY") or _os.environ.get("CLAUDE_API_KEY")
     if not api_key or len(raw_text.strip()) < 80:
-        return ""
-    prompt = (
-        "以下の入札・公募情報を日本語で3〜5文に要約してください。"
-        "事業の目的、対象、予算規模、締切などの重要情報を含めてください。\n\n"
-        f"タイトル: {title}\n\nテキスト:\n{raw_text[:8000]}\n\n要約文:"
-    )
+        return {}
+    prompt = _EXTRACT_PROMPT + f"\n\nタイトル: {title}\n\nテキスト:\n{raw_text[:8000]}"
     try:
         import anthropic
         client = anthropic.Anthropic(api_key=api_key)
-        msg = client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=800,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        _AI_USAGE["calls"] += 1
-        _AI_USAGE["input_tokens"] += int(getattr(msg.usage, "input_tokens", 0) or 0)
-        _AI_USAGE["output_tokens"] += int(getattr(msg.usage, "output_tokens", 0) or 0)
-        return msg.content[0].text.strip()[:600]
+        for attempt in range(3):
+            msg = client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=1200,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            _AI_USAGE["calls"] += 1
+            _AI_USAGE["input_tokens"] += int(getattr(msg.usage, "input_tokens", 0) or 0)
+            _AI_USAGE["output_tokens"] += int(getattr(msg.usage, "output_tokens", 0) or 0)
+            text = msg.content[0].text.strip()
+            if "```" in text:
+                m = _re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
+                if m:
+                    text = m.group(1).strip()
+            try:
+                data = _json.loads(text)
+                return data
+            except Exception:
+                if attempt < 2:
+                    continue
+        return {}
     except Exception as e:
-        print(f"  AI要約失敗: {e}")
-        return ""
+        print(f"  AI抽出失敗: {e}")
+        return {}
+
+
+def _bullets_to_summary(bullets: list) -> str:
+    return "\n".join(f"・{b}" for b in bullets if b)
 
 
 def _load_progress() -> dict:
@@ -108,12 +159,19 @@ def _fetch_detail(r: dict) -> bool:
                 r["attachments"] = json.dumps(info["attachments"], ensure_ascii=False)
             r["budget_checked"] = "1"
             r["tags"] = ",".join(generate_tags(r.get("title", ""), r.get("source_category", "")))
-            # AI要約（detailがあり未要約の場合）
+            # AI抽出（detailがあり未処理の場合）
             detail = (r.get("detail") or "").strip()
             if detail and len(detail) > 100 and not (r.get("summary") or "").strip():
-                summary = _ai_summary(detail, r.get("title", ""))
-                if summary:
-                    r["summary"] = summary
+                extracted = _ai_extract(detail, r.get("title", ""))
+                if extracted.get("bullets"):
+                    r["summary"] = _bullets_to_summary(extracted["bullets"])
+                if extracted.get("deadline"):
+                    r["deadline"] = extracted["deadline"]
+                if extracted.get("amount") and not (r.get("amount") or "").strip():
+                    r["amount"] = extracted["amount"]
+                if extracted.get("schedule"):
+                    import json as _json
+                    r["schedule"] = _json.dumps(extracted["schedule"], ensure_ascii=False)
             return True
     except Exception as e:
         print(f"  詳細取得失敗 {r.get('url', '')}: {e}")
@@ -155,6 +213,40 @@ def main():
     sys.stdout.reconfigure(encoding="utf-8")
     prog = _load_progress()
     fieldnames, rows = _load_csv()
+
+    # --- フェーズ0: 全PORTAL案件のsummaryを新形式（箇条書き）で再生成 ---
+    # 旧形式（段落テキスト）と未生成の両方を対象にする
+    def _needs_regen(r):
+        if r.get("source") != "PORTAL":
+            return False
+        det = (r.get("detail") or "").strip()
+        if len(det) < 100:
+            return False
+        summ = (r.get("summary") or "").strip()
+        # 未生成 or 旧形式（・で始まらない段落テキスト）
+        return not summ or not summ.startswith("・")
+
+    needs_regen = [r for r in rows if _needs_regen(r)]
+    if needs_regen:
+        print(f"フェーズ0: AI再抽出対象 {len(needs_regen)}件（新形式への移行 + 未生成）")
+        for i, r in enumerate(needs_regen, 1):
+            extracted = _ai_extract((r.get("detail") or "").strip(), r.get("title", ""))
+            if extracted.get("bullets"):
+                r["summary"] = _bullets_to_summary(extracted["bullets"])
+            if extracted.get("deadline"):
+                r["deadline"] = extracted["deadline"]
+            if extracted.get("amount") and not (r.get("amount") or "").strip():
+                r["amount"] = extracted["amount"]
+            if extracted.get("schedule") and not (r.get("schedule") or "").strip():
+                import json as _json
+                r["schedule"] = _json.dumps(extracted["schedule"], ensure_ascii=False)
+            if i % 100 == 0:
+                _save_csv(fieldnames, rows)
+                print(f"  {i}/{len(needs_regen)}件処理済み")
+        _save_csv(fieldnames, rows)
+        print("フェーズ0完了")
+    else:
+        print("フェーズ0: 対象レコードなし（全件新形式済み）")
 
     # --- フェーズ1: 既存CSVの未取得PORTAL案件に詳細を補完 ---
     unfetched = [r for r in rows

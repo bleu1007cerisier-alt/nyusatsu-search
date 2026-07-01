@@ -46,7 +46,10 @@
       background: linear-gradient(135deg, #eef2ff 0%, #e0e7ff 100%);
       border-left: 3px solid #818cf8;
     }
-    .summary-text { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+    .summary-text { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+    .summary-bullets { list-style: none; padding: 0; margin: 0; }
+    .summary-bullets li { font-size: 0.78rem; color: #374151; line-height: 1.6; padding: 1px 0; }
+    .summary-bullets li::before { content: ""; }
 
     /* フィルタパネル */
     @media (max-width: 640px) {
@@ -365,13 +368,25 @@
                    class="cursor-pointer text-xs px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-600 hover:bg-indigo-100 border border-indigo-100">#${esc(tag)}</span>`).join('')}</div>`
         : '';
 
-      // AI要約
-      const summaryHtml = t.summary
-        ? `<div class="mt-3 summary-block rounded-lg px-3 py-2.5">
-             <p class="text-xs text-indigo-400 font-medium mb-1 tracking-wide">✦ AI要約</p>
-             <p class="text-sm text-slate-700 leading-relaxed summary-text">${esc(t.summary)}</p>
-           </div>`
-        : '';
+      // AI要約（箇条書き形式と旧段落形式の両対応）
+      function renderSummary(summary) {
+        if (!summary) return '';
+        const isBullets = summary.startsWith('・') || summary.includes('\n・');
+        if (isBullets) {
+          const lines = summary.split('\n').filter(l => l.trim());
+          const items = lines.slice(0, 5).map(l => `<li>${esc(l.replace(/^・/, ''))}</li>`).join('');
+          const more = lines.length > 5 ? `<li class="text-indigo-400">…他${lines.length - 5}項目</li>` : '';
+          return `<div class="mt-3 summary-block rounded-lg px-3 py-2.5">
+            <p class="text-xs text-indigo-400 font-medium mb-1.5 tracking-wide">✦ AI要約</p>
+            <ul class="summary-bullets">${items}${more}</ul>
+          </div>`;
+        }
+        return `<div class="mt-3 summary-block rounded-lg px-3 py-2.5">
+          <p class="text-xs text-indigo-400 font-medium mb-1 tracking-wide">✦ AI要約</p>
+          <p class="text-sm text-slate-700 leading-relaxed summary-text">${esc(summary)}</p>
+        </div>`;
+      }
+      const summaryHtml = renderSummary(t.summary);
 
       return `
         <div onclick="location.href='/tender/${t.id}'"
