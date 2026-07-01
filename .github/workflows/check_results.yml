@@ -4,9 +4,7 @@ name: 事業者決定チェック
 # build_dataset.py（毎朝スクレイピング）とは別ジョブ。
 # 目的: 公募結果（事業者決定）の追跡。awardeeが空の案件を定期確認する。
 on:
-  schedule:
-    - cron: "30 8 * * 3"   # 水曜 17:30 JST
-    - cron: "30 8 * * 5"   # 金曜 17:30 JST
+  # スケジュール実行は cron-job.org が担当するため無効化。手動実行のみ残す。
   workflow_dispatch: {}
 
 permissions:

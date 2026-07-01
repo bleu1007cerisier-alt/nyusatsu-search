@@ -3,9 +3,7 @@ name: データ更新（スクレイピング）
 # 毎日定期実行＋手動実行。ここでのみスクレイピングし、結果CSVをコミットする。
 # CSVが更新されると Render が自動で再デプロイし、サイトに反映される。
 on:
-  schedule:
-    # 1日1回（日本時間 13:30 JST = UTC 04:30）※cron-job.orgが09:30に実行するため時間をずらす
-    - cron: "30 4 * * *"   # 13:30 JST
+  # スケジュール実行は cron-job.org が担当するため無効化。手動実行のみ残す。
   workflow_dispatch: {}
 
 permissions:
