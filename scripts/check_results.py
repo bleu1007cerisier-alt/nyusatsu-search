@@ -26,6 +26,7 @@ sys.path.insert(0, os.path.join(ROOT, "backend"))
 
 from scraper import (  # noqa: E402
     fetch_nedo_result, fetch_portal_award, fetch_jst_detail,
+    fetch_jogmec_result_url, fetch_jogmec_result,
 )
 
 DATASET_DIR = os.path.join(ROOT, "dataset")
@@ -124,6 +125,18 @@ def main():
                     row["result_url"] = found_result_url
                     print(f"JST採択リンク発見: {found_result_url}")
                     # 見つかったページからさらに事業者を取得（次回実行で対応）
+                checked += 1
+                time.sleep(DETAIL_SLEEP)
+
+        elif src == "JOGMEC":
+            # JOGMEC: 公募ページを再取得して「結果」PDFリンクを探し、PDFから抽出
+            page_url = (row.get("url") or "").strip()
+            if page_url:
+                pdf_url = fetch_jogmec_result_url(page_url)
+                if pdf_url:
+                    row["result_url"] = pdf_url
+                    info = fetch_jogmec_result(pdf_url)
+                    time.sleep(DETAIL_SLEEP)
                 checked += 1
                 time.sleep(DETAIL_SLEEP)
 
