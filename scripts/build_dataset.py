@@ -65,64 +65,91 @@ _HAIKU_IN_PER_M = 0.80
 _HAIKU_OUT_PER_M = 4.00
 
 
-_SUMMARY_PROMPT = (
-    "以下の入札公告・公募・研究開発事業のテキストを300〜500文字程度の自然な日本語で要約してください。\n\n"
-    "【必須ルール】\n"
-    "・冒頭にタイトルや見出し行を付けない（「#」で始まる行や「○○の要約」等は禁止。本文だけを書く）\n"
-    "・業務名・タイトルの繰り返しは不要\n"
-    "・電話番号・メールアドレス、およびそれらを囲む括弧は含めない\n"
-    "・日本語の単語の途中に英字を混ぜない（正式名称や一般的な略語GEPS/AI/IT等のみ英字可）\n"
-    "・箇条書きは使わず、読みやすい文章にする\n"
-    "・2〜3文ごとに改行を入れて段落に分ける\n\n"
-    "【できる限り含める情報】\n"
-    "・調達・業務・研究の目的と具体的な内容\n"
-    "・履行期間・事業期間\n"
-    "・競争参加資格・応募要件\n"
-    "・入札・開札・応募締切の日程\n"
-    "・予算規模・上限額\n\n"
-)
+_EXTRACT_PROMPT = """\
+以下は入札公告・公募情報のテキストです。下記のJSON形式のみで出力してください（前後の説明文は不要）。
+
+{
+  "deadline": "YYYY-MM-DD または null",
+  "amount": "金額文字列 または null",
+  "schedule": [
+    {"date": "YYYY-MM-DD", "label": "ラベル", "raw": "原文の日付表現"}
+  ],
+  "bullets": [
+    "事業内容: ...",
+    "履行場所: ...",
+    "履行期間: ...",
+    "落札方式: ...",
+    "参加資格: ...",
+    "予算規模: ...",
+    "入札締切: ...",
+    "開札予定: ...",
+    "担当: ..."
+  ]
+}
+
+【抽出ルール】
+- deadline: 入札書提出期限・応募締切・提出期限の日付を YYYY-MM-DD に変換。令和7=2025, 令和8=2026, 令和9=2027, 令和10=2028。不明はnull
+- amount: 予算上限額・概算額・契約上限額の文字列（例: "約1,200万円"）。不明はnull
+- schedule: 説明会・仕様書配布・質問受付・提出期限・開札日時など日付のある予定を全て抽出。和暦→西暦変換
+- bullets: 8〜12項目を「ラベル: 値」形式で。不明は「記載なし」。電話番号・メールアドレス不要
+- 日本語の単語に英字を混入させない（GEPS/AI/IT等の一般的な略語のみ可）\
+"""
 
 
-def _ai_summary(raw_text: str, title: str = "") -> str:
-    """Claude Haiku で入札公告・公募テキストを要約する。
-    ANTHROPIC_API_KEY が未設定の場合は空文字を返す（生テキストをそのまま使用）。
-    英字混入の誤生成を検出した場合は最大3回まで再生成する。
+def _ai_extract(raw_text: str, title: str = "") -> dict:
+    """Claude Haiku でテキストから構造化情報を抽出する。
+    返り値: {"deadline": str|None, "amount": str|None, "schedule": list, "bullets": list}
+    APIキー未設定・短いテキストは空dictを返す。
     """
     api_key = os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("CLAUDE_API_KEY")
     if not api_key or len(raw_text.strip()) < 80:
-        return ""
+        return {}
     prompt = (
-        _SUMMARY_PROMPT
-        + f"タイトル: {title}\n\nテキスト:\n{raw_text[:8000]}\n\n要約文:"
+        _EXTRACT_PROMPT
+        + f"\n\nタイトル: {title}\n\nテキスト:\n{raw_text[:8000]}"
     )
     try:
         import anthropic
         client = anthropic.Anthropic(api_key=api_key)
-        last = ""
-        for _ in range(3):
+        for attempt in range(3):
             msg = client.messages.create(
                 model="claude-haiku-4-5-20251001",
-                max_tokens=800,
+                max_tokens=1200,
                 messages=[{"role": "user", "content": prompt}],
             )
-            # 使用トークンを累積（コスト推定用）
             try:
                 _AI_USAGE["calls"] += 1
                 _AI_USAGE["input_tokens"] += int(getattr(msg.usage, "input_tokens", 0) or 0)
                 _AI_USAGE["output_tokens"] += int(getattr(msg.usage, "output_tokens", 0) or 0)
             except Exception:
                 pass
-            summary = _clean_summary(msg.content[0].text.strip())[:600]
-            if not summary:
-                continue
-            last = summary
-            if not _has_corrupt_latin(summary):
-                return summary  # 混入なし → 採用
-        # 3回とも混入が残る場合は最後の結果を返す（生テキストよりは読みやすい）
-        return last
+            text = msg.content[0].text.strip()
+            # JSON部分だけ抽出（```json ... ``` ブロックも対応）
+            if "```" in text:
+                import re as _re
+                m = _re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
+                if m:
+                    text = m.group(1).strip()
+            try:
+                data = json.loads(text)
+            except Exception:
+                if attempt < 2:
+                    continue
+                return {}
+            bullets = data.get("bullets") or []
+            # 英字混入チェック（問題なければ採用）
+            summary_text = "\n".join(bullets)
+            if not _has_corrupt_latin(summary_text):
+                return data
+        return {}
     except Exception as e:
-        print(f"AI要約失敗: {e}")
-        return ""
+        print(f"AI抽出失敗: {e}")
+        return {}
+
+
+def _bullets_to_summary(bullets: list) -> str:
+    """箇条書きリストを summary フィールド用の文字列に変換。"""
+    return "\n".join(f"・{b}" for b in bullets if b)
 
 
 def _ai_split_awardee(awardee: str) -> str:
@@ -528,20 +555,29 @@ def main():
             # PORTAL はゴミdetailをリセット済みなので常に上書き。他ソースは空のときのみ
             if new_detail and (not cur_detail or r.get("source") == "PORTAL"):
                 r["detail"] = new_detail  # 生テキストを保持
-            # 長い公告テキスト（100文字超）はAI要約してsummaryフィールドへ（未要約のときのみ）
+            # 長い公告テキスト（100文字超）はAI抽出してsummary/deadline/amount/scheduleへ
+            ai_extracted = {}
             if new_detail and len(new_detail) > 100 and not (r.get("summary") or "").strip():
-                summarized = _ai_summary(new_detail, r.get("title", ""))
-                if summarized:
-                    r["summary"] = summarized
-            if info.get("budget") and not (r.get("amount") or "").strip():
+                ai_extracted = _ai_extract(new_detail, r.get("title", ""))
+                if ai_extracted.get("bullets"):
+                    r["summary"] = _bullets_to_summary(ai_extracted["bullets"])
+                if ai_extracted.get("deadline"):
+                    r["deadline"] = ai_extracted["deadline"]
+                if ai_extracted.get("amount") and not (r.get("amount") or "").strip():
+                    r["amount"] = ai_extracted["amount"]
+                if ai_extracted.get("schedule"):
+                    r["schedule"] = json.dumps(ai_extracted["schedule"], ensure_ascii=False)
+            # AIが拾えなかった項目はスクレイパー値で補完
+            if not ai_extracted.get("amount") and info.get("budget") and not (r.get("amount") or "").strip():
                 r["amount"] = info["budget"]
-            if info.get("schedule") and not (r.get("schedule") or "").strip():
+            if not ai_extracted.get("schedule") and info.get("schedule") and not (r.get("schedule") or "").strip():
                 r["schedule"] = json.dumps(info["schedule"], ensure_ascii=False)
-            # PORTAL: 調達種別→category / 公開終了日→deadline を上書き
+            # PORTAL: 調達種別→category を上書き（deadlineはAI抽出を優先済み）
             if src == "PORTAL":
                 if info.get("category"):
                     r["category"] = info["category"]
-                if info.get("deadline") and not (r.get("deadline") or "").strip():
+                # AIが未抽出の場合のみスクレイパーのdeadlineを使用
+                if not ai_extracted.get("deadline") and info.get("deadline") and not (r.get("deadline") or "").strip():
                     r["deadline"] = info["deadline"]
             r["budget_checked"] = "1"  # 予算確認済み（空でも再取得しない）
             if (r.get("attachments_checked") or "") != "1":
@@ -625,28 +661,32 @@ def main():
             r2_detail_count += 1
     print(f"R2 PDFから概要補完: {r2_detail_count}件")
 
-    # 【増分】detailはあるがsummaryが空の案件をAI要約する。
+    # 【増分】detailはあるがsummaryが空の案件をAI抽出する。
     # needs_fetch()を通らない既存案件（budget_checked=1済み）もここでカバーする。
-    # APIキー未設定時はスキップ（無限ループ防止）
     summarized_count = 0
     if os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("CLAUDE_API_KEY"):
         for r in merged.values():
             if summarized_count >= MAX_AI_SUMMARY_PER_RUN:
                 break
             if (r.get("summary") or "").strip():
-                continue  # summary に値あり = AI要約済み
+                continue
             det = (r.get("detail") or "").strip()
             if len(det) < 100:
                 continue
-            new = _ai_summary(det, r.get("title", ""))
-            if new:
-                r["summary"] = new
+            extracted = _ai_extract(det, r.get("title", ""))
+            if extracted.get("bullets"):
+                r["summary"] = _bullets_to_summary(extracted["bullets"])
                 summarized_count += 1
+            if extracted.get("deadline"):
+                r["deadline"] = extracted["deadline"]
+            if extracted.get("amount") and not (r.get("amount") or "").strip():
+                r["amount"] = extracted["amount"]
+            if extracted.get("schedule") and not (r.get("schedule") or "").strip():
+                r["schedule"] = json.dumps(extracted["schedule"], ensure_ascii=False)
         if summarized_count:
-            print(f"AI要約（増分）: {summarized_count}件")
+            print(f"AI抽出（増分）: {summarized_count}件")
 
-    # 【日次セーフティ】既存要約に英字混入の誤生成が残っていれば、原文から再要約して修復。
-    # 1回の実行で上限件数だけ処理（コスト・実行時間を抑制）。
+    # 【日次セーフティ】英字混入の誤生成が残る古形式summaryを再生成して修復。
     repaired = 0
     if os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("CLAUDE_API_KEY"):
         for r in merged.values():
@@ -658,9 +698,12 @@ def main():
             det = (r.get("detail") or "").strip()
             if len(det) < 100:
                 continue
-            new = _ai_summary(det, r.get("title", ""))
-            if new and not _has_corrupt_latin(new):
-                r["summary"] = new
+            extracted = _ai_extract(det, r.get("title", ""))
+            new_summ = _bullets_to_summary(extracted.get("bullets") or [])
+            if new_summ and not _has_corrupt_latin(new_summ):
+                r["summary"] = new_summ
+                if extracted.get("deadline"):
+                    r["deadline"] = extracted["deadline"]
                 repaired += 1
         if repaired:
             print(f"英字混入の要約を再生成（修復）: {repaired}件")
