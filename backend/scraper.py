@@ -1214,34 +1214,50 @@ def fetch_jogmec_detail(url: str) -> Optional[Dict]:
             with urllib.request.urlopen(req2, timeout=20) as r2:
                 pdf_data = r2.read()
             pdf_text = "\n".join(p.extract_text() or "" for p in _PdfReader(_io.BytesIO(pdf_data)).pages)
-            # 「公募期間は〜から〜まで」の終了日、または「公募締め切り」直後の日付を探す
-            _deadline_patterns = [
-                # 日付が先: 「令和8年10月30日 公募締め切り」（間に時刻数字が入る場合も .{} で許容）
-                r"(令和\d+年\d{1,2}月\d{1,2}日).{0,20}公募締め?切",
-                r"(令和\d+年\d{1,2}月\d{1,2}日)[^\d]{0,15}提案書.{0,6}締め?切",
-                r"(令和\d+年\d{1,2}月\d{1,2}日)[^\d]{0,15}(提出期限|応募期限|受付期限)",
-                # キーワードが先: 「締切: 令和8年...」
-                r"公募締め?切[^\d]{0,10}(令和\d+年\d{1,2}月\d{1,2}日)",
-                r"提出期限[^\d]{0,10}(令和\d+年\d{1,2}月\d{1,2}日)",
-                r"応募期限[^\d]{0,10}(令和\d+年\d{1,2}月\d{1,2}日)",
-                r"受付期限[^\d]{0,10}(令和\d+年\d{1,2}月\d{1,2}日)",
-                # 「公募期間は開始日から終了日まで/正午」
-                r"公募[実施]*期間.{5,80}から(令和\d+年\d{1,2}月\d{1,2}日)[^\d]{0,5}(正午|まで)",
-                # 「受付期間/公募期間〜終了日」（助成金等の随時受付型）
-                r"受付期間.{0,40}[～~](令和\d+年\d{1,2}月\d{1,2}日)",
-                r"公募[実施]*期間[^～~]{0,20}[～~](令和\d+年\d{1,2}月\d{1,2}日)",
-                # 「交付期間：〜～令和X年Y月Z日」（公募要領交付期限をフォールバック締切として使用）
-                r"交付期間[^\d]{0,20}[～~](令和\d+年\d{1,2}月\d{1,2}日)",
-            ]
+            # NFKC正規化：異体字（⽉→月、⽇→日 等）を標準形に統一
+            import unicodedata as _ud
+            pdf_text = _ud.normalize("NFKC", pdf_text)
             flat = re.sub(r"\s+", "", pdf_text)
             # 全角数字を半角に正規化（令和X年表記に対応）
             flat = flat.translate(str.maketrans("０１２３４５６７８９", "0123456789"))
+            _deadline_patterns = [
+                # 日付が先（間に時刻数字が入る場合も .{} で許容）
+                r"(令和\d+年\d{1,2}月\d{1,2}日).{0,20}公募締め?切",
+                r"(令和\d+年\d{1,2}月\d{1,2}日)[^\d]{0,15}提案書.{0,6}締め?切",
+                r"(令和\d+年\d{1,2}月\d{1,2}日)[^\d]{0,15}(提出期限|応募期限|受付期限)",
+                # キーワードが先
+                r"公募締め?切[^\d]{0,10}(令和\d+年\d{1,2}月\d{1,2}日)",
+                r"提出期限.{0,30}(令和\d+年\d{1,2}月\d{1,2}日)",
+                r"応募期限[^\d]{0,10}(令和\d+年\d{1,2}月\d{1,2}日)",
+                r"受付期限[^\d]{0,10}(令和\d+年\d{1,2}月\d{1,2}日)",
+                # 「公募期間は開始日から終了日まで/正午」（曜日・時刻を挟むため .{} で許容）
+                r"公募[実施]*期間.{2,80}から(令和\d+年\d{1,2}月\d{1,2}日).{0,15}(正午|まで)",
+                # 「受付期間/公募期間〜終了日」（助成金等の随時受付型）
+                r"受付期間.{0,40}[～~](令和\d+年\d{1,2}月\d{1,2}日)",
+                r"公募[実施]*期間[^～~]{0,20}[～~](令和\d+年\d{1,2}月\d{1,2}日)",
+                # 参加意思確認書の提出期限（入札参加資格確認型）
+                r"参加意思確認書.{0,100}(令和\d+年\d{1,2}月\d{1,2}日)",
+                # 「交付期間：〜～令和X年Y月Z日」（フォールバック）
+                r"交付期間[^\d]{0,20}[～~](令和\d+年\d{1,2}月\d{1,2}日)",
+            ]
             for pat in _deadline_patterns:
                 m = re.search(pat, flat)
                 if m:
                     deadline = _reiwa_date(m.group(1))
                     if deadline:
                         break
+            # 英語日付パターン（英語公募要領用: "on April 30, 2026"）
+            if not deadline:
+                _EN_MONTHS = {"january":1,"february":2,"march":3,"april":4,"may":5,"june":6,
+                              "july":7,"august":8,"september":9,"october":10,"november":11,"december":12}
+                _en_m = re.search(
+                    r"on\s*(january|february|march|april|may|june|july|august"
+                    r"|september|october|november|december)\s*(\d{1,2}),?\s*(\d{4})",
+                    pdf_text, re.IGNORECASE)
+                if _en_m:
+                    mn = _EN_MONTHS.get(_en_m.group(1).lower(), 0)
+                    if mn:
+                        deadline = f"{_en_m.group(3)}-{mn:02d}-{int(_en_m.group(2)):02d}"
         except Exception as e:
             logger.debug(f"JOGMEC PDF締切抽出失敗 {koukoku_pdf_url}: {e}")
 
