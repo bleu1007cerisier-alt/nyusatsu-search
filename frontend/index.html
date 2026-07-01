@@ -7,7 +7,10 @@
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
     .badge-nyusatsu { background:#dbeafe; color:#1d4ed8; }
+    .badge-nyusatsu-open { background:#eff6ff; color:#1e40af; }
     .badge-proposal { background:#fce7f3; color:#9d174d; }
+    .badge-rfi { background:#fef9c3; color:#854d0e; }
+    .badge-zuii { background:#f1f5f9; color:#475569; }
     .deadline-near { color:#dc2626; font-weight:600; }
   </style>
 </head>
@@ -40,7 +43,10 @@
         <select id="category" class="border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400">
           <option value="">すべての種別</option>
           <option value="入札">入札</option>
+          <option value="入札・公募">入札・公募</option>
           <option value="プロポーザル">プロポーザル</option>
+          <option value="RFI">RFI</option>
+          <option value="随意契約">随意契約</option>
         </select>
 
         <!-- 都道府県 -->
@@ -304,7 +310,11 @@
     }
 
     function renderCard(t) {
-      const badgeClass = t.category === '入札' ? 'badge-nyusatsu' : 'badge-proposal';
+      const badgeClass = t.category === '入札' ? 'badge-nyusatsu'
+        : t.category === '入札・公募' ? 'badge-nyusatsu-open'
+        : t.category === 'RFI' ? 'badge-rfi'
+        : t.category === '随意契約' ? 'badge-zuii'
+        : 'badge-proposal';
       const ds = deadlineStatus(t.deadline);
       const pubHtml = t.published_at
         ? `<span class="text-xs text-gray-500">掲載日: ${t.published_at}</span>` : '';
