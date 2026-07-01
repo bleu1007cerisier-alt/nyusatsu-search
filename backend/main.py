@@ -94,6 +94,9 @@ def compute_status(t: Tender, today: str) -> str:
         return STATUS_DECIDED
     if (t.deadline or "").strip() and t.deadline < today:
         return STATUS_CLOSED
+    # PORTALでdeadline・detail両方空 = ページ削除済みと判断して受付終了
+    if not (t.deadline or "").strip() and not (t.detail or "").strip() and (t.source or "") == "PORTAL":
+        return STATUS_CLOSED
     if not (t.deadline or "").strip() and (t.published_at or "").strip():
         from datetime import date as _date, timedelta
         try:
