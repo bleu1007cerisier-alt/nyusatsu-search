@@ -1192,6 +1192,7 @@ def fetch_jogmec_detail(url: str) -> Optional[Dict]:
 
     # 添付PDF
     attachments = []
+    koukoku_pdf_url = ""
     for a in soup.find_all("a", href=True):
         href = a["href"]
         if "/content/" in href and ".pdf" in href.lower():
@@ -1201,6 +1202,43 @@ def fetch_jogmec_detail(url: str) -> Optional[Dict]:
                    "評価基準" if "評価" in name else "公告文"
             full_url = JOGMEC_BASE + href if href.startswith("/") else href
             attachments.append({"name": name, "kind": kind, "url": full_url})
+            if not koukoku_pdf_url and kind == "公告文":
+                koukoku_pdf_url = full_url
+
+    # HTMLに締切がない場合、公告文PDFから抽出を試みる
+    if not deadline and koukoku_pdf_url:
+        try:
+            import io as _io
+            from pypdf import PdfReader as _PdfReader
+            req2 = urllib.request.Request(koukoku_pdf_url, headers={"User-Agent": HEADERS["User-Agent"]})
+            with urllib.request.urlopen(req2, timeout=20) as r2:
+                pdf_data = r2.read()
+            pdf_text = "\n".join(p.extract_text() or "" for p in _PdfReader(_io.BytesIO(pdf_data)).pages)
+            # 「公募期間は〜から〜まで」の終了日、または「公募締め切り」直後の日付を探す
+            _deadline_patterns = [
+                # 日付が先: 「令和8年10月30日 公募締め切り」
+                r"(令和\d+年\d{1,2}月\d{1,2}日)[^\d]{0,15}公募締め?切",
+                r"(令和\d+年\d{1,2}月\d{1,2}日)[^\d]{0,15}提案書.{0,6}締め?切",
+                r"(令和\d+年\d{1,2}月\d{1,2}日)[^\d]{0,15}(提出期限|応募期限|受付期限)",
+                # キーワードが先: 「締切: 令和8年...」
+                r"公募締め?切[^\d]{0,10}(令和\d+年\d{1,2}月\d{1,2}日)",
+                r"提出期限[^\d]{0,10}(令和\d+年\d{1,2}月\d{1,2}日)",
+                r"応募期限[^\d]{0,10}(令和\d+年\d{1,2}月\d{1,2}日)",
+                r"受付期限[^\d]{0,10}(令和\d+年\d{1,2}月\d{1,2}日)",
+                # 「公募期間は開始日から終了日まで/正午」（開始日と終了日の間に数字があるため .{} で許容）
+                r"公募期間.{5,80}から(令和\d+年\d{1,2}月\d{1,2}日)[^\d]{0,5}(正午|まで)",
+            ]
+            flat = re.sub(r"\s+", "", pdf_text)
+            # 全角数字を半角に正規化（令和X年表記に対応）
+            flat = flat.translate(str.maketrans("０１２３４５６７８９", "0123456789"))
+            for pat in _deadline_patterns:
+                m = re.search(pat, flat)
+                if m:
+                    deadline = _reiwa_date(m.group(1))
+                    if deadline:
+                        break
+        except Exception as e:
+            logger.debug(f"JOGMEC PDF締切抽出失敗 {koukoku_pdf_url}: {e}")
 
     return {
         "title": title,
