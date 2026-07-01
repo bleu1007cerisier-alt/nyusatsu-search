@@ -137,6 +137,9 @@ def main():
 
     print(f"事業者確認: {checked}件チェック / {updated}件更新 / {expired}件監視終了")
 
+    # ログ書き出し（更新がなくても記録する）
+    _write_result_log(checked, updated, expired)
+
     if updated + expired == 0:
         print("更新なし")
         return
@@ -147,6 +150,32 @@ def main():
         writer.writeheader()
         writer.writerows(rows)
     print("CSV保存完了")
+
+
+def _write_result_log(checked: int, updated: int, expired: int):
+    """事業者チェックの実行ログを dataset/check_results_log.json に追記する（直近50件）。"""
+    import json
+    from datetime import datetime, timezone
+    log_path = os.path.join(DATASET_DIR, "check_results_log.json")
+    entry = {
+        "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "checked": checked,
+        "updated": updated,
+        "expired": expired,
+    }
+    history = []
+    if os.path.exists(log_path):
+        try:
+            with open(log_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                history = data.get("runs", []) if isinstance(data, dict) else []
+        except (ValueError, OSError):
+            history = []
+    history.append(entry)
+    history = history[-50:]
+    with open(log_path, "w", encoding="utf-8") as f:
+        json.dump({"runs": history}, f, ensure_ascii=False, indent=2)
+    print(f"結果チェックログ更新: {checked}件確認 / {updated}件更新")
 
 
 if __name__ == "__main__":

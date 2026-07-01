@@ -14,6 +14,7 @@
       <div class="flex items-center gap-4 text-sm">
         <a href="https://github.com/bleu1007cerisier-alt/nyusatsu-search" target="_blank" rel="noopener" class="text-gray-300 hover:text-white">GitHub</a>
         <a href="https://github.com/bleu1007cerisier-alt/nyusatsu-search/actions" target="_blank" rel="noopener" class="text-gray-300 hover:text-white">Actions</a>
+        <a href="https://cron-job.org/en/members/jobs/" target="_blank" rel="noopener" class="text-gray-300 hover:text-white">cron-job</a>
         <a href="/" class="text-gray-300 hover:text-white">← サイトへ戻る</a>
       </div>
     </div>
@@ -79,9 +80,29 @@
         </p>
       </section>
 
+      <!-- 事業者決定チェック履歴 -->
+      <section class="bg-white border rounded-xl p-5">
+        <h2 class="text-sm font-semibold text-gray-700 mb-3">🏆 事業者決定チェックの履歴（新しい順・直近30回）</h2>
+        <p class="text-xs text-gray-500 mb-3">水・金 17:30 JST に自動実行。NEDO/PORTAL は result_url から、JST は公募ページを再取得して採択リンクを探す。1年超で未取得の場合は監視終了。</p>
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead>
+              <tr class="text-left text-gray-500 border-b">
+                <th class="py-2 pr-3">日時(JST)</th>
+                <th class="py-2 pr-3 text-right">確認件数</th>
+                <th class="py-2 pr-3 text-right">事業者更新</th>
+                <th class="py-2 text-right">監視終了</th>
+              </tr>
+            </thead>
+            <tbody id="result-runs"></tbody>
+          </table>
+        </div>
+        <p id="no-result-runs" class="hidden text-xs text-gray-400 mt-2">まだ履歴がありません（次回の水・金 17:30 JST 実行後に表示されます）。</p>
+      </section>
+
       <!-- 更新履歴 -->
       <section class="bg-white border rounded-xl p-5">
-        <h2 class="text-sm font-semibold text-gray-700 mb-3">🕒 自動更新の履歴（新しい順・直近30回）</h2>
+        <h2 class="text-sm font-semibold text-gray-700 mb-3">🕒 スクレイピングの履歴（新しい順・直近30回）</h2>
         <div class="overflow-x-auto">
           <table class="w-full text-sm">
             <thead>
@@ -145,7 +166,18 @@
           <td class="py-2"><a href="${esc(s.url)}" target="_blank" rel="noopener" class="text-blue-600 hover:underline">開く ↗</a></td>
         </tr>`).join('');
 
-      // 履歴
+      // 事業者決定チェック履歴
+      const resultRuns=d.result_runs||[];
+      if(!resultRuns.length){document.getElementById('no-result-runs').classList.remove('hidden');}
+      document.getElementById('result-runs').innerHTML=resultRuns.map(r=>`
+        <tr class="border-b last:border-0">
+          <td class="py-2 pr-3 whitespace-nowrap">${jst(r.at)}</td>
+          <td class="py-2 pr-3 text-right">${(r.checked||0).toLocaleString()}</td>
+          <td class="py-2 pr-3 text-right ${(r.updated||0)>0?'text-green-600 font-semibold':''}">${(r.updated||0).toLocaleString()}</td>
+          <td class="py-2 text-right text-gray-400">${(r.expired||0).toLocaleString()}</td>
+        </tr>`).join('');
+
+      // スクレイピング履歴
       const runs=d.runs||[];
       if(!runs.length){document.getElementById('no-runs').classList.remove('hidden');}
       document.getElementById('runs').innerHTML=runs.map(r=>`

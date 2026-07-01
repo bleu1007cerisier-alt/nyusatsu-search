@@ -371,14 +371,23 @@ def dev_status():
         except (ValueError, OSError):
             pass
 
-    # 要約は GitHub Actions 側で生成される。Web サーバー(Render)の環境変数ではなく、
-    # 実際にデータへ要約が入っているか（カバレッジ）で「動作中か」を判定する。
+    # 事業者決定チェック履歴
+    result_log_path = os.path.join(os.path.dirname(__file__), "../dataset/check_results_log.json")
+    result_runs = []
+    if os.path.exists(result_log_path):
+        try:
+            with open(result_log_path, "r", encoding="utf-8") as f:
+                result_runs = json.load(f).get("runs", [])
+        except (ValueError, OSError):
+            pass
+
     ai_active = summarized > 0
 
     return {
         "total": total,
         "sources": sources,
-        "runs": list(reversed(runs))[:30],  # 新しい順
+        "runs": list(reversed(runs))[:30],
+        "result_runs": list(reversed(result_runs))[:30],  # 事業者決定チェック履歴
         "ai_active": ai_active,
         "summarized": summarized,
         "summary_eligible": summary_eligible,
