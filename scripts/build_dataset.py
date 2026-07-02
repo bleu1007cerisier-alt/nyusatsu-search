@@ -256,13 +256,16 @@ def _store_attachments(row, attachments):
     PDFマジックナンバー確認済みのものだけR2に保存。
     認証必須URL（GEPSなど）はHTMLが返るため自動的にスキップされ、source_urlのみ保持。
     R2未設定時は source_url のみ記録（UIでリンク表示）。
+    PORTALは実仕様書がGEPS（認証必須）にあり取得できず、掴めるのは用語集等のみのため
+    PDFダウンロード・R2保存は行わず、リンク(source_url)のみ記録する。
     """
     import re as _re
+    is_portal = (row.get("source") == "PORTAL")
     stored = []
     for i, att in enumerate(attachments):
         r2_url = ""
         r2_key = ""
-        if storage.r2_enabled():
+        if storage.r2_enabled() and not is_portal:
             data = _download(att["url"])
             if data and data.lstrip()[:4] == b"%PDF":
                 safe = _re.sub(r"[^A-Za-z0-9_.-]", "_", att["url"].split("/")[-1]) or f"file{i}.pdf"
@@ -594,12 +597,14 @@ def main():
             need_summary = not (r.get("summary") or "").strip()
             if need_summary:
                 detail_for_ai = (r.get("detail") or new_detail or "").strip()
-                # 要約対象のときだけPDF本文を取得（無駄なR2アクセスを避ける）
+                # 要約対象のときだけPDF本文を取得（無駄なR2アクセスを避ける）。
+                # PORTALは使える仕様書が取れないためPDF抜粋は取得しない。
                 pdf_text = ""
-                try:
-                    pdf_text = _overview_from_r2(r, max_pages=12, max_lines=120, max_chars=5000)
-                except Exception as e:  # noqa: BLE001
-                    print(f"PDF抜粋取得失敗: {e}")
+                if src != "PORTAL":
+                    try:
+                        pdf_text = _overview_from_r2(r, max_pages=12, max_lines=120, max_chars=5000)
+                    except Exception as e:  # noqa: BLE001
+                        print(f"PDF抜粋取得失敗: {e}")
                 ai_input = detail_for_ai[:4000]
                 if pdf_text:
                     ai_input += "\n\n【添付資料抜粋】\n" + pdf_text
