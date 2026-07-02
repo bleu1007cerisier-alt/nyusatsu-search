@@ -66,7 +66,8 @@ _HAIKU_OUT_PER_M = 4.00
 
 
 _EXTRACT_PROMPT = """\
-以下は入札公告・公募情報のテキストです。下記のJSON形式のみで出力してください（前後の説明文は不要）。
+以下は入札公告・公募情報のテキストです（「【添付資料抜粋】」以降は仕様書・公募要領などの本文です）。
+下記のJSON形式のみで出力してください（前後の説明文は不要）。
 
 {
   "deadline": "YYYY-MM-DD または null",
@@ -91,7 +92,13 @@ _EXTRACT_PROMPT = """\
 - deadline: 入札書提出期限・応募締切・提出期限の日付を YYYY-MM-DD に変換。令和7=2025, 令和8=2026, 令和9=2027, 令和10=2028。不明はnull
 - amount: 予算上限額・概算額・契約上限額の文字列（例: "約1,200万円"）。不明はnull
 - schedule: 説明会・仕様書配布・質問受付・提出期限・開札日時など日付のある予定を全て抽出。和暦→西暦変換
-- bullets: 8〜12項目を「ラベル: 値」形式で。不明は「記載なし」。電話番号・メールアドレス不要
+- 事業内容: 何を・どこで・どのような作業を行う案件かが分かるよう、2〜4文で具体的に記述する。
+  仕様書・公募要領の抜粋があればその内容から業務範囲・目的・主な作業を読み取って書く。
+  タイトルをそのまま繰り返すだけにしない。ただし冗長にせず要点に絞る。
+  ※添付資料が用語集・マニュアル等で案件と無関係な場合は無視し、タイトルと公告本文から推定して記述する。
+  「本文に記載がありません」等のメタ的な文は書かず、必ず案件の内容そのものを述べる。
+- bullets: 「ラベル: 値」形式。情報が本文から読み取れない項目は、その行を出力しない（「記載なし」とは書かない）。
+  事業内容の行は必ず出力する。電話番号・メールアドレスは含めない
 - 日本語の単語に英字を混入させない（GEPS/AI/IT等の一般的な略語のみ可）\
 """
 
@@ -270,8 +277,10 @@ def _store_attachments(row, attachments):
     row["attachments"] = json.dumps(stored, ensure_ascii=False)
     row["attachments_checked"] = "1"
 
-def _overview_from_r2(row: dict) -> str:
-    """R2保存済みPDFから概要テキストを抽出する（detail未記入の案件のみ）。"""
+def _overview_from_r2(row: dict, max_pages: int = 8, max_lines: int = 50,
+                      max_chars: int = 3000) -> str:
+    """R2保存済みPDF（仕様書・公募要領等）からテキストを抽出する。
+    max_* を大きくするとAI抽出の材料としてより多くの本文を返す。"""
     if not storage.r2_enabled():
         return ""
     try:
@@ -290,6 +299,8 @@ def _overview_from_r2(row: dict) -> str:
         aws_secret_access_key=os.environ.get("R2_SECRET_ACCESS_KEY", ""),
     )
     bucket = os.environ.get("R2_BUCKET", "")
+    # 用語集・操作マニュアル等の汎用資料は案件と無関係なので除外する
+    _skip = _re_summary.compile(r'用語集|ヘルプ|操作|マニュアル|手引|ガイド|よくある質問|ＦＡＱ|FAQ')
     # 公告文→公募要領→仕様書→調達資料の順に試行（意味ある文章が得られるまで）
     priority = ["公告文", "公募要領", "仕様書", "調達資料", "審査基準", "評価基準"]
     atts_sorted = sorted(atts, key=lambda a: next(
@@ -298,16 +309,17 @@ def _overview_from_r2(row: dict) -> str:
         key = att.get("key", "")
         if not key:
             continue
+        if _skip.search(str(att.get("name", ""))) or _skip.search(str(att.get("kind", ""))):
+            continue  # 汎用資料（用語集等）はスキップ
         try:
             obj = s3.get_object(Bucket=bucket, Key=key)
             data = obj["Body"].read()
             reader = PdfReader(io.BytesIO(data))
-            # 先頭8ページのテキストから意味ある行だけ結合（AI要約の材料として十分な量を確保）
-            text = "\n".join((p.extract_text() or "") for p in reader.pages[:8])
+            text = "\n".join((p.extract_text() or "") for p in reader.pages[:max_pages])
             lines = [ln.strip() for ln in text.split("\n")
                      if ln.strip() and len(ln.strip()) > 8]
             if lines:
-                return "\n".join(lines[:50])[:3000]
+                return "\n".join(lines[:max_lines])[:max_chars]
         except Exception as e:
             print(f"R2 PDF概要読込失敗 {key}: {e}")
     return ""
@@ -574,18 +586,33 @@ def main():
             # PORTAL はゴミdetailをリセット済みなので常に上書き。他ソースは空のときのみ
             if new_detail and (not cur_detail or r.get("source") == "PORTAL"):
                 r["detail"] = new_detail  # 生テキストを保持
-            # 長い公告テキスト（100文字超）はAI抽出してsummary/deadline/amount/scheduleへ
+            # 添付PDF（仕様書・公募要領）を先にR2へ保存 → AI抽出の材料に使う
+            if (r.get("attachments_checked") or "") != "1":
+                _store_attachments(r, info.get("attachments", []))
+            # AI抽出：公告本文＋添付PDF抜粋（仕様書等）を材料にsummary/deadline/amount/scheduleへ
             ai_extracted = {}
-            if new_detail and len(new_detail) > 100 and not (r.get("summary") or "").strip():
-                ai_extracted = _ai_extract(new_detail, r.get("title", ""))
-                if ai_extracted.get("bullets"):
-                    r["summary"] = _bullets_to_summary(ai_extracted["bullets"])
-                if ai_extracted.get("deadline"):
-                    r["deadline"] = ai_extracted["deadline"]
-                if ai_extracted.get("amount") and not (r.get("amount") or "").strip():
-                    r["amount"] = ai_extracted["amount"]
-                if ai_extracted.get("schedule"):
-                    r["schedule"] = json.dumps(ai_extracted["schedule"], ensure_ascii=False)
+            need_summary = not (r.get("summary") or "").strip()
+            if need_summary:
+                detail_for_ai = (r.get("detail") or new_detail or "").strip()
+                # 要約対象のときだけPDF本文を取得（無駄なR2アクセスを避ける）
+                pdf_text = ""
+                try:
+                    pdf_text = _overview_from_r2(r, max_pages=12, max_lines=120, max_chars=5000)
+                except Exception as e:  # noqa: BLE001
+                    print(f"PDF抜粋取得失敗: {e}")
+                ai_input = detail_for_ai[:4000]
+                if pdf_text:
+                    ai_input += "\n\n【添付資料抜粋】\n" + pdf_text
+                if len(ai_input.strip()) > 100:
+                    ai_extracted = _ai_extract(ai_input, r.get("title", ""))
+                    if ai_extracted.get("bullets"):
+                        r["summary"] = _bullets_to_summary(ai_extracted["bullets"])
+                    if ai_extracted.get("deadline"):
+                        r["deadline"] = ai_extracted["deadline"]
+                    if ai_extracted.get("amount") and not (r.get("amount") or "").strip():
+                        r["amount"] = ai_extracted["amount"]
+                    if ai_extracted.get("schedule"):
+                        r["schedule"] = json.dumps(ai_extracted["schedule"], ensure_ascii=False)
             # AIが拾えなかった項目はスクレイパー値で補完
             if not ai_extracted.get("amount") and info.get("budget") and not (r.get("amount") or "").strip():
                 r["amount"] = info["budget"]
@@ -602,8 +629,6 @@ def main():
                 if not ai_extracted.get("deadline") and info.get("deadline") and not (r.get("deadline") or "").strip():
                     r["deadline"] = info["deadline"]
             r["budget_checked"] = "1"  # 予算確認済み（空でも再取得しない）
-            if (r.get("attachments_checked") or "") != "1":
-                _store_attachments(r, info.get("attachments", []))
         time.sleep(DETAIL_SLEEP)
 
     # 【増分】決定事業者：結果が出ていて未チェックの案件だけ確認（一度確認したら再取得しない）
