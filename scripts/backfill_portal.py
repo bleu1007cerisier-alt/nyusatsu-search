@@ -273,6 +273,8 @@ def main():
     existing_case_nos = {r["project_code"] for r in rows if r.get("project_code")}
     total_added = 0
     completed_month_keys = set(prog.get("completed_months", []))
+    # 新規追加行のID採番用（既存の最大IDの次から）
+    max_id = max((int(r["id"]) for r in rows if (r.get("id") or "").strip().isdigit()), default=0)
 
     for month_start, month_end, month_key in months:
         date_from = month_start.strftime("%Y/%m/%d")
@@ -293,6 +295,8 @@ def main():
         for r in new_items:
             _fetch_detail(r)
             time.sleep(DETAIL_SLEEP)
+            max_id += 1
+            r["id"] = str(max_id)  # 追加行に必ずIDを採番（空IDでDB投入が壊れるのを防ぐ）
             rows.append(r)
             existing_case_nos.add(r.get("project_code", ""))
             total_added += 1
