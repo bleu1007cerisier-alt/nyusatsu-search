@@ -52,9 +52,30 @@ def load_dataset_into_db() -> int:
     try:
         db.query(Tender).delete()
         with open(DATASET_CSV, encoding="utf-8-sig", newline="") as f:
-            for row in csv.DictReader(f):
+            rows = list(csv.DictReader(f))
+        # ID割当：既存の数値IDを保持しつつ、空・非数値・重複には一意IDを採番する。
+        # （空IDや重複IDがあってもDB投入がUNIQUE制約で失敗しないようにする防御策）
+        assigned = set()
+        for r in rows:
+            v = (r.get("id") or "").strip()
+            if v.isdigit():
+                assigned.add(int(v))
+        next_id = (max(assigned) + 1) if assigned else 1
+        used = set()
+
+        def _alloc(v):
+            nonlocal next_id
+            if v.isdigit() and int(v) not in used:
+                used.add(int(v))
+                return int(v)
+            while next_id in assigned or next_id in used:
+                next_id += 1
+            used.add(next_id)
+            return next_id
+
+        for row in rows:
                 db.add(Tender(
-                    id=int(row["id"]) if (row.get("id") or "").strip().isdigit() else None,
+                    id=_alloc((row.get("id") or "").strip()),
                     title=row.get("title", ""),
                     category=row.get("category", ""),
                     organization=row.get("organization", ""),
@@ -204,7 +225,7 @@ def search_tenders(
     items = [_item_dict(t, today) for t in query.all()]
 
     # 状態フィルタ
-    if status in (STATUS_OPEN, STATUS_CLOSED, STATUS_DECIDED):
+    if status in (STATUS_OPEN, STATUS_PUBLIC, STATUS_ENDED):
         items = [i for i in items if i["status"] == status]
 
     items.sort(key=_sort_key)
@@ -289,7 +310,7 @@ def get_stats(db: Session = Depends(get_db)):
     all_items = db.query(Tender).all()
     total = len(all_items)
 
-    status_counts = {STATUS_OPEN: 0, STATUS_CLOSED: 0, STATUS_DECIDED: 0}
+    status_counts = {STATUS_OPEN: 0, STATUS_PUBLIC: 0, STATUS_ENDED: 0}
     tag_counts: dict = {}
     org_counts: dict = {}
     sources = set()

@@ -711,6 +711,18 @@ def main():
         if repaired:
             print(f"英字混入の要約を再生成（修復）: {repaired}件")
 
+    # 書き出し前に、ID未設定の行へ必ずIDを採番する（空IDはDB投入をUNIQUE制約で壊すため）
+    _id_max = max((int(r["id"]) for r in merged.values()
+                   if (r.get("id") or "").strip().isdigit()), default=0)
+    _no_id = 0
+    for r in merged.values():
+        if not (r.get("id") or "").strip().isdigit():
+            _id_max += 1
+            r["id"] = str(_id_max)
+            _no_id += 1
+    if _no_id:
+        print(f"ID未設定の行にID採番: {_no_id}件")
+
     # ID順に並べて書き出し
     rows = sorted(merged.values(), key=lambda r: int(r.get("id") or 0))
     with open(CSV_PATH, "w", encoding="utf-8-sig", newline="") as f:
