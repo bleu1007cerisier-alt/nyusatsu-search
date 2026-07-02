@@ -1022,19 +1022,25 @@ def fetch_portal_detail(url: str) -> Dict[str, str]:
         choutatsushu = m.group(1).strip()[:60]
         break
 
-    # 公開終了日 = 締切
-    deadline = ""
+    # 公開終了日（掲載終了日）は fallback のみ。実際の入札締切は th/td から優先取得
+    koukai_end = ""
     for m in re.finditer(r"公開終了日\s*[\n\s]*(.{3,30})", text):
-        deadline = _reiwa_date(m.group(1))
-        if deadline:
+        koukai_end = _reiwa_date(m.group(1))
+        if koukai_end:
             break
 
-    # 公告内容・分類・調達品目分類 を th → td から直接取得
-    # （soup.get_text は改行区切りで URL が次行になるためregexでは取りこぼす）
+    # 公告内容・分類・調達品目分類・実際の締切 を th → td から直接取得
     _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
     raw_kouji = ""
     bunrui = ""
     hinmoku = ""
+    deadline = ""
+    # 入札書提出期限 / 応募期限 / 受付期限 などを優先的に取得
+    _DEADLINE_TH = [
+        "入札書提出期限", "入札書等提出期限", "入札書受付期限",
+        "応募期限", "応募締切", "受付期限", "提出期限", "申込期限",
+        "公募期限", "企画書提出期限", "入札締切",
+    ]
     for th in soup.find_all("th"):
         th_text = th.get_text(strip=True)
         td = th.find_next_sibling("td") or (th.parent.find_next_sibling("tr") and
@@ -1043,11 +1049,28 @@ def fetch_portal_detail(url: str) -> Dict[str, str]:
             continue
         val = td.get_text(" ", strip=True)
         if th_text == "公告内容" and not raw_kouji:
-            raw_kouji = _EMAIL_RE.sub("", val).strip()  # メールアドレスを除去
+            raw_kouji = _EMAIL_RE.sub("", val).strip()
         elif th_text == "分類" and not bunrui:
             bunrui = val
         elif th_text == "調達品目分類" and not hinmoku:
             hinmoku = val.strip()
+        elif any(th_text.startswith(k) for k in _DEADLINE_TH) and not deadline:
+            d = _reiwa_date(val)
+            if d:
+                deadline = d
+
+    # th/tdで取れなかった場合、公告内容テキストから抽出を試みる
+    if not deadline and raw_kouji:
+        flat_kouji = re.sub(r"\s+", " ", raw_kouji)
+        for kw in ["入札書提出期限", "入札書等提出期限", "応募期限", "提出期限", "申込期限", "受付期限"]:
+            m = re.search(re.escape(kw) + r"[：:\s　]*(.{3,30})", flat_kouji)
+            if m:
+                d = _reiwa_date(m.group(1))
+                if d:
+                    deadline = d
+                    break
+
+    # deadline は入札書提出期限のみ。公開終了日は close_date として別途返す
 
     # 公告内容（定型文・記号のみはスキップ）
     _BOILER = re.compile(r"^(入札公告のとおり|添付のとおり|別紙のとおり|公募要領のとおり|仕様書のとおり|[-－])$")
@@ -1100,6 +1123,7 @@ def fetch_portal_detail(url: str) -> Dict[str, str]:
         "schedule":    [],
         "attachments": attachments,
         "deadline":    deadline,
+        "close_date":  koukai_end,
         "choutatsushu": choutatsushu,
     }
 

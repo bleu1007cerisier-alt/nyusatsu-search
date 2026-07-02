@@ -224,9 +224,9 @@
     };
 
     const STATUS_STYLE = {
-      '募集中':     { cls: 'bg-emerald-50 text-emerald-700 border border-emerald-200', icon: '●' },
-      '受付終了':   { cls: 'bg-slate-100 text-slate-400 border border-slate-200',     icon: '○' },
-      '事業者決定': { cls: 'bg-indigo-50 text-indigo-600 border border-indigo-200',   icon: '✓' },
+      '募集中':   { cls: 'bg-emerald-50 text-emerald-700 border border-emerald-200', icon: '●' },
+      '公開中':   { cls: 'bg-amber-50 text-amber-700 border border-amber-200',       icon: '◑' },
+      '公開終了': { cls: 'bg-slate-100 text-slate-400 border border-slate-200',      icon: '○' },
     };
     function statusBadge(status) {
       const s = STATUS_STYLE[status] || { cls: 'bg-slate-100 text-slate-500', icon: '' };
@@ -267,7 +267,7 @@
       };
       statusBar.innerHTML =
         `<span class="text-xs text-slate-400 self-center mr-1">状態:</span>` +
-        btn('', data.total) + btn('募集中', sc['募集中']) + btn('受付終了', sc['受付終了']) + btn('事業者決定', sc['事業者決定']);
+        btn('', data.total) + btn('募集中', sc['募集中']) + btn('公開中', sc['公開中']) + btn('公開終了', sc['公開終了']);
 
       // タグバー
       const bar = document.getElementById('tag-bar');
@@ -402,7 +402,7 @@
                 <span class="text-xs text-slate-600 font-medium">🏢 ${esc(t.organization) || '—'}</span>
                 ${t.published_at ? `<span class="text-xs text-slate-400">掲載: ${t.published_at}</span>` : ''}
                 <span class="text-xs ${ds.cls}">${ds.label}${ds.badge}</span>
-                ${(t.status === '事業者決定' && t.result_date) ? `<span class="text-xs text-violet-500">決定: ${t.result_date}</span>` : ''}
+                ${t.result_date ? `<span class="text-xs text-violet-500">決定: ${esc(t.result_date)}</span>` : ''}
                 ${amountHtml}
               </div>
               ${awardeeHtml}

@@ -205,7 +205,7 @@ CSV_PATH = os.path.join(DATASET_DIR, "tenders.csv")
 
 FIELDNAMES = [
     "id", "title", "category", "organization", "prefecture",
-    "published_at", "deadline", "result_date", "project_code", "awardee",
+    "published_at", "deadline", "close_date", "result_date", "project_code", "awardee",
     "awardee_checked", "amount", "budget_checked", "url",
     "source_category", "summary", "detail",
     "schedule", "attachments", "attachments_checked", "tags", "source",
@@ -572,11 +572,14 @@ def main():
                 r["amount"] = info["budget"]
             if not ai_extracted.get("schedule") and info.get("schedule") and not (r.get("schedule") or "").strip():
                 r["schedule"] = json.dumps(info["schedule"], ensure_ascii=False)
-            # PORTAL: 調達種別→category を上書き（deadlineはAI抽出を優先済み）
+            # PORTAL: 調達種別→category、公開終了日→close_date を保存
             if src == "PORTAL":
                 if info.get("category"):
                     r["category"] = info["category"]
-                # AIが未抽出の場合のみスクレイパーのdeadlineを使用
+                # close_date（公開終了日）は常にスクレイパー値を使用
+                if info.get("close_date"):
+                    r["close_date"] = info["close_date"]
+                # deadline（入札書提出期限）はAI抽出を優先、なければスクレイパー値
                 if not ai_extracted.get("deadline") and info.get("deadline") and not (r.get("deadline") or "").strip():
                     r["deadline"] = info["deadline"]
             r["budget_checked"] = "1"  # 予算確認済み（空でも再取得しない）

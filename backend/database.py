@@ -25,7 +25,8 @@ class Tender(Base):
     category = Column(String(50))        # 入札 or プロポーザル
     organization = Column(String(200))   # 発注機関
     prefecture = Column(String(20))      # 都道府県
-    deadline = Column(String(50))        # 公募締切日
+    deadline = Column(String(50))        # 入札書提出期限・応募締切日
+    close_date = Column(String(50))      # 公開終了日（PORTALの掲載終了日）
     published_at = Column(String(50))    # 公募開始日（公示日）
     result_date = Column(String(50))     # 結果（事業者決定）の日付。あれば事業者決定済み
     project_code = Column(String(100))   # 事業コード（同一プロジェクト追跡用）
@@ -63,6 +64,7 @@ def init_db():
             ("schedule", "ALTER TABLE tenders ADD COLUMN schedule TEXT"),
             ("attachments", "ALTER TABLE tenders ADD COLUMN attachments TEXT"),
             ("source_category", "ALTER TABLE tenders ADD COLUMN source_category VARCHAR(200)"),
+            ("close_date", "ALTER TABLE tenders ADD COLUMN close_date VARCHAR(50)"),
         ]
         for col, ddl in migrations:
             if col not in existing:
