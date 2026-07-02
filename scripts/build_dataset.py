@@ -147,9 +147,28 @@ def _ai_extract(raw_text: str, title: str = "") -> dict:
         return {}
 
 
+# 値が「情報なし」を意味する箇条書きを判定（除外用）
+_NOINFO_VAL = _re_summary.compile(
+    r'^(記載なし|記載無し|なし|無し|無|null|None|N/?A|不明|未定|―+|-+|－+|該当なし)?\s*$',
+    _re_summary.IGNORECASE)
+
+
+def _is_noinfo_bullet(b: str) -> bool:
+    """『・履行場所: 記載なし』のような情報のない箇条書きなら True。"""
+    body = str(b).strip().lstrip("・").strip()
+    if "：" in body:
+        val = body.split("：", 1)[1]
+    elif ":" in body:
+        val = body.split(":", 1)[1]
+    else:
+        return False  # ラベルのみ（値なし）は判定対象外（そのまま残す）
+    return bool(_NOINFO_VAL.match(val.strip()))
+
+
 def _bullets_to_summary(bullets: list) -> str:
-    """箇条書きリストを summary フィールド用の文字列に変換。"""
-    return "\n".join(f"・{b}" for b in bullets if b)
+    """箇条書きリストを summary フィールド用の文字列に変換。
+    値が「記載なし」等の情報のない項目は除外する。"""
+    return "\n".join(f"・{b}" for b in bullets if b and not _is_noinfo_bullet(b))
 
 
 def _ai_split_awardee(awardee: str) -> str:

@@ -369,21 +369,29 @@
         : '';
 
       // AI要約（箇条書き形式と旧段落形式の両対応）
+      // ホームのカードでは「事業内容」だけを表示する（詳細は各案件ページで）
       function renderSummary(summary) {
         if (!summary) return '';
         const isBullets = summary.startsWith('・') || summary.includes('\n・');
+        let text = '';
         if (isBullets) {
           const lines = summary.split('\n').filter(l => l.trim());
-          const items = lines.slice(0, 5).map(l => `<li>${esc(l.replace(/^・/, ''))}</li>`).join('');
-          const more = lines.length > 5 ? `<li class="text-indigo-400">…他${lines.length - 5}項目</li>` : '';
-          return `<div class="mt-3 summary-block rounded-lg px-3 py-2.5">
-            <p class="text-xs text-indigo-400 font-medium mb-1.5 tracking-wide">✦ AI要約</p>
-            <ul class="summary-bullets">${items}${more}</ul>
-          </div>`;
+          // 「・事業内容: ○○」の行を探して値部分を取り出す
+          const jigyo = lines.find(l => /^・?\s*事業内容\s*[:：]/.test(l));
+          if (jigyo) {
+            text = jigyo.replace(/^・?\s*事業内容\s*[:：]\s*/, '').trim();
+          } else {
+            // 事業内容が無ければ先頭項目の値（ラベルがあれば除く）
+            const first = lines[0].replace(/^・/, '').trim();
+            text = first.replace(/^[^:：]{1,12}[:：]\s*/, '').trim();
+          }
+        } else {
+          text = summary;
         }
+        if (!text) return '';
         return `<div class="mt-3 summary-block rounded-lg px-3 py-2.5">
-          <p class="text-xs text-indigo-400 font-medium mb-1 tracking-wide">✦ AI要約</p>
-          <p class="text-sm text-slate-700 leading-relaxed summary-text">${esc(summary)}</p>
+          <p class="text-xs text-indigo-400 font-medium mb-1 tracking-wide">✦ 事業内容</p>
+          <p class="text-sm text-slate-700 leading-relaxed summary-text">${esc(text)}</p>
         </div>`;
       }
       const summaryHtml = renderSummary(t.summary);
