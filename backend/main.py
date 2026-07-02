@@ -40,8 +40,8 @@ init_db()
 
 DATASET_CSV = os.path.join(os.path.dirname(__file__), "../dataset/tenders.csv")
 STATUS_OPEN = "募集中"
-STATUS_CLOSED = "受付終了"
-STATUS_DECIDED = "事業者決定"
+STATUS_PUBLIC = "公開中"
+STATUS_ENDED = "公開終了"
 
 
 def load_dataset_into_db() -> int:
@@ -61,6 +61,7 @@ def load_dataset_into_db() -> int:
                     prefecture=row.get("prefecture", ""),
                     published_at=row.get("published_at", ""),
                     deadline=row.get("deadline", ""),
+                    close_date=row.get("close_date", ""),
                     result_date=row.get("result_date", ""),
                     project_code=row.get("project_code", ""),
                     awardee=row.get("awardee", ""),
@@ -88,36 +89,47 @@ def startup_event():
 
 
 def compute_status(t: Tender, today: str) -> str:
-    """状態を判定：結果あり→事業者決定、締切超過→受付終了、それ以外→募集中。
-    締切が空欄の場合は掲載日から180日超で受付終了とみなす。"""
-    if (t.result_date or "").strip():
-        return STATUS_DECIDED
-    if (t.deadline or "").strip() and t.deadline < today:
-        return STATUS_CLOSED
-    # PORTALでdeadline・detail両方空 = ページ削除済みと判断して受付終了
-    if not (t.deadline or "").strip() and not (t.detail or "").strip() and (t.source or "") == "PORTAL":
-        return STATUS_CLOSED
-    if not (t.deadline or "").strip() and (t.published_at or "").strip():
-        from datetime import date as _date, timedelta
-        try:
-            pub = _date.fromisoformat(t.published_at[:10])
-            if (_date.fromisoformat(today) - pub).days > 180:
-                return STATUS_CLOSED
-        except ValueError:
-            pass
-    return STATUS_OPEN
+    """状態を判定。
+    - 公開終了: close_date ≤ today（掲載期間終了）
+    - 募集中:   deadline ≥ today（入札受付中）
+    - 公開中:   それ以外（掲載中だが受付終了、またはdeadline不明）
+    """
+    close = (t.close_date or "").strip()
+    deadline = (t.deadline or "").strip()
+
+    if close and close < today:
+        return STATUS_ENDED
+    if deadline and deadline >= today:
+        return STATUS_OPEN
+    # deadline なし・不明の場合: close_date があれば公開中、なければ公開終了
+    if not deadline:
+        if close and close >= today:
+            return STATUS_PUBLIC
+        # close_date も不明 → published_at から180日超で公開終了とみなす
+        if (t.published_at or "").strip():
+            from datetime import date as _date
+            try:
+                pub = _date.fromisoformat(t.published_at[:10])
+                if (_date.fromisoformat(today) - pub).days > 180:
+                    return STATUS_ENDED
+            except ValueError:
+                pass
+        return STATUS_PUBLIC
+    # deadline < today（受付終了）
+    if close and close >= today:
+        return STATUS_PUBLIC   # ポータルページはまだ公開中
+    return STATUS_ENDED
 
 
 def _status_rank(status: str) -> int:
-    return {STATUS_OPEN: 0, STATUS_CLOSED: 1, STATUS_DECIDED: 2}.get(status, 3)
+    return {STATUS_OPEN: 0, STATUS_PUBLIC: 1, STATUS_ENDED: 2}.get(status, 3)
 
 
 def _sort_key(item):
-    """募集中(締切近い順)→受付終了・事業者決定(掲載日新しい順、区別なし)。"""
+    """募集中(掲載日新しい順)→公開中→公開終了(掲載日新しい順)。"""
     st = item["status"]
-    if st == STATUS_OPEN:
-        return (0, _rev(item["published_at"] or item["deadline"] or ""))
-    return (1, _rev(item["published_at"] or item["deadline"] or ""))
+    rank = _status_rank(st)
+    return (rank, _rev(item["published_at"] or item["deadline"] or ""))
 
 
 def _rev(s: str) -> str:
@@ -137,6 +149,7 @@ def _item_dict(t: Tender, today: str) -> dict:
         "organization": t.organization,
         "prefecture": t.prefecture,
         "deadline": t.deadline,
+        "close_date": t.close_date,
         "published_at": t.published_at,
         "result_date": t.result_date,
         "project_code": t.project_code,

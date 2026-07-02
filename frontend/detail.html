@@ -114,9 +114,9 @@
     }
 
     const STATUS_STYLE = {
-      '募集中':   'bg-green-100 text-green-700',
-      '受付終了': 'bg-gray-200 text-gray-600',
-      '事業者決定': 'bg-purple-100 text-purple-700',
+      '募集中':   'bg-emerald-100 text-emerald-700',
+      '公開中':   'bg-amber-100 text-amber-700',
+      '公開終了': 'bg-gray-200 text-gray-500',
     };
     function statusBadge(status) {
       return `<span class="text-xs font-medium px-2.5 py-1 rounded-full ${STATUS_STYLE[status] || 'bg-gray-100 text-gray-600'}">${esc(status)}</span>`;
@@ -172,9 +172,11 @@
       const cells = [
         `<div>🏢 <span class="text-gray-500">発注機関</span><br><span class="text-gray-800">${esc(t.organization) || '—'}</span></div>`,
         `<div>📅 <span class="text-gray-500">公示日（掲載日）</span><br><span class="text-gray-800">${esc(t.published_at) || '—'}</span></div>`,
-        `<div>⏰ <span class="text-gray-500">締切日</span><br><span class="${ds.cls}">${esc(ds.text)}${ds.badge}</span></div>`,
+        `<div>⏰ <span class="text-gray-500">入札締切日</span><br><span class="${ds.cls}">${esc(ds.text) || '記載なし'}${ds.badge}</span></div>`,
         `<div>💰 <span class="text-gray-500">予算規模</span><br><span class="text-gray-800">${esc(t.amount) || '記載なし'}</span></div>`,
       ];
+      if (t.close_date)
+        cells.push(`<div>📋 <span class="text-gray-500">公開終了日</span><br><span class="text-gray-600">${esc(t.close_date)}</span></div>`);
       if (t.result_date)
         cells.push(`<div>📆 <span class="text-gray-500">事業者決定日</span><br><span class="text-purple-700 font-medium">${esc(t.result_date)}</span></div>`);
       if (t.awardee) {
@@ -250,7 +252,7 @@
       const sim = t.similar || [];
       if (sim.length) {
         document.getElementById('similar-wrap').classList.remove('hidden');
-        const stStyle = {'募集中':'bg-green-100 text-green-700','受付終了':'bg-gray-200 text-gray-600','事業者決定':'bg-purple-100 text-purple-700'};
+        const stStyle = {'募集中':'bg-emerald-100 text-emerald-700','公開中':'bg-amber-100 text-amber-700','公開終了':'bg-gray-200 text-gray-500'};
         document.getElementById('similar').innerHTML = sim.map(s => `
           <a href="/tender/${s.id}" class="block bg-white border rounded-lg p-3 hover:shadow-md hover:border-blue-300 transition">
             <div class="flex items-center gap-2 mb-1">
