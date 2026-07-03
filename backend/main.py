@@ -352,6 +352,10 @@ DEV_SOURCES = [
      "url": "https://www.nedo.go.jp/koubo/", "desc": "新エネルギー・産業技術総合開発機構の公募"},
     {"code": "JST", "label": "JST",
      "url": "https://www.jst.go.jp/", "desc": "科学技術振興機構の公募"},
+    {"code": "JOGMEC", "label": "JOGMEC",
+     "url": "https://www.jogmec.go.jp/", "desc": "エネルギー・金属鉱物資源機構の公募"},
+    {"code": "AICHI", "label": "愛知県",
+     "url": "https://www.buppin.e-aichi.jp/", "desc": "愛知県（物品等）の入札公告"},
 ]
 
 

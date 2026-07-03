@@ -1453,6 +1453,194 @@ def fetch_jogmec_result(pdf_url: str) -> Dict[str, str]:
 
 
 # ---------------------------------------------------------------------------
+# 愛知県（あいち電子調達共同システム 物品等・県本体 groupCd=23000）
+# 公開の入札情報サービス（ログイン不要・robots制限なし・サーバーHTML）から取得する。
+# ---------------------------------------------------------------------------
+_AICHI_BASE = "https://www.buppin.e-aichi.jp/public/"
+_AICHI_GROUP = "23000"  # 愛知県本体
+_AICHI_DATE = re.compile(r"令和\s*(\d+)\s*年\s*(\d+)\s*月\s*(\d+)\s*日")
+
+
+def _aichi_dec(raw: bytes) -> str:
+    try:
+        return raw.decode("cp932")
+    except Exception:
+        return raw.decode("utf-8", "replace")
+
+
+def _aichi_iso(m) -> str:
+    y, mo, da = int(m[0]), int(m[1]), int(m[2])
+    return f"{2018 + y:04d}-{mo:02d}-{da:02d}"
+
+
+def _aichi_form_fields(html: str) -> dict:
+    """pubBiddingList フォームの hidden / select 既定値を辞書化。"""
+    m = re.search(r'<form[^>]*action="[^"]*pubBiddingList[^"]*"[^>]*>(.*?)</form>', html, re.S)
+    f = m.group(1) if m else html
+    d = {}
+    for inp in re.findall(r"<input[^>]+>", f):
+        n = re.search(r'name="([^"]+)"', inp)
+        v = re.search(r'value="([^"]*)"', inp)
+        t = re.search(r'type="([^"]+)"', inp)
+        if n and (not t or t.group(1).lower() in ("hidden", "text")):
+            d[n.group(1)] = v.group(1) if v else ""
+    for sm in re.findall(r'<select[^>]*name="([^"]+)"[^>]*>(.*?)</select>', f, re.S):
+        sel = re.search(r'<option[^>]*value="([^"]*)"[^>]*selected', sm[1])
+        first = re.search(r'<option[^>]*value="([^"]*)"', sm[1])
+        d[sm[0]] = sel.group(1) if sel else (first.group(1) if first else "")
+    return d
+
+
+def _aichi_parse_rows(html: str) -> List[Dict]:
+    import urllib.parse
+    rows = []
+    for tr in re.findall(r"<tr[^>]*>(.*?)</tr>", html, re.S):
+        if "execBiddingDetail" not in tr:
+            continue
+        cells = [re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", c)).strip()
+                 for c in re.findall(r"<td[^>]*>(.*?)</td>", tr, re.S)]
+        if len(cells) < 6:
+            continue
+        args = re.search(r"openSubWinForPub\('execBiddingDetail',\s*'pubBiddingList',\s*'([^']+)'\)", tr)
+        params = dict(urllib.parse.parse_qsl(args.group(1))) if args else {}
+        kubun = cells[1]
+        mnum = re.match(r"(\d{10,})\s*(.*)", cells[2])
+        order_num = params.get("orderNum") or (mnum.group(1) if mnum else "")
+        title = (mnum.group(2) if mnum else cells[2]).strip()
+        if not order_num or not title:
+            continue
+        dept = cells[4]
+        dates = _AICHI_DATE.findall(cells[5])
+        pub = _aichi_iso(dates[0]) if len(dates) >= 1 else ""
+        bid = _aichi_iso(dates[1]) if len(dates) >= 2 else ""
+        nend = params.get("nend", "")
+        url = (f"{_AICHI_BASE}pubBiddingList.do?methodName=execBiddingDetail"
+               f"&nend={nend}&orderNum={order_num}&groupCd={_AICHI_GROUP}")
+        rows.append({"order_num": order_num, "title": title, "kubun": kubun,
+                     "dept": dept, "published_at": pub, "deadline": bid, "url": url})
+    return rows
+
+
+def _scrape_aichi_sync(nend: str) -> List[Dict]:
+    import urllib.request, urllib.parse, http.cookiejar
+    cj = http.cookiejar.CookieJar()
+    op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
+    op.addheaders = [("User-Agent", "Mozilla/5.0")]
+
+    def get(u):
+        return _aichi_dec(op.open(u, timeout=40).read())
+
+    def post(path, data):
+        body = urllib.parse.urlencode(data).encode("cp932", "replace")
+        req = urllib.request.Request(
+            _AICHI_BASE + path, data=body,
+            headers={"User-Agent": "Mozilla/5.0",
+                     "Content-Type": "application/x-www-form-urlencoded"})
+        return _aichi_dec(op.open(req, timeout=40).read())
+
+    get(_AICHI_BASE + "pubTop.do?methodName=initDisplayForPub")
+    html = get(_AICHI_BASE + f"pubGroupTop.do?methodName=execOrderSearch&autonomyCd={_AICHI_GROUP}")
+    fields = _aichi_form_fields(html)
+    fields.update({"groupCd": _AICHI_GROUP, "nend": nend, "inputListRowLength": "100",
+                   "methodName": "execApplyListRowLengthNoCheckForPub"})
+    html = post("pubBiddingList.do", fields)
+    rows = _aichi_parse_rows(html)
+    pages = 0
+    while ("execPubNext" in html) and pages < 30:
+        nx = _aichi_form_fields(html)
+        nx.update({"groupCd": _AICHI_GROUP, "nend": nend, "inputListRowLength": "100",
+                   "methodName": "execPubNext"})
+        nx["listPage"] = str(int(nx.get("listPage", "1")) + 1)
+        html2 = post("pubBiddingList.do", nx)
+        new = _aichi_parse_rows(html2)
+        prev_last = rows[-1]["order_num"] if rows else ""
+        if not new or new[-1]["order_num"] == prev_last:
+            break
+        rows += new
+        html = html2
+        pages += 1
+
+    # 重複除去（order_num）
+    seen, uniq = set(), []
+    for r in rows:
+        if r["order_num"] in seen:
+            continue
+        seen.add(r["order_num"])
+        uniq.append(r)
+
+    results = []
+    for r in uniq:
+        title = r["title"]
+        cat = "プロポーザル" if ("プロポーザル" in title or "公募型" in title) else "入札"
+        dept = r["dept"]
+        results.append({
+            "title":           title,
+            "category":        cat,
+            "organization":    ("愛知県 " + dept).strip(),
+            "prefecture":      "愛知県",
+            "published_at":    r["published_at"],
+            "deadline":        r["deadline"],
+            "result_date":     "",
+            "result_url":      "",
+            "project_code":    f"AICHI-{r['order_num']}",
+            "awardee":         "",
+            "url":             r["url"],
+            "source":          "AICHI",
+            "amount":          "",
+            "source_category": r["kubun"],
+            "summary":         "",
+            "detail":          "",
+            "tags":            ",".join(generate_tags(title, dept)),
+        })
+    logger.info(f"愛知県: {len(results)}件取得（nend={nend}）")
+    return results
+
+
+async def scrape_aichi(nend: str = "") -> List[Dict]:
+    """愛知県本体（物品等）の入札公告を取得する。nend未指定なら現在の年度。"""
+    if not nend:
+        from datetime import date
+        today = date.today()
+        fy = today.year if today.month >= 4 else today.year - 1
+        nend = str(fy)
+    try:
+        return await asyncio.to_thread(_scrape_aichi_sync, nend)
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"愛知県スクレイパー例外: {e}")
+        return []
+
+
+def fetch_aichi_detail(url: str) -> Optional[Dict]:
+    """愛知県の入札公告 詳細ページから本文テキストを取得する（事業内容の材料）。"""
+    import urllib.request, http.cookiejar
+    try:
+        cj = http.cookiejar.CookieJar()
+        op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
+        op.addheaders = [("User-Agent", "Mozilla/5.0")]
+        # セッション確立（詳細ページ単体でも表示できるよう先にトップを踏む）
+        op.open(_AICHI_BASE + "pubTop.do?methodName=initDisplayForPub", timeout=40).read()
+        html = _aichi_dec(op.open(url, timeout=40).read())
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"愛知県詳細取得失敗 {url}: {e}")
+        return None
+    soup = BeautifulSoup(html, "html.parser")
+    # メインの詳細テーブル（th/td）を「ラベル: 値」で連結
+    parts = []
+    for tr in soup.find_all("tr"):
+        th = tr.find("th")
+        td = tr.find("td")
+        if th and td:
+            label = th.get_text(" ", strip=True)
+            val = td.get_text(" ", strip=True)
+            if label and val and len(val) > 1:
+                parts.append(f"{label}: {val}")
+    detail = "\n".join(parts)
+    if len(detail) < 30:  # フォールバック：本文全体
+        detail = re.sub(r"\s{2,}", " ", soup.get_text("\n", strip=True))
+    return {"detail": detail[:5000], "budget": "", "schedule": [], "attachments": []}
+
+
+# ---------------------------------------------------------------------------
 # 全スクレイパー統合
 # ---------------------------------------------------------------------------
 async def run_all_scrapers(portal_date_from: str = "", jogmec_max_id: int = 0) -> List[Dict]:
@@ -1468,6 +1656,7 @@ async def run_all_scrapers(portal_date_from: str = "", jogmec_max_id: int = 0) -
         scrape_jst(),
         scrape_portal(date_from=portal_date_from),
         scrape_jogmec(max_id=jogmec_max_id),
+        scrape_aichi(),
     ]
 
     scraped = await asyncio.gather(*tasks, return_exceptions=True)

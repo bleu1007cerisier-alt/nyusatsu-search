@@ -223,7 +223,7 @@ sys.path.insert(0, os.path.join(ROOT, "backend"))
 from scraper import (  # noqa: E402
     run_all_scrapers, fetch_nedo_detail, fetch_nedo_result,
     fetch_jst_detail, fetch_portal_detail, fetch_portal_award,
-    fetch_jogmec_detail, _extract_pdf_budget,
+    fetch_jogmec_detail, fetch_aichi_detail, _extract_pdf_budget,
 )
 from datetime import date, timedelta
 import storage  # noqa: E402
@@ -547,7 +547,7 @@ def main():
 
     # 【増分】概要が未取得、または予算が未取得で未確認の案件だけ取得。
     # 本文に予算が無ければ公募要領PDFから補完。一度確認した案件は再取得しない。
-    _FETCH_SOURCES = {"NEDO", "JST", "PORTAL", "JOGMEC"}
+    _FETCH_SOURCES = {"NEDO", "JST", "PORTAL", "JOGMEC", "AICHI"}
 
     # PORTAL: ゴミ記号・ヘッダーのみの detail をリセット（→ 再取得 & AI要約の対象に）。
     # 空の detail は「取得済みだが portal 側に情報がない」ため再取得しない（無限ループ防止）。
@@ -583,6 +583,8 @@ def main():
             info = fetch_portal_detail(r["url"])
         elif src == "JOGMEC":
             info = fetch_jogmec_detail(r["url"])
+        elif src == "AICHI":
+            info = fetch_aichi_detail(r["url"])
         else:
             info = fetch_nedo_detail(r["url"])  # 概要＋予算（本文→無ければPDF）＋予定
         if info:  # ページ取得成功
