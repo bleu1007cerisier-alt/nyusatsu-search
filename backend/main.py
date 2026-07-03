@@ -2,7 +2,7 @@ from fastapi import FastAPI, Depends, Query, BackgroundTasks, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, defer
 from sqlalchemy import or_, and_
 from typing import Optional, List
 import asyncio
@@ -44,8 +44,16 @@ STATUS_PUBLIC = "公開中"
 STATUS_ENDED = "公開終了"
 
 
+# /api/stats・一覧の結果キャッシュ（DB再読込・日付変更で無効化）
+_STATS_CACHE: dict = {"date": None, "data": None}
+_ITEMS_CACHE: dict = {"date": None, "items": None}
+
+
 def load_dataset_into_db() -> int:
     """蓄積済みCSV（dataset/tenders.csv）をDBへ読み込む。サイト側はスクレイピングしない。"""
+    global _STATS_CACHE, _ITEMS_CACHE
+    _STATS_CACHE = {"date": None, "data": None}  # データ更新でキャッシュ無効化
+    _ITEMS_CACHE = {"date": None, "items": None}
     if not os.path.exists(DATASET_CSV):
         return 0
     db = SessionLocal()
@@ -158,6 +166,19 @@ def _rev(s: str) -> str:
     return "".join(chr(255 - ord(c)) for c in s) if s else "\xff" * 10
 
 
+def _get_sorted_items(db: Session, today: str) -> list:
+    """全案件を軽量dict化してソート済みでキャッシュし、以降は使い回す。
+    detail 本文は含めない（一覧・検索に不要で重いため）。"""
+    global _ITEMS_CACHE
+    if _ITEMS_CACHE.get("items") is not None and _ITEMS_CACHE.get("date") == today:
+        return _ITEMS_CACHE["items"]
+    rows = db.query(Tender).options(defer(Tender.detail)).all()
+    items = [_item_dict(t, today) for t in rows]
+    items.sort(key=_sort_key)
+    _ITEMS_CACHE = {"date": today, "items": items}
+    return items
+
+
 def _tag_list(t: Tender):
     return [x for x in (t.tags or "").split(",") if x]
 
@@ -198,40 +219,31 @@ def search_tenders(
     limit: int = 50,
     db: Session = Depends(get_db),
 ):
-    query = db.query(Tender)
+    today = date.today().isoformat()
+    # 全件をメモリにキャッシュ（ソート済み）。以降はメモリ上で絞り込み→スライスし、
+    # リクエストごとの全件DB読み込み・dict化・ソートを避ける（一覧表示を高速化）。
+    items = _get_sorted_items(db, today)
 
     if q:
-        query = query.filter(
-            or_(
-                Tender.title.contains(q),
-                Tender.organization.contains(q),
-                Tender.summary.contains(q),
-                Tender.detail.contains(q),
-                Tender.tags.contains(q),
-            )
-        )
+        ql = q.lower()
+        items = [i for i in items if ql in (
+            (i["title"] or "") + " " + (i["organization"] or "") + " "
+            + (i["summary"] or "") + " " + " ".join(i["tags"])).lower()]
     if category:
-        query = query.filter(Tender.category == category)
+        items = [i for i in items if i["category"] == category]
     if prefecture:
-        query = query.filter(Tender.prefecture == prefecture)
+        items = [i for i in items if i["prefecture"] == prefecture]
     if organization:
-        query = query.filter(Tender.organization == organization)
+        items = [i for i in items if i["organization"] == organization]
     if source:
-        query = query.filter(Tender.source == source)
+        items = [i for i in items if i["source"] == source]
     if tag:
-        query = query.filter(Tender.tags.contains(tag))
-
-    today = date.today().isoformat()
-    items = [_item_dict(t, today) for t in query.all()]
-
-    # 状態フィルタ
+        items = [i for i in items if tag in i["tags"]]
     if status in (STATUS_OPEN, STATUS_PUBLIC, STATUS_ENDED):
         items = [i for i in items if i["status"] == status]
 
-    items.sort(key=_sort_key)
     total = len(items)
     page = items[skip:skip + limit]
-
     return {"total": total, "items": page}
 
 
@@ -275,29 +287,24 @@ def get_tender(tender_id: int, db: Session = Depends(get_db)):
     data["related"] = related
 
     # テーマが近い案件（タグの一致数でスコア。自分・同名は除外）
+    # キャッシュ済みの軽量リストから計算（詳細表示ごとの全件DB走査を避ける）。
     my_tags = set(_tag_list(t))
-    similar = []
     if my_tags:
         related_titles = {r["title"] for r in related} | {t.title}
-        for s in db.query(Tender).filter(Tender.id != t.id).all():
-            if s.title in related_titles:
+        scored = []
+        for s in _get_sorted_items(db, today):
+            if s["id"] == t.id or s["title"] in related_titles:
                 continue
-            overlap = my_tags & set(_tag_list(s))
+            overlap = my_tags & set(s["tags"])
             if overlap:
-                similar.append((len(overlap), s))
-        # 一致数の多い順→受付中優先→新しい順
-        def _rank(pair):
-            n, s = pair
-            st = compute_status(s, today)
-            return (-n, 0 if st == STATUS_OPEN else 1, _rev(s.published_at or ""))
-        similar.sort(key=_rank)
+                scored.append((len(overlap), s))
+        scored.sort(key=lambda p: (-p[0],
+                                   0 if p[1]["status"] == STATUS_OPEN else 1,
+                                   _rev(p[1]["published_at"] or "")))
         data["similar"] = [
-            {
-                "id": s.id, "title": s.title, "status": compute_status(s, today),
-                "deadline": s.deadline, "tags": _tag_list(s),
-                "match": n,
-            }
-            for n, s in similar[:5]
+            {"id": s["id"], "title": s["title"], "status": s["status"],
+             "deadline": s["deadline"], "tags": s["tags"], "match": n}
+            for n, s in scored[:5]
         ]
     else:
         data["similar"] = []
@@ -307,7 +314,14 @@ def get_tender(tender_id: int, db: Session = Depends(get_db)):
 @app.get("/api/stats")
 def get_stats(db: Session = Depends(get_db)):
     today = date.today().isoformat()
-    all_items = db.query(Tender).all()
+    # 統計はDB内容が変わらない限り毎回同じ。当日分をキャッシュして再計算を避ける
+    # （ホーム表示のたびに全件走査するのを防ぐ）。
+    global _STATS_CACHE
+    if _STATS_CACHE.get("data") is not None and _STATS_CACHE.get("date") == today:
+        return _STATS_CACHE["data"]
+
+    # detail 本文は統計に不要なので読み込まない
+    all_items = db.query(Tender).options(defer(Tender.detail)).all()
     total = len(all_items)
 
     status_counts = {STATUS_OPEN: 0, STATUS_PUBLIC: 0, STATUS_ENDED: 0}
@@ -331,7 +345,7 @@ def get_stats(db: Session = Depends(get_db)):
     nyusatsu = sum(1 for t in all_items if t.category == "入札")
     proposal = sum(1 for t in all_items if t.category == "プロポーザル")
 
-    return {
+    data = {
         "total": total,
         "nyusatsu": nyusatsu,
         "proposal": proposal,
@@ -342,6 +356,8 @@ def get_stats(db: Session = Depends(get_db)):
         # 開発者リンクの表示可否（環境変数 DEV_PAGE_PUBLIC=0 で非表示）
         "dev_link_visible": os.environ.get("DEV_PAGE_PUBLIC", "1") != "0",
     }
+    _STATS_CACHE = {"date": today, "data": data}
+    return data
 
 
 # 参照しているデータソース（スクレイピング対象サイト）
