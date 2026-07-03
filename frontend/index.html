@@ -153,6 +153,11 @@
           <option value="">すべての機関</option>
         </select>
 
+        <!-- 参照サイト（データソース） -->
+        <select id="source" class="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-slate-50 focus:outline-none focus:ring-2 focus:ring-blue-400">
+          <option value="">すべての参照サイト</option>
+        </select>
+
         <!-- リセット -->
         <button onclick="reset()"
           class="border border-slate-200 hover:bg-slate-100 text-slate-500 px-4 py-2 rounded-lg text-sm transition">
@@ -289,6 +294,17 @@
         msel.dataset.filled = '1';
       }
 
+      // 参照サイト（データソース）プルダウン
+      const ssel = document.getElementById('source');
+      if (ssel && !ssel.dataset.filled && (data.sources || []).length) {
+        const cur = ssel.value;
+        ssel.innerHTML = '<option value="">すべての参照サイト</option>' +
+          data.sources.map(code =>
+            `<option value="${esc(code)}">${esc(srcLabel(code))}</option>`).join('');
+        ssel.value = cur;
+        ssel.dataset.filled = '1';
+      }
+
       const devWrap = document.getElementById('dev-link-wrap');
       if (devWrap && data.dev_link_visible) devWrap.classList.remove('hidden');
     }
@@ -318,12 +334,14 @@
       const category = document.getElementById('category').value;
       const prefecture = document.getElementById('prefecture').value;
       const ministry = document.getElementById('ministry').value;
+      const source = document.getElementById('source').value;
 
       const params = new URLSearchParams({ skip: page * PAGE_SIZE, limit: PAGE_SIZE });
       if (q) params.append('q', q);
       if (category) params.append('category', category);
       if (prefecture) params.append('prefecture', prefecture);
       if (ministry) params.append('organization', ministry);
+      if (source) params.append('source', source);
       if (currentTag) params.append('tag', currentTag);
       if (currentStatus) params.append('status', currentStatus);
 
@@ -452,6 +470,7 @@
       document.getElementById('category').value = '';
       document.getElementById('prefecture').value = '';
       document.getElementById('ministry').value = '';
+      document.getElementById('source').value = '';
       currentTag = '';
       currentStatus = '';
       document.getElementById('active-tag').classList.add('hidden');

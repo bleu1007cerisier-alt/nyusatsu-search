@@ -12,7 +12,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from database import init_db, get_db, Tender, SessionLocal
-from datetime import date
+from datetime import date, timedelta
 import csv
 import json
 
@@ -383,6 +383,12 @@ def dev_status():
     """開発者ページ用：自動更新履歴・データソースの取得状況・AIコスト推定を返す。"""
     today = date.today().isoformat()
 
+    # 直近7日の新規判定用のしきい値日付
+    try:
+        _week_ago = (date.fromisoformat(today) - timedelta(days=7)).isoformat()
+    except Exception:
+        _week_ago = today
+
     # ソース別の取得状況をCSVから集計（last_seen はDB未保持のためCSVを直接読む）
     by_source = {}
     total = 0
@@ -393,11 +399,19 @@ def dev_status():
             for row in csv.DictReader(f):
                 total += 1
                 s = row.get("source") or "?"
-                d = by_source.setdefault(s, {"count": 0, "last_seen": "", "open": 0})
+                d = by_source.setdefault(
+                    s, {"count": 0, "last_seen": "", "open": 0,
+                        "last_new": "", "new_7d": 0})
                 d["count"] += 1
                 ls = (row.get("last_seen") or "")
                 if ls > d["last_seen"]:
                     d["last_seen"] = ls
+                # 新規取得の指標：first_seen（初回取得日）
+                fs = (row.get("first_seen") or "")
+                if fs > d["last_new"]:
+                    d["last_new"] = fs
+                if fs and fs[:10] >= _week_ago:
+                    d["new_7d"] += 1
                 # 募集中＝結果未確定 かつ 締切が今日以降（または未設定）
                 result_date = (row.get("result_date") or "").strip()
                 deadline = (row.get("deadline") or "").strip()
@@ -411,7 +425,9 @@ def dev_status():
 
     sources = []
     for src in DEV_SOURCES:
-        info = by_source.get(src["code"], {"count": 0, "last_seen": "", "open": 0})
+        info = by_source.get(src["code"],
+                             {"count": 0, "last_seen": "", "open": 0,
+                              "last_new": "", "new_7d": 0})
         last_seen = info["last_seen"]
         healthy = False
         if last_seen[:10]:
@@ -426,6 +442,9 @@ def dev_status():
             "open": info["open"],
             "last_seen": last_seen,
             "healthy": healthy,
+            "last_new": info["last_new"],       # 最新の新規取得日(first_seen)
+            "new_7d": info["new_7d"],           # 直近7日の新規件数
+            "has_recent_new": info["new_7d"] > 0,
         })
 
     # 自動更新履歴・AIコスト
