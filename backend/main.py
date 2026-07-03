@@ -372,6 +372,9 @@ DEV_SOURCES = [
      "url": "https://www.jogmec.go.jp/", "desc": "エネルギー・金属鉱物資源機構の公募"},
     {"code": "AICHI", "label": "愛知県",
      "url": "https://www.buppin.e-aichi.jp/", "desc": "愛知県（物品等）の入札公告"},
+    {"code": "TOKYO", "label": "東京都",
+     "url": "https://www.my.metro.tokyo.lg.jp/business/search/?category=188514",
+     "desc": "東京都の事業者募集・公募"},
 ]
 
 

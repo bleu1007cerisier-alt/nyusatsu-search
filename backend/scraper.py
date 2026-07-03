@@ -1641,6 +1641,123 @@ def fetch_aichi_detail(url: str) -> Optional[Dict]:
 
 
 # ---------------------------------------------------------------------------
+# 東京都（My TOKYO 事業者募集＝公募/委託/事業者募集）
+# www.my.metro.tokyo.lg.jp の公開検索（robots許可・ログイン不要・サーバーHTML）。
+# 1ページに全件（先頭はHTML、残りは articleObj のJSデータ）が含まれる。
+# ※競争入札(工事/物品)は都の電子調達システム内のみでrobots禁止のため対象外。
+# ---------------------------------------------------------------------------
+_TOKYO_SEARCH = "https://www.my.metro.tokyo.lg.jp/business/search/?category=188514"
+_TOKYO_BASE = "https://www.my.metro.tokyo.lg.jp"
+
+
+def _tokyo_norm_date(s: str) -> str:
+    s = (s or "").strip()
+    m = re.match(r"(\d{4})-(\d{2})-(\d{2})", s)
+    if m:
+        return f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+    m = re.match(r"(\d{4})年(\d{1,2})月(\d{1,2})日", s)
+    if m:
+        return f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+    return ""
+
+
+def _scrape_tokyo_sync() -> List[Dict]:
+    import urllib.request
+    op = urllib.request.build_opener()
+    op.addheaders = [("User-Agent", "Mozilla/5.0")]
+    raw = op.open(_TOKYO_SEARCH, timeout=40).read()
+    h = raw.decode("utf-8", "replace")
+
+    found = {}  # url -> {title, date}
+    # (1) 先頭に描画されているアンカー
+    for m in re.finditer(r'<a[^>]+href="([^"]*/w/[0-9][^"?]*)"[^>]*>(.*?)</a>', h, re.S):
+        url = m.group(1).split("?")[0]
+        inner = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", m.group(2))).strip()
+        dm = re.search(r"\d{4}年\d{1,2}月\d{1,2}日", inner)
+        date = _tokyo_norm_date(dm.group(0)) if dm else ""
+        title = re.sub(r"\d{4}年\d{1,2}月\d{1,2}日", "", inner).strip()
+        if title and len(title) > 5:
+            found.setdefault(url, {"title": title, "date": date})
+    # (2) 「もっと見る」用の埋め込みデータ articleObj.id/url/title/date
+    for b in re.split(r"articleObj\s*=\s*new Array\(\)\s*;", h)[1:]:
+        d = {}
+        for k, v in re.findall(r'articleObj\.(\w+)\s*=\s*"([^"]*)"\s*;', b):
+            d[k] = v
+        url = (d.get("url") or "").split("?")[0]
+        if url and d.get("title"):
+            found.setdefault(url, {"title": d["title"].strip(),
+                                   "date": _tokyo_norm_date(d.get("date", ""))})
+
+    results = []
+    for url, info in found.items():
+        if "/w/" not in url:
+            continue
+        wid = url.rstrip("/").split("/w/")[-1]
+        title = info["title"]
+        cat = "入札" if "入札" in title else "プロポーザル"
+        results.append({
+            "title":           title,
+            "category":        cat,
+            "organization":    "東京都",
+            "prefecture":      "東京都",
+            "published_at":    info["date"],
+            "deadline":        "",
+            "result_date":     "",
+            "result_url":      "",
+            "project_code":    f"TOKYO-{wid}",
+            "awardee":         "",
+            "url":             url,
+            "source":          "TOKYO",
+            "amount":          "",
+            "source_category": "事業者募集",
+            "summary":         "",
+            "detail":          "",
+            "tags":            ",".join(generate_tags(title)),
+        })
+    logger.info(f"東京都: {len(results)}件取得")
+    return results
+
+
+async def scrape_tokyo() -> List[Dict]:
+    """東京都（事業者募集・公募）を取得する。"""
+    try:
+        return await asyncio.to_thread(_scrape_tokyo_sync)
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"東京都スクレイパー例外: {e}")
+        return []
+
+
+def fetch_tokyo_detail(url: str) -> Optional[Dict]:
+    """東京都 My TOKYO の記事ページから本文テキストを取得する（事業内容の材料）。"""
+    import urllib.request
+    try:
+        op = urllib.request.build_opener()
+        op.addheaders = [("User-Agent", "Mozilla/5.0")]
+        html = op.open(url, timeout=40).read().decode("utf-8", "replace")
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"東京都詳細取得失敗 {url}: {e}")
+        return None
+    soup = BeautifulSoup(html, "html.parser")
+    # 記事本文領域を優先的に抽出
+    main = (soup.find("main") or soup.find("article")
+            or soup.find(attrs={"class": re.compile(r"article|content|body|w-article", re.I)}))
+    node = main if main else soup
+    # ナビ・スクリプト等を除去
+    for tag in node.find_all(["script", "style", "nav", "header", "footer"]):
+        tag.decompose()
+    text = re.sub(r"\n{3,}", "\n\n", node.get_text("\n", strip=True))
+    # 添付PDFリンク
+    attachments = []
+    for a in (main or soup).find_all("a", href=True):
+        href = a["href"]
+        if re.search(r"\.pdf($|\?)", href, re.I):
+            name = a.get_text(" ", strip=True) or "添付資料"
+            full = href if href.startswith("http") else _TOKYO_BASE + href
+            attachments.append({"name": name, "url": full, "kind": "公募要領"})
+    return {"detail": text[:6000], "budget": "", "schedule": [], "attachments": attachments}
+
+
+# ---------------------------------------------------------------------------
 # 全スクレイパー統合
 # ---------------------------------------------------------------------------
 async def run_all_scrapers(portal_date_from: str = "", jogmec_max_id: int = 0) -> List[Dict]:
@@ -1657,6 +1774,7 @@ async def run_all_scrapers(portal_date_from: str = "", jogmec_max_id: int = 0) -
         scrape_portal(date_from=portal_date_from),
         scrape_jogmec(max_id=jogmec_max_id),
         scrape_aichi(),
+        scrape_tokyo(),
     ]
 
     scraped = await asyncio.gather(*tasks, return_exceptions=True)
