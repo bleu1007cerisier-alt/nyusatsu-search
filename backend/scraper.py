@@ -1610,8 +1610,99 @@ async def scrape_aichi(nend: str = "") -> List[Dict]:
         return []
 
 
+# 愛知県 公募型プロポーザル（各部局が pref.aichi.jp で個別公示。まとめページから収集）
+_AICHI_PROP_LIST = "https://www.pref.aichi.jp/life/5/19/66/"
+_PREF_AICHI = "https://www.pref.aichi.jp"
+
+
+def _scrape_aichi_proposal_sync() -> List[Dict]:
+    import urllib.request
+    op = urllib.request.build_opener()
+    op.addheaders = [("User-Agent", "Mozilla/5.0")]
+    h = op.open(_AICHI_PROP_LIST, timeout=40).read().decode("utf-8", "replace")
+    results, seen = [], set()
+    for m in re.finditer(r'<a[^>]+href="([^"]+)"[^>]*>(.*?)</a>', h, re.S):
+        href, inner = m.group(1), m.group(2)
+        title = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", inner)).strip()
+        # 記事ページ（.html）かつ 募集・委託・公募・プロポーザル系のみ
+        if not re.search(r"\.html?($|\?)", href):
+            continue
+        if not re.search(r"募集|委託|公募|プロポーザル|選定|企画提案", title):
+            continue
+        # 先頭の【…】更新マーカーを除去
+        title = re.sub(r"^【[^】]*】\s*", "", title).strip()
+        if len(title) < 6:
+            continue
+        url = href if href.startswith("http") else _PREF_AICHI + href
+        if url in seen:
+            continue
+        seen.add(url)
+        slug = re.sub(r"[^A-Za-z0-9_.\-]", "_", url.split("//", 1)[-1])[-60:]
+        results.append({
+            "title":           title,
+            "category":        "プロポーザル",
+            "organization":    "愛知県",
+            "prefecture":      "愛知県",
+            "published_at":    "",
+            "deadline":        "",
+            "result_date":     "",
+            "result_url":      "",
+            "project_code":    f"AICHI-P-{slug}",
+            "awardee":         "",
+            "url":             url,
+            "source":          "AICHI",
+            "amount":          "",
+            "source_category": "公募型プロポーザル",
+            "summary":         "",
+            "detail":          "",
+            "tags":            ",".join(generate_tags(title)),
+        })
+    logger.info(f"愛知県プロポーザル: {len(results)}件取得")
+    return results
+
+
+async def scrape_aichi_proposal() -> List[Dict]:
+    """愛知県の公募型プロポーザル一覧（pref.aichi.jp）を取得する。"""
+    try:
+        return await asyncio.to_thread(_scrape_aichi_proposal_sync)
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"愛知県プロポーザルスクレイパー例外: {e}")
+        return []
+
+
+def _fetch_pref_aichi_article(url: str) -> Optional[Dict]:
+    """pref.aichi.jp の記事ページ本文を取得する（プロポーザル公募の事業内容材料）。"""
+    import urllib.request
+    try:
+        op = urllib.request.build_opener()
+        op.addheaders = [("User-Agent", "Mozilla/5.0")]
+        html = op.open(url, timeout=40).read().decode("utf-8", "replace")
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"愛知県プロポーザル詳細取得失敗 {url}: {e}")
+        return None
+    soup = BeautifulSoup(html, "html.parser")
+    main = (soup.find("main") or soup.find("article")
+            or soup.find(id=re.compile(r"content|main", re.I))
+            or soup.find(attrs={"class": re.compile(r"article|content|honbun|main", re.I)}))
+    node = main if main else soup
+    for tag in node.find_all(["script", "style", "nav", "header", "footer"]):
+        tag.decompose()
+    text = re.sub(r"\n{3,}", "\n\n", node.get_text("\n", strip=True))
+    attachments = []
+    for a in (main or soup).find_all("a", href=True):
+        href = a["href"]
+        if re.search(r"\.pdf($|\?)", href, re.I):
+            name = a.get_text(" ", strip=True) or "添付資料"
+            full = href if href.startswith("http") else _PREF_AICHI + href
+            attachments.append({"name": name, "url": full, "kind": "公募要領"})
+    return {"detail": text[:6000], "budget": "", "schedule": [], "attachments": attachments}
+
+
 def fetch_aichi_detail(url: str) -> Optional[Dict]:
-    """愛知県の入札公告 詳細ページから本文テキストを取得する（事業内容の材料）。"""
+    """愛知県の詳細を取得する。pref.aichi.jp（プロポーザル記事）と
+    buppin（入札公告詳細）の両方に対応。"""
+    if "pref.aichi.jp" in url:
+        return _fetch_pref_aichi_article(url)
     import urllib.request, http.cookiejar
     try:
         cj = http.cookiejar.CookieJar()
@@ -1774,6 +1865,7 @@ async def run_all_scrapers(portal_date_from: str = "", jogmec_max_id: int = 0) -
         scrape_portal(date_from=portal_date_from),
         scrape_jogmec(max_id=jogmec_max_id),
         scrape_aichi(),
+        scrape_aichi_proposal(),
         scrape_tokyo(),
     ]
 
