@@ -401,8 +401,22 @@ def dev_status():
                 s = row.get("source") or "?"
                 d = by_source.setdefault(
                     s, {"count": 0, "last_seen": "", "open": 0,
-                        "last_new": "", "new_7d": 0})
+                        "last_new": "", "new_7d": 0,
+                        "nyusatsu": 0, "proposal": 0, "awardee": 0,
+                        "attachments": 0, "summary": 0})
                 d["count"] += 1
+                # 星取表（何が取れているか）用の集計
+                cat = (row.get("category") or "")
+                if "入札" in cat:
+                    d["nyusatsu"] += 1
+                if "プロポーザル" in cat or "公募" in cat:
+                    d["proposal"] += 1
+                if (row.get("awardee") or "").strip():
+                    d["awardee"] += 1
+                if (row.get("attachments") or "").strip():
+                    d["attachments"] += 1
+                if (row.get("summary") or "").strip():
+                    d["summary"] += 1
                 ls = (row.get("last_seen") or "")
                 if ls > d["last_seen"]:
                     d["last_seen"] = ls
@@ -427,7 +441,9 @@ def dev_status():
     for src in DEV_SOURCES:
         info = by_source.get(src["code"],
                              {"count": 0, "last_seen": "", "open": 0,
-                              "last_new": "", "new_7d": 0})
+                              "last_new": "", "new_7d": 0,
+                              "nyusatsu": 0, "proposal": 0, "awardee": 0,
+                              "attachments": 0, "summary": 0})
         last_seen = info["last_seen"]
         healthy = False
         if last_seen[:10]:
@@ -445,6 +461,12 @@ def dev_status():
             "last_new": info["last_new"],       # 最新の新規取得日(first_seen)
             "new_7d": info["new_7d"],           # 直近7日の新規件数
             "has_recent_new": info["new_7d"] > 0,
+            # 星取表（このソースから何が取れているか）
+            "nyusatsu": info["nyusatsu"],       # 入札 件数
+            "proposal": info["proposal"],       # プロポーザル/公募 件数
+            "awardee": info["awardee"],         # 落札者(決定事業者) 件数
+            "attachments": info["attachments"], # 添付資料あり 件数
+            "summary": info["summary"],         # AI要約あり 件数
         })
 
     # 自動更新履歴・AIコスト

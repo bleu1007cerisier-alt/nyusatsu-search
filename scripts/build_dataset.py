@@ -442,9 +442,12 @@ def load_existing() -> dict:
 def main():
     from datetime import datetime, timezone
     os.makedirs(DATASET_DIR, exist_ok=True)
-    today = date.today().isoformat()
-    # last_seen 用の日時（JST = UTC+9、分まで）
-    now_jst = (datetime.now(timezone.utc) + timedelta(hours=9)).strftime("%Y-%m-%d %H:%M")
+    # JST（UTC+9）基準に統一。GitHub Actions は UTC で動くため、date.today() だと
+    # 深夜帯(JST)の実行が前日扱いになり、first_seen(新規取得日)が履歴表示(JST)と1日ずれる。
+    _now_jst = datetime.now(timezone.utc) + timedelta(hours=9)
+    today = _now_jst.strftime("%Y-%m-%d")
+    # last_seen 用の日時（JST、分まで）
+    now_jst = _now_jst.strftime("%Y-%m-%d %H:%M")
 
     existing = load_existing()
     print(f"既存データ: {len(existing)}件")
