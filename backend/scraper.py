@@ -1732,6 +1732,82 @@ def fetch_aichi_detail(url: str) -> Optional[Dict]:
 
 
 # ---------------------------------------------------------------------------
+def fetch_aichi_results(nend: str = "") -> Dict:
+    """愛知県本体の入札結果一覧から {案件番号(orderNum): {awardee, amount, result_date}}
+    を返す。決定事業者トラッキング用（execResult ページを一括取得）。"""
+    import urllib.request, urllib.parse, http.cookiejar
+    if not nend:
+        from datetime import date
+        today = date.today()
+        nend = str(today.year if today.month >= 4 else today.year - 1)
+    cj = http.cookiejar.CookieJar()
+    op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
+    op.addheaders = [("User-Agent", "Mozilla/5.0")]
+
+    def get(u):
+        return _aichi_dec(op.open(u, timeout=40).read())
+
+    def post(path, data):
+        body = urllib.parse.urlencode(data).encode("cp932", "replace")
+        req = urllib.request.Request(
+            _AICHI_BASE + path, data=body,
+            headers={"User-Agent": "Mozilla/5.0",
+                     "Content-Type": "application/x-www-form-urlencoded"})
+        return _aichi_dec(op.open(req, timeout=40).read())
+
+    def parse(html):
+        out = {}
+        for tr in re.findall(r"<tr[^>]*>(.*?)</tr>", html, re.S):
+            if "orderNum=" not in tr:
+                continue
+            on = re.search(r"orderNum=([0-9]+)", tr)
+            cells = [re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", c)).strip()
+                     for c in re.findall(r"<td[^>]*>(.*?)</td>", tr, re.S)]
+            if not on or len(cells) < 6:
+                continue
+            rdate = _AICHI_DATE.findall(cells[4])
+            result_date = _aichi_iso(rdate[0]) if rdate else ""
+            res_cell = cells[5]  # 落札者 ＋ 金額
+            am = re.search(r"[0-9][0-9,]*\s*円", res_cell)
+            amount = am.group(0).replace(" ", "") if am else ""
+            awardee = (res_cell[:am.start()] if am else res_cell).strip()
+            # 落札者なし・中止・不調はスキップ
+            if not awardee or re.search(r"中止|不調|取消|落札者なし|なし$", awardee):
+                continue
+            out[on.group(1)] = {"awardee": awardee, "amount": amount,
+                                "result_date": result_date}
+        return out
+
+    try:
+        get(_AICHI_BASE + "pubTop.do?methodName=initDisplayForPub")
+        html = get(_AICHI_BASE +
+                   f"pubGroupTop.do?methodName=execOrderSearch&autonomyCd={_AICHI_GROUP}")
+        fields = _aichi_form_fields(html)
+        fields.update({"groupCd": _AICHI_GROUP, "nend": nend,
+                       "inputListRowLength": "100", "methodName": "execResult"})
+        html = post("pubBiddingList.do", fields)
+        results = parse(html)
+        pages = 0
+        while ("execPubNext" in html) and pages < 30:
+            nx = _aichi_form_fields(html)
+            nx.update({"groupCd": _AICHI_GROUP, "nend": nend,
+                       "inputListRowLength": "100", "methodName": "execPubNext"})
+            nx["listPage"] = str(int(nx.get("listPage", "1")) + 1)
+            html2 = post("pubBiddingList.do", nx)
+            new = parse(html2)
+            if not new or set(new) <= set(results):
+                break
+            results.update(new)
+            html = html2
+            pages += 1
+        logger.info(f"愛知県 入札結果: {len(results)}件（落札者あり・nend={nend}）")
+        return results
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"愛知県入札結果取得失敗: {e}")
+        return {}
+
+
+# ---------------------------------------------------------------------------
 # 東京都（My TOKYO 事業者募集＝公募/委託/事業者募集）
 # www.my.metro.tokyo.lg.jp の公開検索（robots許可・ログイン不要・サーバーHTML）。
 # 1ページに全件（先頭はHTML、残りは articleObj のJSデータ）が含まれる。

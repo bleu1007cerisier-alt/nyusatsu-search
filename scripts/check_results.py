@@ -26,8 +26,9 @@ sys.path.insert(0, os.path.join(ROOT, "backend"))
 
 from scraper import (  # noqa: E402
     fetch_nedo_result, fetch_portal_award, fetch_jst_detail,
-    fetch_jogmec_result_url, fetch_jogmec_result,
+    fetch_jogmec_result_url, fetch_jogmec_result, fetch_aichi_results,
 )
+import re as _re
 
 DATASET_DIR = os.path.join(ROOT, "dataset")
 CSV_PATH = os.path.join(DATASET_DIR, "tenders.csv")
@@ -82,6 +83,13 @@ def main():
     expired = 0
     checked = 0
 
+    # 愛知県（入札）の決定事業者：入札結果を一括取得し orderNum で突合する。
+    aichi_need = any(
+        r.get("source") == "AICHI" and not (r.get("awardee") or "").strip()
+        and (r.get("awardee_checked") or "") != "1" and "orderNum=" in (r.get("url") or "")
+        for r in rows)
+    aichi_results = fetch_aichi_results() if aichi_need else {}
+
     for row in rows:
         # 既に事業者確定 or 監視終了 → スキップ
         if (row.get("awardee") or "").strip():
@@ -96,6 +104,20 @@ def main():
         if pub and pub < str(expire_threshold):
             row["awardee_checked"] = "1"
             expired += 1
+            continue
+
+        # 愛知県：一括取得済みの結果マップから突合（ネットワークは1回だけ・件数上限の対象外）
+        if src == "AICHI":
+            on = _re.search(r"orderNum=([0-9]+)", row.get("url", ""))
+            rec = aichi_results.get(on.group(1)) if on else None
+            if rec:
+                row["awardee"] = _ai_split_awardee(rec["awardee"])
+                row["awardee_checked"] = "1"
+                if rec.get("result_date") and not (row.get("result_date") or "").strip():
+                    row["result_date"] = rec["result_date"]
+                if rec.get("amount") and not (row.get("amount") or "").strip():
+                    row["amount"] = rec["amount"]
+                updated += 1
             continue
 
         if checked >= MAX_CHECK_PER_RUN:
