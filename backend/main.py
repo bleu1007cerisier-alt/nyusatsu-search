@@ -466,6 +466,8 @@ def dev_status():
     total = 0
     summarized = 0          # AI要約が入っている件数
     summary_eligible = 0    # 本文(detail)があり要約対象になりうる件数
+    tag_total = 0           # タグ総数（平均タグ数の算出用）
+    tag_zero = 0            # タグ0件の案件数
     if os.path.exists(DATASET_CSV):
         with open(DATASET_CSV, encoding="utf-8-sig", newline="") as f:
             for row in csv.DictReader(f):
@@ -508,6 +510,12 @@ def dev_status():
                     summary_eligible += 1
                 if (row.get("summary") or "").strip():
                     summarized += 1
+                # タグの充足状況（目標: 平均3.5タグ/件）
+                n_tags = len([t for t in (row.get("tags") or "").split(",")
+                              if t.strip()])
+                tag_total += n_tags
+                if n_tags == 0:
+                    tag_zero += 1
 
     sources = []
     for src in DEV_SOURCES:
@@ -576,6 +584,10 @@ def dev_status():
         "ai_cost_recent_usd": cost_recent,
         "ai_model": "claude-haiku-4-5",
         "console_url": "https://console.anthropic.com/settings/billing",
+        # タグ充足状況（目標: 平均3.5タグ/件。要約が埋まると自然に上がる）
+        "avg_tags": round(tag_total / total, 2) if total else 0,
+        "tag_zero": tag_zero,
+        "tag_target": 3.5,
     }
 
 
