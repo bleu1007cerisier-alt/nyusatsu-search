@@ -620,6 +620,9 @@ def main():
             # PORTAL はゴミdetailをリセット済みなので常に上書き。他ソースは空のときのみ
             if new_detail and (not cur_detail or r.get("source") == "PORTAL"):
                 r["detail"] = new_detail  # 生テキストを保持
+            # 掲載日が一覧から取れないソース（愛知プロポ等）は詳細ページの値で補完
+            if info.get("published_at") and not (r.get("published_at") or "").strip():
+                r["published_at"] = info["published_at"]
             # 添付PDF（仕様書・公募要領）を先にR2へ保存 → AI抽出の材料に使う
             if (r.get("attachments_checked") or "") != "1":
                 _store_attachments(r, info.get("attachments", []))

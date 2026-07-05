@@ -1695,7 +1695,13 @@ def _fetch_pref_aichi_article(url: str) -> Optional[Dict]:
             name = a.get_text(" ", strip=True) or "添付資料"
             full = href if href.startswith("http") else _PREF_AICHI + href
             attachments.append({"name": name, "url": full, "kind": "公募要領"})
-    return {"detail": text[:6000], "budget": "", "schedule": [], "attachments": attachments}
+    # 掲載日（一覧ページには日付が無いため、本文の「掲載日：YYYY年M月D日」から取る）
+    published_at = ""
+    m = re.search(r"掲載日[：:]\s*(\d{4})年\s*(\d{1,2})月\s*(\d{1,2})日", text)
+    if m:
+        published_at = f"{m.group(1)}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+    return {"detail": text[:6000], "budget": "", "schedule": [], "attachments": attachments,
+            "published_at": published_at}
 
 
 def fetch_aichi_detail(url: str) -> Optional[Dict]:
