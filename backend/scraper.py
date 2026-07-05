@@ -116,7 +116,12 @@ def _compile_tag_matchers():
         for kw in kws:
             # 照合範囲: 0=全文, 1=タイトル+要約("!"), 2=タイトルのみ("!!")
             scope = 2 if kw.startswith("!!") else (1 if kw.startswith("!") else 0)
-            k = _normalize_for_tags(kw.lstrip("!"))
+            body = kw.lstrip("!")
+            if body.startswith("re:"):
+                # 正規表現キーワード（複合語パターン用）。例: システムの設計・開発
+                pats.append((scope, re.compile(_normalize_for_tags(body[3:]))))
+                continue
+            k = _normalize_for_tags(body)
             if re.fullmatch(r"[a-z0-9&\-\.]+", k) and len(k) <= 8:
                 pats.append((scope, re.compile(
                     r"(?<![a-z0-9])" + re.escape(k) + r"(?![a-z0-9])")))
