@@ -4,6 +4,11 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>全国AI公募ナビ｜官公庁・自治体の公募・入札情報を一元検索</title>
+  <meta name="description" content="官公庁・自治体・独立行政法人の入札・プロポーザル・公募情報を毎日自動収集し、AI要約付きで一元検索。締切間近の案件や決定事業者もまとめて確認できます。">
+  <meta property="og:title" content="全国AI公募ナビ｜官公庁・自治体の公募・入札情報を一元検索">
+  <meta property="og:description" content="入札・プロポーザル・公募情報を毎日自動収集、AI要約付きで検索できます。">
+  <meta property="og:type" content="website">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🧭</text></svg>">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet">
@@ -110,7 +115,7 @@
       <!-- フィルターパネル (PC: 常時, スマホ: トグル) -->
       <div id="filter-panel" class="flex flex-wrap gap-2 mt-2.5">
         <!-- 種別 -->
-        <select id="category" class="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-slate-50 focus:outline-none focus:ring-2 focus:ring-blue-400">
+        <select id="category" onchange="search(0)" class="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-slate-50 focus:outline-none focus:ring-2 focus:ring-blue-400">
           <option value="">すべての種別</option>
           <option value="入札">入札</option>
           <option value="プロポーザル">プロポーザル</option>
@@ -119,7 +124,7 @@
         </select>
 
         <!-- 都道府県 -->
-        <select id="prefecture" class="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-slate-50 focus:outline-none focus:ring-2 focus:ring-blue-400">
+        <select id="prefecture" onchange="search(0)" class="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-slate-50 focus:outline-none focus:ring-2 focus:ring-blue-400">
           <option value="">すべての地域</option>
           <option value="国">国（省庁）</option>
           <option value="北海道">北海道</option><option value="青森県">青森県</option>
@@ -149,13 +154,20 @@
         </select>
 
         <!-- 発注機関 -->
-        <select id="ministry" class="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-slate-50 focus:outline-none focus:ring-2 focus:ring-blue-400">
+        <select id="ministry" onchange="search(0)" class="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-slate-50 focus:outline-none focus:ring-2 focus:ring-blue-400">
           <option value="">すべての機関</option>
         </select>
 
         <!-- 参照サイト（データソース） -->
-        <select id="source" class="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-slate-50 focus:outline-none focus:ring-2 focus:ring-blue-400">
+        <select id="source" onchange="search(0)" class="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-slate-50 focus:outline-none focus:ring-2 focus:ring-blue-400">
           <option value="">すべての参照サイト</option>
+        </select>
+
+        <!-- 並び替え -->
+        <select id="sort" onchange="search(0)" class="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-slate-50 focus:outline-none focus:ring-2 focus:ring-blue-400">
+          <option value="">おすすめ順（募集中→新着）</option>
+          <option value="deadline">締切が近い順</option>
+          <option value="new">新着順</option>
         </select>
 
         <!-- リセット -->
@@ -205,6 +217,8 @@
     let currentPage = 0;
     let currentTag = '';
     let currentStatus = '';
+    let currentDue = 0;       // 締切間近フィルタ（0=なし、7=7日以内）
+    let pendingMinistry = ''; // URL復元用（機関プルダウンは非同期で埋まるため）
     const PAGE_SIZE = 20;
 
     function esc(s) {
@@ -270,9 +284,13 @@
           class="text-sm px-3 py-1.5 rounded-lg border transition font-medium ${active ? 'status-btn-active shadow-sm' : 'status-btn'}">
           ${base} <span class="${active ? 'opacity-70' : 'text-slate-400'} text-xs font-normal">${cnt.toLocaleString()}</span></button>`;
       };
+      const dueActive = currentDue > 0;
+      const dueBtn = `<button onclick="filterByDue()"
+        class="text-sm px-3 py-1.5 rounded-lg border transition font-medium ${dueActive ? 'bg-red-600 text-white border-red-600 shadow-sm' : 'bg-white text-red-600 border-red-200 hover:bg-red-50'}">
+        ⏰ 締切7日以内</button>`;
       statusBar.innerHTML =
         `<span class="text-xs text-slate-400 self-center mr-1">状態:</span>` +
-        btn('', data.total) + btn('募集中', sc['募集中']) + btn('公開中', sc['公開中']) + btn('公開終了', sc['公開終了']);
+        btn('', data.total) + btn('募集中', sc['募集中']) + btn('公開中', sc['公開中']) + btn('公開終了', sc['公開終了']) + dueBtn;
 
       // タグバー
       const bar = document.getElementById('tag-bar');
@@ -292,6 +310,7 @@
             `<option value="${esc(o.name)}">${esc(o.name)}（${o.count}）</option>`).join('');
         msel.value = cur;
         msel.dataset.filled = '1';
+        if (pendingMinistry) { msel.value = pendingMinistry; pendingMinistry = ''; }
       }
 
       // 参照サイト（データソース）プルダウン
@@ -315,6 +334,13 @@
       search(0);
     }
 
+    function filterByDue() {
+      currentDue = currentDue ? 0 : 7;
+      if (currentDue) currentStatus = '';  // 状態フィルタと排他（締切間近=募集中のみ）
+      loadStats();
+      search(0);
+    }
+
     function filterByTag(name) {
       currentTag = (currentTag === name) ? '' : name;
       const at = document.getElementById('active-tag');
@@ -328,13 +354,14 @@
       search(0);
     }
 
-    async function search(page = 0) {
+    async function search(page = 0, scroll = false) {
       currentPage = page;
       const q = document.getElementById('q').value;
       const category = document.getElementById('category').value;
       const prefecture = document.getElementById('prefecture').value;
       const ministry = document.getElementById('ministry').value;
       const source = document.getElementById('source').value;
+      const sort = document.getElementById('sort').value;
 
       const params = new URLSearchParams({ skip: page * PAGE_SIZE, limit: PAGE_SIZE });
       if (q) params.append('q', q);
@@ -342,8 +369,25 @@
       if (prefecture) params.append('prefecture', prefecture);
       if (ministry) params.append('organization', ministry);
       if (source) params.append('source', source);
+      if (sort) params.append('sort', sort);
+      if (currentDue) params.append('due_within', currentDue);
       if (currentTag) params.append('tag', currentTag);
       if (currentStatus) params.append('status', currentStatus);
+
+      // 検索条件をURLに反映（ブックマーク・共有・リロード復元用）
+      const urlParams = new URLSearchParams();
+      if (q) urlParams.set('q', q);
+      if (category) urlParams.set('category', category);
+      if (prefecture) urlParams.set('prefecture', prefecture);
+      if (ministry) urlParams.set('ministry', ministry);
+      if (source) urlParams.set('source', source);
+      if (sort) urlParams.set('sort', sort);
+      if (currentDue) urlParams.set('due', currentDue);
+      if (currentTag) urlParams.set('tag', currentTag);
+      if (currentStatus) urlParams.set('status', currentStatus);
+      if (page > 0) urlParams.set('page', page + 1);
+      const qs = urlParams.toString();
+      history.replaceState(null, '', qs ? '?' + qs : location.pathname);
 
       document.getElementById('loading').classList.remove('hidden');
       document.getElementById('results').innerHTML = '';
@@ -353,6 +397,7 @@
       const data = await res.json();
 
       document.getElementById('loading').classList.add('hidden');
+      if (scroll) window.scrollTo({ top: 0, behavior: 'smooth' });
 
       if (data.items.length === 0) {
         document.getElementById('no-results').classList.remove('hidden');
@@ -452,15 +497,15 @@
       const end = Math.min(totalPages - 1, currentPage + 2);
 
       if (currentPage > 0)
-        html += `<button onclick="search(${currentPage - 1})" class="px-3 py-1.5 border border-slate-200 rounded-lg text-sm hover:bg-slate-50 transition">‹ 前</button>`;
+        html += `<button onclick="search(${currentPage - 1}, true)" class="px-3 py-1.5 border border-slate-200 rounded-lg text-sm hover:bg-slate-50 transition">‹ 前</button>`;
       for (let i = start; i <= end; i++) {
         const active = i === currentPage
           ? 'bg-blue-600 text-white border-blue-600 shadow-sm'
           : 'border-slate-200 hover:bg-slate-50';
-        html += `<button onclick="search(${i})" class="px-3 py-1.5 border rounded-lg text-sm transition ${active}">${i + 1}</button>`;
+        html += `<button onclick="search(${i}, true)" class="px-3 py-1.5 border rounded-lg text-sm transition ${active}">${i + 1}</button>`;
       }
       if (currentPage < totalPages - 1)
-        html += `<button onclick="search(${currentPage + 1})" class="px-3 py-1.5 border border-slate-200 rounded-lg text-sm hover:bg-slate-50 transition">次 ›</button>`;
+        html += `<button onclick="search(${currentPage + 1}, true)" class="px-3 py-1.5 border border-slate-200 rounded-lg text-sm hover:bg-slate-50 transition">次 ›</button>`;
 
       document.getElementById('pagination').innerHTML = html;
     }
@@ -471,19 +516,30 @@
       document.getElementById('prefecture').value = '';
       document.getElementById('ministry').value = '';
       document.getElementById('source').value = '';
+      document.getElementById('sort').value = '';
       currentTag = '';
       currentStatus = '';
+      currentDue = 0;
       document.getElementById('active-tag').classList.add('hidden');
       loadStats();
       search();
     }
 
-    (function init() {
+    (async function init() {
+      // URLパラメータから検索条件を復元（共有・ブックマーク・リロード対応）
       const params = new URLSearchParams(location.search);
-      const tag = params.get('tag');
       const q = params.get('q');
       if (q) document.getElementById('q').value = q;
-      loadStats();
+      const setSel = (id, v) => { if (v) document.getElementById(id).value = v; };
+      setSel('category', params.get('category'));
+      setSel('prefecture', params.get('prefecture'));
+      setSel('source', params.get('source'));
+      setSel('sort', params.get('sort'));
+      pendingMinistry = params.get('ministry') || '';
+      currentStatus = params.get('status') || '';
+      currentDue = parseInt(params.get('due') || '0', 10) || 0;
+      const tag = params.get('tag');
+      const page = Math.max(0, (parseInt(params.get('page') || '1', 10) || 1) - 1);
       if (tag) {
         currentTag = tag;
         const at = document.getElementById('active-tag');
@@ -491,7 +547,9 @@
         at.innerHTML = `絞り込み中: <span class="font-semibold text-indigo-600">#${esc(currentTag)}</span>
           <button onclick="filterByTag('${esc(currentTag)}')" class="ml-2 text-slate-400 hover:text-slate-600 underline text-xs">解除</button>`;
       }
-      search();
+      // 機関フィルタ復元時は選択肢が埋まるのを待ってから検索する
+      if (pendingMinistry) { await loadStats(); } else { loadStats(); }
+      search(page);
     })();
   </script>
 </body>

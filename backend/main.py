@@ -15,6 +15,7 @@ from database import init_db, get_db, Tender, SessionLocal
 from datetime import date, timedelta
 import csv
 import json
+import re
 
 app = FastAPI(title="入札・プロポーザル検索", version="2.0.0")
 
@@ -208,13 +209,15 @@ def _item_dict(t: Tender, today: str) -> dict:
 
 @app.get("/api/tenders")
 def search_tenders(
-    q: Optional[str] = Query(None, description="キーワード検索"),
+    q: Optional[str] = Query(None, description="キーワード検索（スペース区切りでAND検索）"),
     category: Optional[str] = Query(None, description="入札 or プロポーザル"),
     prefecture: Optional[str] = Query(None, description="都道府県"),
     organization: Optional[str] = Query(None, description="発注機関（府省庁等）"),
     source: Optional[str] = Query(None, description="データソース"),
     tag: Optional[str] = Query(None, description="タグ"),
-    status: Optional[str] = Query(None, description="募集中 / 受付終了 / 事業者決定"),
+    status: Optional[str] = Query(None, description="募集中 / 公開中 / 公開終了"),
+    sort: Optional[str] = Query(None, description="並び順: deadline(締切が近い順) / new(新着順)"),
+    due_within: Optional[int] = Query(None, ge=1, le=90, description="締切までの日数で絞る（募集中のみ）"),
     skip: int = 0,
     limit: int = 50,
     db: Session = Depends(get_db),
@@ -225,10 +228,14 @@ def search_tenders(
     items = _get_sorted_items(db, today)
 
     if q:
-        ql = q.lower()
-        items = [i for i in items if ql in (
-            (i["title"] or "") + " " + (i["organization"] or "") + " "
-            + (i["summary"] or "") + " " + " ".join(i["tags"])).lower()]
+        # スペース（全角含む）区切りの全キーワードを含むものだけ残す（AND検索）
+        tokens = [t for t in re.split(r"[\s　]+", q.lower()) if t]
+        if tokens:
+            def _haystack(i):
+                return ((i["title"] or "") + " " + (i["organization"] or "") + " "
+                        + (i["summary"] or "") + " " + " ".join(i["tags"])).lower()
+            items = [i for i in items
+                     if (lambda h: all(tok in h for tok in tokens))(_haystack(i))]
     if category:
         items = [i for i in items if i["category"] == category]
     if prefecture:
@@ -241,6 +248,21 @@ def search_tenders(
         items = [i for i in items if tag in i["tags"]]
     if status in (STATUS_OPEN, STATUS_PUBLIC, STATUS_ENDED):
         items = [i for i in items if i["status"] == status]
+    if due_within:
+        # 締切間近: 募集中かつ deadline が today〜today+N日 のもの
+        limit_date = (date.fromisoformat(today) + timedelta(days=due_within)).isoformat()
+        items = [i for i in items
+                 if i["status"] == STATUS_OPEN and i["deadline"]
+                 and today <= i["deadline"] <= limit_date]
+
+    # 並び替え（キャッシュ共有リストを壊さないよう sorted() で新リストを作る）
+    if sort == "deadline":
+        # 募集中を先頭に、締切が近い順（締切なしは最後）
+        items = sorted(items, key=lambda i: (_status_rank(i["status"]),
+                                             i["deadline"] or "9999-12-31"))
+    elif sort == "new":
+        # 掲載日が新しい順
+        items = sorted(items, key=lambda i: _rev(i["published_at"] or ""))
 
     total = len(items)
     page = items[skip:skip + limit]
