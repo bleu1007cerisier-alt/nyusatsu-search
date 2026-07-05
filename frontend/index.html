@@ -179,11 +179,37 @@
     </div>
   </div>
 
-  <!-- 状態フィルタ & タグバー -->
+  <!-- 状態フィルタ & タグ検索 -->
   <div class="max-w-6xl mx-auto px-4 pt-4 space-y-2">
     <div id="status-bar" class="flex flex-wrap gap-2"></div>
-    <div id="tag-bar" class="flex flex-wrap gap-1.5"></div>
-    <div id="active-tag" class="hidden text-sm text-slate-500"></div>
+
+    <!-- タグ検索（本サイトの核）: 関心タグを組み合わせて案件を探す -->
+    <div class="bg-white border border-slate-200 rounded-xl p-3">
+      <div class="flex flex-wrap items-center gap-2">
+        <button onclick="toggleTagPanel()" id="tag-panel-btn"
+          class="text-sm px-3 py-1.5 rounded-lg border border-indigo-200 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 transition font-medium">
+          🏷️ タグで探す <span id="tag-panel-arrow">▾</span>
+        </button>
+        <div id="selected-tags" class="flex flex-wrap gap-1.5 items-center"></div>
+        <div id="tag-mode-wrap" class="hidden items-center gap-1 text-xs">
+          <button id="mode-or" onclick="setTagMode('or')"
+            class="px-2 py-1 rounded-l-lg border text-xs"></button>
+          <button id="mode-and" onclick="setTagMode('and')"
+            class="px-2 py-1 rounded-r-lg border -ml-1 text-xs"></button>
+        </div>
+        <button id="tag-clear" onclick="clearTags()"
+          class="hidden text-xs text-slate-400 hover:text-slate-600 underline">全解除</button>
+      </div>
+
+      <!-- タグピッカー本体 -->
+      <div id="tag-panel" class="hidden mt-3 border-t border-slate-100 pt-3">
+        <input id="tag-filter" type="text" placeholder="タグ名で絞り込み（例: 風力、漁業、DX）"
+          oninput="renderTagPanel()"
+          class="w-full sm:w-80 border border-slate-200 rounded-lg px-3 py-1.5 text-sm bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-300 mb-2">
+        <div id="tag-categories" class="max-h-96 overflow-y-auto space-y-1 pr-1"></div>
+        <p class="text-xs text-slate-400 mt-2">数字は登録案件数（<span class="text-emerald-600">緑</span>は募集中の件数）。複数選ぶと「いずれか含む（OR）／すべて含む（AND）」を切り替えられます。</p>
+      </div>
+    </div>
   </div>
 
   <!-- 結果エリア -->
@@ -215,7 +241,9 @@
 
   <script>
     let currentPage = 0;
-    let currentTag = '';
+    let selectedTags = [];    // 選択中タグ（複数）
+    let tagMode = 'or';       // 複数タグの結合: or / and
+    let TAG_DATA = null;      // /api/tags のキャッシュ
     let currentStatus = '';
     let currentDue = 0;       // 締切間近フィルタ（0=なし、7=7日以内）
     let pendingMinistry = ''; // URL復元用（機関プルダウンは非同期で埋まるため）
@@ -292,15 +320,6 @@
         `<span class="text-xs text-slate-400 self-center mr-1">状態:</span>` +
         btn('', data.total) + btn('募集中', sc['募集中']) + btn('公開中', sc['公開中']) + btn('公開終了', sc['公開終了']) + dueBtn;
 
-      // タグバー
-      const bar = document.getElementById('tag-bar');
-      const tags = (data.tags || []).slice(0, 20);
-      bar.innerHTML = tags.length
-        ? `<span class="text-xs text-slate-400 self-center mr-1">タグ:</span>` +
-          tags.map(t => `<button onclick="filterByTag('${esc(t.name)}')"
-            class="text-xs px-2.5 py-1 rounded-full bg-indigo-50 text-indigo-600 hover:bg-indigo-100 border border-indigo-100 transition">#${esc(t.name)} <span class="text-indigo-300">${t.count}</span></button>`).join('')
-        : '';
-
       // 発注機関プルダウン
       const msel = document.getElementById('ministry');
       if (msel && !msel.dataset.filled && (data.organizations || []).length) {
@@ -341,18 +360,98 @@
       search(0);
     }
 
-    function filterByTag(name) {
-      currentTag = (currentTag === name) ? '' : name;
-      const at = document.getElementById('active-tag');
-      if (currentTag) {
-        at.classList.remove('hidden');
-        at.innerHTML = `絞り込み中: <span class="font-semibold text-indigo-600">#${esc(currentTag)}</span>
-          <button onclick="filterByTag('${esc(currentTag)}')" class="ml-2 text-slate-400 hover:text-slate-600 underline text-xs">解除</button>`;
+    // ── タグ検索（核機能） ────────────────────────────
+    async function loadTags() {
+      if (TAG_DATA) return TAG_DATA;
+      const res = await fetch('/api/tags');
+      TAG_DATA = await res.json();
+      return TAG_DATA;
+    }
+
+    function toggleTagPanel() {
+      const p = document.getElementById('tag-panel');
+      const arrow = document.getElementById('tag-panel-arrow');
+      const opening = p.classList.contains('hidden');
+      p.classList.toggle('hidden');
+      arrow.textContent = opening ? '▴' : '▾';
+      if (opening) loadTags().then(() => renderTagPanel());
+    }
+
+    function renderTagPanel() {
+      if (!TAG_DATA) return;
+      const filter = (document.getElementById('tag-filter').value || '').trim().toLowerCase();
+      const box = document.getElementById('tag-categories');
+      box.innerHTML = TAG_DATA.categories.map(cat => {
+        const tags = cat.tags.filter(t =>
+          !filter || t.name.toLowerCase().includes(filter));
+        if (!tags.length) return '';
+        const hasSelected = tags.some(t => selectedTags.includes(t.name));
+        const open = filter || hasSelected ? ' open' : '';
+        return `<details class="border border-slate-100 rounded-lg"${open}>
+          <summary class="cursor-pointer select-none px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 rounded-lg">
+            ${esc(cat.category)} <span class="text-xs text-slate-400 font-normal">${tags.length}タグ</span></summary>
+          <div class="px-3 pb-2.5 flex flex-wrap gap-1.5">${tags.map(t => {
+            const sel = selectedTags.includes(t.name);
+            const dim = !t.count && !sel ? ' opacity-40' : '';
+            return `<button onclick="toggleTag('${esc(t.name)}')"
+              class="text-xs px-2 py-1 rounded-full border transition${dim} ${sel
+                ? 'bg-indigo-600 text-white border-indigo-600'
+                : 'bg-indigo-50 text-indigo-700 border-indigo-100 hover:bg-indigo-100'}">
+              #${esc(t.name)} <span class="${sel ? 'text-indigo-200' : 'text-slate-400'}">${t.count}</span>${
+                t.open ? `<span class="${sel ? 'text-emerald-200' : 'text-emerald-600'} ml-0.5">${t.open}</span>` : ''}
+            </button>`;
+          }).join('')}</div>
+        </details>`;
+      }).join('');
+    }
+
+    function renderSelectedTags() {
+      const wrap = document.getElementById('selected-tags');
+      wrap.innerHTML = selectedTags.map(t =>
+        `<span class="text-xs px-2 py-1 rounded-full bg-indigo-600 text-white flex items-center gap-1">
+           #${esc(t)}<button onclick="toggleTag('${esc(t)}')" class="hover:text-indigo-200 font-bold">×</button></span>`
+      ).join('');
+      const modeWrap = document.getElementById('tag-mode-wrap');
+      const clearBtn = document.getElementById('tag-clear');
+      if (selectedTags.length >= 2) {
+        modeWrap.classList.remove('hidden'); modeWrap.classList.add('flex');
+        renderTagMode();
       } else {
-        at.classList.add('hidden');
+        modeWrap.classList.add('hidden'); modeWrap.classList.remove('flex');
       }
+      clearBtn.classList.toggle('hidden', selectedTags.length === 0);
+    }
+
+    function renderTagMode() {
+      const or = document.getElementById('mode-or');
+      const and = document.getElementById('mode-and');
+      const on = 'bg-indigo-600 text-white border-indigo-600';
+      const off = 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50';
+      or.className = `px-2 py-1 rounded-l-lg border text-xs ${tagMode === 'or' ? on : off}`;
+      and.className = `px-2 py-1 rounded-r-lg border -ml-px text-xs ${tagMode === 'and' ? on : off}`;
+      or.textContent = 'いずれか含む(OR)';
+      and.textContent = 'すべて含む(AND)';
+    }
+
+    function setTagMode(m) { tagMode = m; renderTagMode(); search(0); }
+
+    function toggleTag(name) {
+      const i = selectedTags.indexOf(name);
+      if (i >= 0) selectedTags.splice(i, 1); else selectedTags.push(name);
+      renderSelectedTags();
+      if (TAG_DATA) renderTagPanel();
       search(0);
     }
+
+    function clearTags() {
+      selectedTags = [];
+      renderSelectedTags();
+      if (TAG_DATA) renderTagPanel();
+      search(0);
+    }
+
+    // カード内タグクリック（旧APIとの互換名）
+    function filterByTag(name) { toggleTag(name); }
 
     async function search(page = 0, scroll = false) {
       currentPage = page;
@@ -371,7 +470,10 @@
       if (source) params.append('source', source);
       if (sort) params.append('sort', sort);
       if (currentDue) params.append('due_within', currentDue);
-      if (currentTag) params.append('tag', currentTag);
+      if (selectedTags.length) {
+        params.append('tags', selectedTags.join(','));
+        params.append('tag_mode', tagMode);
+      }
       if (currentStatus) params.append('status', currentStatus);
 
       // 検索条件をURLに反映（ブックマーク・共有・リロード復元用）
@@ -383,7 +485,10 @@
       if (source) urlParams.set('source', source);
       if (sort) urlParams.set('sort', sort);
       if (currentDue) urlParams.set('due', currentDue);
-      if (currentTag) urlParams.set('tag', currentTag);
+      if (selectedTags.length) {
+        urlParams.set('tags', selectedTags.join(','));
+        if (tagMode !== 'or') urlParams.set('tag_mode', tagMode);
+      }
       if (currentStatus) urlParams.set('status', currentStatus);
       if (page > 0) urlParams.set('page', page + 1);
       const qs = urlParams.toString();
@@ -517,10 +622,12 @@
       document.getElementById('ministry').value = '';
       document.getElementById('source').value = '';
       document.getElementById('sort').value = '';
-      currentTag = '';
+      selectedTags = [];
+      tagMode = 'or';
       currentStatus = '';
       currentDue = 0;
-      document.getElementById('active-tag').classList.add('hidden');
+      renderSelectedTags();
+      if (TAG_DATA) renderTagPanel();
       loadStats();
       search();
     }
@@ -538,15 +645,12 @@
       pendingMinistry = params.get('ministry') || '';
       currentStatus = params.get('status') || '';
       currentDue = parseInt(params.get('due') || '0', 10) || 0;
-      const tag = params.get('tag');
+      // タグ復元（tags=複数 / tag=単一・旧リンク互換）
+      const tagsParam = params.get('tags') || params.get('tag') || '';
+      selectedTags = tagsParam ? tagsParam.split(',').map(s => s.trim()).filter(Boolean) : [];
+      tagMode = params.get('tag_mode') === 'and' ? 'and' : 'or';
+      renderSelectedTags();
       const page = Math.max(0, (parseInt(params.get('page') || '1', 10) || 1) - 1);
-      if (tag) {
-        currentTag = tag;
-        const at = document.getElementById('active-tag');
-        at.classList.remove('hidden');
-        at.innerHTML = `絞り込み中: <span class="font-semibold text-indigo-600">#${esc(currentTag)}</span>
-          <button onclick="filterByTag('${esc(currentTag)}')" class="ml-2 text-slate-400 hover:text-slate-600 underline text-xs">解除</button>`;
-      }
       // 機関フィルタ復元時は選択肢が埋まるのを待ってから検索する
       if (pendingMinistry) { await loadStats(); } else { loadStats(); }
       search(page);

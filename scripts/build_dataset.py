@@ -456,6 +456,52 @@ def load_existing() -> dict:
     return out
 
 
+def retag_rows(rows):
+    """全行のタグをタグマスター基準で再付与する。
+
+    - タイトル＋AI要約＋本文(先頭3000字)から実務粒度タグを付与
+    - タグ0件の案件は、タイトルが最も近い（bigram Jaccard≥0.45）
+      タグ付き案件からタグを継承する（情報の乏しい案件の取りこぼし対策）
+    """
+    import re as _re
+    from scraper import generate_tags
+
+    zero = []
+    for r in rows:
+        tags = generate_tags(r.get("title", ""), r.get("summary", ""),
+                             (r.get("detail") or "")[:3000])
+        r["tags"] = ",".join(tags)
+        if not tags:
+            zero.append(r)
+
+    def _bigrams(s):
+        s = _re.sub(r"[\s　]", "", s or "")
+        return {s[i:i + 2] for i in range(len(s) - 1)}
+
+    tagged = [(r2, _bigrams(r2.get("title", "")))
+              for r2 in rows if r2.get("tags")]
+    borrowed = 0
+    for r in zero:
+        bg = _bigrams(r.get("title", ""))
+        if not bg:
+            continue
+        best, score = None, 0.0
+        for cand, cbg in tagged:
+            inter = len(bg & cbg)
+            if not inter:
+                continue
+            j = inter / len(bg | cbg)
+            if cand.get("source") == r.get("source"):
+                j += 0.05  # 同一ソースの類似案件を優遇
+            if j > score:
+                best, score = cand, j
+        if best is not None and score >= 0.45:
+            r["tags"] = best["tags"]
+            borrowed += 1
+    print(f"タグ再付与: 全{len(rows)}件 / タグ0件{len(zero)}件中 "
+          f"類似案件から継承{borrowed}件")
+
+
 def main():
     from datetime import datetime, timezone
     os.makedirs(DATASET_DIR, exist_ok=True)
@@ -793,6 +839,13 @@ def main():
                 repaired += 1
         if repaired:
             print(f"英字混入の要約を再生成（修復）: {repaired}件")
+
+    # タグ再付与（毎回全件）：タグマスターの改良が過去案件にも自動反映されるようにする。
+    # 情報が乏しくタグ0件の案件は、タイトルが最も近い過去案件からタグを継承する。
+    try:
+        retag_rows(list(merged.values()))
+    except Exception as e:  # noqa: BLE001
+        print(f"タグ再付与失敗: {e}")
 
     # 書き出し前に、ID未設定の行へ必ずIDを採番する（空IDはDB投入をUNIQUE制約で壊すため）
     _id_max = max((int(r["id"]) for r in merged.values()

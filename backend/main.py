@@ -12,6 +12,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from database import init_db, get_db, Tender, SessionLocal
+from tag_master import TAG_MASTER
 from datetime import date, timedelta
 import csv
 import json
@@ -214,7 +215,9 @@ def search_tenders(
     prefecture: Optional[str] = Query(None, description="都道府県"),
     organization: Optional[str] = Query(None, description="発注機関（府省庁等）"),
     source: Optional[str] = Query(None, description="データソース"),
-    tag: Optional[str] = Query(None, description="タグ"),
+    tag: Optional[str] = Query(None, description="タグ（単一・後方互換）"),
+    tags: Optional[str] = Query(None, description="タグ（カンマ区切りで複数指定）"),
+    tag_mode: str = Query("or", description="複数タグの結合: or / and"),
     status: Optional[str] = Query(None, description="募集中 / 公開中 / 公開終了"),
     sort: Optional[str] = Query(None, description="並び順: deadline(締切が近い順) / new(新着順)"),
     due_within: Optional[int] = Query(None, ge=1, le=90, description="締切までの日数で絞る（募集中のみ）"),
@@ -246,6 +249,16 @@ def search_tenders(
         items = [i for i in items if i["source"] == source]
     if tag:
         items = [i for i in items if tag in i["tags"]]
+    if tags:
+        # 複数タグ検索: 実務者が関心タグを組み合わせて案件を探す（サイトの核機能）
+        tag_list = [t.strip() for t in tags.split(",") if t.strip()]
+        if tag_list:
+            if tag_mode == "and":
+                items = [i for i in items
+                         if all(t in i["tags"] for t in tag_list)]
+            else:  # or（既定）
+                items = [i for i in items
+                         if any(t in i["tags"] for t in tag_list)]
     if status in (STATUS_OPEN, STATUS_PUBLIC, STATUS_ENDED):
         items = [i for i in items if i["status"] == status]
     if due_within:
@@ -331,6 +344,30 @@ def get_tender(tender_id: int, db: Session = Depends(get_db)):
     else:
         data["similar"] = []
     return data
+
+
+@app.get("/api/tags")
+def get_tags(db: Session = Depends(get_db)):
+    """タグマスターをカテゴリ別に返す（各タグの件数・募集中件数つき）。
+
+    タグ検索UI（カテゴリ別タグピッカー）用。マスター定義順を保持する。
+    """
+    today = date.today().isoformat()
+    items = _get_sorted_items(db, today)
+    counts: dict = {}
+    open_counts: dict = {}
+    for i in items:
+        for t in i["tags"]:
+            counts[t] = counts.get(t, 0) + 1
+            if i["status"] == STATUS_OPEN:
+                open_counts[t] = open_counts.get(t, 0) + 1
+    categories = []
+    for cat, tags in TAG_MASTER.items():
+        entries = [{"name": t,
+                    "count": counts.get(t, 0),
+                    "open": open_counts.get(t, 0)} for t in tags]
+        categories.append({"category": cat, "tags": entries})
+    return {"categories": categories}
 
 
 @app.get("/api/stats")

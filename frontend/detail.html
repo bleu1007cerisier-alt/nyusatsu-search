@@ -190,7 +190,7 @@
       const tags = t.tags || [];
       document.getElementById('tags-wrap').style.display = tags.length ? '' : 'none';
       document.getElementById('tags').innerHTML = tags.map(tag =>
-        `<a href="/?tag=${encodeURIComponent(tag)}" class="text-xs px-2.5 py-1 rounded-full bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-100">#${esc(tag)}</a>`).join('');
+        `<a href="/?tags=${encodeURIComponent(tag)}" class="text-xs px-2.5 py-1 rounded-full bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-100">#${esc(tag)}</a>`).join('');
 
       const summaryText = (t.summary || '').trim();
       const detailEl = document.getElementById('detail');

@@ -85,54 +85,64 @@ def _normalize_date(text: str) -> str:
 # タグ付け
 # ---------------------------------------------------------------------------
 # タグ名 -> そのタグを付与するキーワード群
-TAG_KEYWORDS = {
-    # ── 工事・建設 ──
-    "土木・道路": ["道路", "舗装", "橋梁", "河川", "護岸", "砂防", "土木", "法面",
-                "造成", "ダム", "港湾", "下水道", "上水道", "管渠", "用水", "堤防", "トンネル"],
-    "建築・施設": ["建築", "庁舎", "建物", "改修工事", "営繕", "耐震", "解体",
-                "新築", "増築", "内装", "外壁", "屋上防水"],
-    "電気・設備工事": ["電気設備", "空調", "給排水", "受変電", "照明", "昇降機",
-                  "エレベーター", "機械設備", "冷暖房", "発電機", "消防設備"],
-    "設計・測量": ["設計", "測量", "地質調査", "ボーリング", "積算", "施工監理"],
-    # ── IT・情報 ──
-    "IT・システム": ["システム", "ソフトウェア", "アプリ", "ネットワーク", "サーバ",
-                 "クラウド", "デジタル", "電算", "情報処理", "ＤＸ", "DX", "ＬＡＮ",
-                 "LAN", "ホームページ", "ウェブ", "Web", "ＩＣＴ", "ICT"],
-    "AI・データ": ["ＡＩ", "AI", "人工知能", "機械学習", "ビッグデータ",
-                "データ分析", "データベース", "統計"],
-    # ── 物品・役務 ──
-    "物品・機器": ["購入", "供給", "物品", "機器", "備品", "消耗品", "用品",
-                "資材", "薬品", "燃料"],
-    "印刷・出版": ["印刷", "製本", "用紙", "図書", "書籍", "刊行"],
-    "車両・リース": ["自動車", "車両", "賃貸借", "リース", "レンタル", "借上", "公用車"],
-    "清掃・警備・保守": ["清掃", "警備", "保守", "設備管理", "メンテナンス",
-                   "廃棄物処理", "運転管理", "点検業務"],
-    "役務・委託": ["委託", "運営", "業務委託", "管理業務", "運用支援", "代行",
-                "派遣", "受付業務", "コールセンター"],
-    # ── 分野 ──
-    "調査・コンサル": ["調査業務", "実態調査", "動向調査", "市場調査", "基礎調査",
-                  "俯瞰", "計画策定", "コンサルティング", "診断", "分析業務"],
-    "医療・福祉": ["医療", "病院", "福祉", "介護", "医薬", "看護", "健康診断",
-                "ワクチン", "検診"],
-    "環境・エネルギー": ["環境", "脱炭素", "再生可能エネルギー", "省エネ",
-                  "カーボンニュートラル", "太陽光", "風力", "水素", "ＣＯ２",
-                  "CO2", "ＧＸ", "GX", "温暖化", "蓄電池", "アンモニア"],
-    "農林水産": ["農業", "林業", "水産", "森林", "間伐", "造林", "漁港",
-              "農地", "畜産", "保育間伐", "治山"],
-    "防災・安全": ["防災", "災害", "消防", "安全対策", "減災", "避難", "耐震診断"],
-    "教育・人材": ["教育", "研修", "人材育成", "学習", "講座", "セミナー"],
-    "研究開発・実証": ["研究開発", "技術開発", "実証", "研究委託", "実用化",
-                  "先端", "イノベーション"],
-}
+# タグマスター（実務者向け細分タグ体系）は tag_master.py で管理する
+import unicodedata
+from tag_master import TAG_MASTER, flatten_master
+
+TAG_KEYWORDS, TAG_CATEGORY = flatten_master()
+
+
+def _normalize_for_tags(s: str) -> str:
+    """タグ照合用の正規化（全角→半角・大文字→小文字）。"""
+    return unicodedata.normalize("NFKC", s or "").casefold()
+
+
+def _compile_tag_matchers():
+    """タグごとの照合関数を事前コンパイルする。
+
+    - 英数字のみ・8文字以下のキーワード（ai, dx, gis 等）は
+      前後が英数字でないことを要求（"maintain" の ai 等の誤マッチ防止）
+    - 先頭 "!" のキーワードは strict（タイトル＋要約のみ照合）
+      → 入札説明書等の定型文（"詳細はホームページ" 等）による誤タグを防ぐ
+    - それ以外は部分一致
+    """
+    matchers = []
+    for tag, kws in TAG_KEYWORDS.items():
+        pats = []
+        for kw in kws:
+            # 照合範囲: 0=全文, 1=タイトル+要約("!"), 2=タイトルのみ("!!")
+            scope = 2 if kw.startswith("!!") else (1 if kw.startswith("!") else 0)
+            k = _normalize_for_tags(kw.lstrip("!"))
+            if re.fullmatch(r"[a-z0-9&\-\.]+", k) and len(k) <= 8:
+                pats.append((scope, re.compile(
+                    r"(?<![a-z0-9])" + re.escape(k) + r"(?![a-z0-9])")))
+            else:
+                pats.append((scope, k))  # 文字列＝単純部分一致
+        matchers.append((tag, pats))
+    return matchers
+
+
+_TAG_MATCHERS = _compile_tag_matchers()
 
 
 def generate_tags(*texts: str, extra: Optional[List[str]] = None) -> List[str]:
-    """タイトル・本文などからタグを自動生成する。"""
-    blob = " ".join(t for t in texts if t)
+    """タイトル・要約・本文などから実務粒度のタグを自動付与する。
+
+    texts[0]（タイトル）、texts[:2]（タイトル＋要約等）、全文の3階層で照合する。
+    "!!" キーワード＝タイトルのみ / "!" ＝タイトル＋要約 / 無印＝全文。
+    """
+    title_only = _normalize_for_tags(texts[0] if texts else "")
+    primary = _normalize_for_tags(" ".join(t for t in texts[:2] if t))
+    blob = _normalize_for_tags(" ".join(t for t in texts if t))
+    targets = (blob, primary, title_only)  # scope=0,1,2
     tags: List[str] = []
-    for tag, kws in TAG_KEYWORDS.items():
-        if any(kw in blob for kw in kws):
-            tags.append(tag)
+    for tag, pats in _TAG_MATCHERS:
+        for scope, p in pats:
+            target = targets[scope]
+            hit = p.search(target) if hasattr(p, "search") else (p in target)
+            if hit:
+                tags.append(tag)
+                break
     if extra:
         for t in extra:
             if t and t not in tags:
