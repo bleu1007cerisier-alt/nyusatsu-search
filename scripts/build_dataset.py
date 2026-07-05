@@ -467,13 +467,21 @@ def retag_rows(rows):
     import re as _re
     from scraper import generate_tags
 
+    from tag_master import ORG_TAG_RULES
+    _org_rules = [(_re.compile(p), t) for p, t in ORG_TAG_RULES]
+
     sparse = []
     for r in rows:
         tags = generate_tags(r.get("title", ""), r.get("summary", ""),
                              (r.get("detail") or "")[:3000])
+        # 発注機関名から発注元ファセットタグを付与（売り先でアンテナを張る実務者向け）
+        org = r.get("organization") or ""
+        for pat, tag in _org_rules:
+            if tag not in tags and pat.search(org):
+                tags.append(tag)
         r["tags"] = ",".join(tags)
-        if len(tags) < 2:
-            sparse.append(r)
+        if len(tags) < 3:
+            sparse.append((r, len(tags)))
 
     def _bigrams(s):
         s = _re.sub(r"[\s　]", "", s or "")
@@ -483,8 +491,10 @@ def retag_rows(rows):
     donors = [(r2, _bigrams(r2.get("title", "")))
               for r2 in rows
               if len([t for t in (r2.get("tags") or "").split(",") if t]) >= 2]
+    # タグが少ないほど積極的に継承する（0個=0.40 / 1個=0.45 / 2個=0.55）
+    _THRESH = {0: 0.40, 1: 0.45, 2: 0.50}
     borrowed = 0
-    for r in sparse:
+    for r, own_n in sparse:
         bg = _bigrams(r.get("title", ""))
         if not bg:
             continue
@@ -498,13 +508,13 @@ def retag_rows(rows):
                 j += 0.05  # 同一ソースの類似案件を優遇
             if j > score:
                 best, score = cand, j
-        if best is not None and score >= 0.45:
+        if best is not None and score >= _THRESH.get(own_n, 0.55):
             own = [t for t in (r.get("tags") or "").split(",") if t]
             inherited = [t for t in (best.get("tags") or "").split(",") if t]
             merged = own + [t for t in inherited if t not in own]
             r["tags"] = ",".join(merged[:8])  # 継承しすぎ防止の上限
             borrowed += 1
-    print(f"タグ再付与: 全{len(rows)}件 / タグ2件未満{len(sparse)}件中 "
+    print(f"タグ再付与: 全{len(rows)}件 / タグ3件未満{len(sparse)}件中 "
           f"類似案件から継承{borrowed}件")
 
 
