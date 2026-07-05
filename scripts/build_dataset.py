@@ -460,33 +460,36 @@ def retag_rows(rows):
     """全行のタグをタグマスター基準で再付与する。
 
     - タイトル＋AI要約＋本文(先頭3000字)から実務粒度タグを付与
-    - タグ0件の案件は、タイトルが最も近い（bigram Jaccard≥0.45）
-      タグ付き案件からタグを継承する（情報の乏しい案件の取りこぼし対策）
+    - タグが2件未満の案件は、タイトルが近い（bigram Jaccard≥0.45）
+      タグ付き案件からタグを継承・統合する（情報の乏しい案件の取りこぼし対策）。
+      過去案件・他ソースの類似案件も対象（同一ソースをやや優遇）。
     """
     import re as _re
     from scraper import generate_tags
 
-    zero = []
+    sparse = []
     for r in rows:
         tags = generate_tags(r.get("title", ""), r.get("summary", ""),
                              (r.get("detail") or "")[:3000])
         r["tags"] = ",".join(tags)
-        if not tags:
-            zero.append(r)
+        if len(tags) < 2:
+            sparse.append(r)
 
     def _bigrams(s):
         s = _re.sub(r"[\s　]", "", s or "")
         return {s[i:i + 2] for i in range(len(s) - 1)}
 
-    tagged = [(r2, _bigrams(r2.get("title", "")))
-              for r2 in rows if r2.get("tags")]
+    # 継承元: タグが2件以上ついている案件
+    donors = [(r2, _bigrams(r2.get("title", "")))
+              for r2 in rows
+              if len([t for t in (r2.get("tags") or "").split(",") if t]) >= 2]
     borrowed = 0
-    for r in zero:
+    for r in sparse:
         bg = _bigrams(r.get("title", ""))
         if not bg:
             continue
         best, score = None, 0.0
-        for cand, cbg in tagged:
+        for cand, cbg in donors:
             inter = len(bg & cbg)
             if not inter:
                 continue
@@ -496,9 +499,12 @@ def retag_rows(rows):
             if j > score:
                 best, score = cand, j
         if best is not None and score >= 0.45:
-            r["tags"] = best["tags"]
+            own = [t for t in (r.get("tags") or "").split(",") if t]
+            inherited = [t for t in (best.get("tags") or "").split(",") if t]
+            merged = own + [t for t in inherited if t not in own]
+            r["tags"] = ",".join(merged[:8])  # 継承しすぎ防止の上限
             borrowed += 1
-    print(f"タグ再付与: 全{len(rows)}件 / タグ0件{len(zero)}件中 "
+    print(f"タグ再付与: 全{len(rows)}件 / タグ2件未満{len(sparse)}件中 "
           f"類似案件から継承{borrowed}件")
 
 

@@ -87,14 +87,18 @@ def _normalize_date(text: str) -> str:
 # タグ名 -> そのタグを付与するキーワード群
 # タグマスター（実務者向け細分タグ体系）は tag_master.py で管理する
 import unicodedata
-from tag_master import TAG_MASTER, flatten_master
+from tag_master import TAG_MASTER, EXCLUDE_PATTERNS, flatten_master
 
 TAG_KEYWORDS, TAG_CATEGORY = flatten_master()
 
+# 交絡語（組織名・定型文・別分野の専門用語）を照合前に除去する
+_TAG_EXCLUDE_RE = re.compile("|".join(EXCLUDE_PATTERNS))
+
 
 def _normalize_for_tags(s: str) -> str:
-    """タグ照合用の正規化（全角→半角・大文字→小文字）。"""
-    return unicodedata.normalize("NFKC", s or "").casefold()
+    """タグ照合用の正規化（全角→半角・大文字→小文字・交絡語の除去）。"""
+    n = unicodedata.normalize("NFKC", s or "").casefold()
+    return _TAG_EXCLUDE_RE.sub(" ", n)
 
 
 def _compile_tag_matchers():

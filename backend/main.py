@@ -221,6 +221,10 @@ def search_tenders(
     status: Optional[str] = Query(None, description="募集中 / 公開中 / 公開終了"),
     sort: Optional[str] = Query(None, description="並び順: deadline(締切が近い順) / new(新着順)"),
     due_within: Optional[int] = Query(None, ge=1, le=90, description="締切までの日数で絞る（募集中のみ）"),
+    deadline_from: Optional[str] = Query(None, description="締切日の下限 YYYY-MM-DD"),
+    deadline_to: Optional[str] = Query(None, description="締切日の上限 YYYY-MM-DD"),
+    published_from: Optional[str] = Query(None, description="掲載日の下限 YYYY-MM-DD"),
+    published_to: Optional[str] = Query(None, description="掲載日の上限 YYYY-MM-DD"),
     skip: int = 0,
     limit: int = 50,
     db: Session = Depends(get_db),
@@ -267,6 +271,15 @@ def search_tenders(
         items = [i for i in items
                  if i["status"] == STATUS_OPEN and i["deadline"]
                  and today <= i["deadline"] <= limit_date]
+    # 詳細検索: 締切日・掲載日の期間指定
+    if deadline_from:
+        items = [i for i in items if i["deadline"] and i["deadline"] >= deadline_from]
+    if deadline_to:
+        items = [i for i in items if i["deadline"] and i["deadline"] <= deadline_to]
+    if published_from:
+        items = [i for i in items if i["published_at"] and i["published_at"] >= published_from]
+    if published_to:
+        items = [i for i in items if i["published_at"] and i["published_at"] <= published_to]
 
     # 並び替え（キャッシュ共有リストを壊さないよう sorted() で新リストを作る）
     if sort == "deadline":

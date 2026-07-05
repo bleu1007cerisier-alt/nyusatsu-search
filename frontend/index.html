@@ -170,46 +170,69 @@
           <option value="new">新着順</option>
         </select>
 
+        <!-- 期間（詳細検索）トグル -->
+        <button onclick="toggleAdvPanel()" id="adv-btn"
+          class="border border-slate-200 hover:bg-slate-100 text-slate-600 px-3 py-2 rounded-lg text-sm transition">
+          📅 期間 <span id="adv-arrow">▾</span>
+        </button>
+
         <!-- リセット -->
         <button onclick="reset()"
           class="border border-slate-200 hover:bg-slate-100 text-slate-500 px-4 py-2 rounded-lg text-sm transition">
           リセット
         </button>
       </div>
+
+      <!-- 詳細検索: 期間指定 -->
+      <div id="adv-panel" class="hidden mt-2.5 flex flex-wrap gap-x-5 gap-y-2 items-center text-sm bg-slate-50 border border-slate-100 rounded-lg px-3 py-2">
+        <div class="flex items-center gap-1.5">
+          <span class="text-xs text-slate-500">締切日</span>
+          <input type="date" id="deadline-from" onchange="search(0)" class="border border-slate-200 rounded px-2 py-1 text-xs bg-white">
+          <span class="text-slate-400">〜</span>
+          <input type="date" id="deadline-to" onchange="search(0)" class="border border-slate-200 rounded px-2 py-1 text-xs bg-white">
+        </div>
+        <div class="flex items-center gap-1.5">
+          <span class="text-xs text-slate-500">掲載日</span>
+          <input type="date" id="published-from" onchange="search(0)" class="border border-slate-200 rounded px-2 py-1 text-xs bg-white">
+          <span class="text-slate-400">〜</span>
+          <input type="date" id="published-to" onchange="search(0)" class="border border-slate-200 rounded px-2 py-1 text-xs bg-white">
+        </div>
+        <button onclick="clearDates()" class="text-xs text-slate-400 hover:text-slate-600 underline">期間クリア</button>
+      </div>
+
+      <!-- タグ検索（本サイトの核）: ヘッダー内に常設 -->
+      <div class="mt-2.5">
+        <div class="flex flex-wrap items-center gap-2">
+          <button onclick="toggleTagPanel()" id="tag-panel-btn"
+            class="text-sm px-3 py-1.5 rounded-lg border border-indigo-200 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 transition font-medium">
+            🏷️ タグで探す <span id="tag-panel-arrow">▾</span>
+          </button>
+          <div id="selected-tags" class="flex flex-wrap gap-1.5 items-center"></div>
+          <div id="tag-mode-wrap" class="hidden items-center gap-1 text-xs">
+            <button id="mode-or" onclick="setTagMode('or')"
+              class="px-2 py-1 rounded-l-lg border text-xs"></button>
+            <button id="mode-and" onclick="setTagMode('and')"
+              class="px-2 py-1 rounded-r-lg border -ml-1 text-xs"></button>
+          </div>
+          <button id="tag-clear" onclick="clearTags()"
+            class="hidden text-xs text-slate-400 hover:text-slate-600 underline">全解除</button>
+        </div>
+
+        <!-- タグピッカー本体 -->
+        <div id="tag-panel" class="hidden mt-2 border-t border-slate-100 pt-2">
+          <input id="tag-filter" type="text" placeholder="タグ名で絞り込み（例: 風力、漁業、DX）"
+            oninput="renderTagPanel()"
+            class="w-full sm:w-80 border border-slate-200 rounded-lg px-3 py-1.5 text-sm bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-300 mb-2">
+          <div id="tag-categories" class="max-h-72 overflow-y-auto space-y-1 pr-1"></div>
+          <p class="text-xs text-slate-400 mt-1.5 pb-1">数字は登録案件数（<span class="text-emerald-600">緑</span>は募集中）。複数選ぶとOR/ANDを切り替えられます。選ぶたびに結果は即更新されます。</p>
+        </div>
+      </div>
     </div>
   </div>
 
-  <!-- 状態フィルタ & タグ検索 -->
+  <!-- 状態フィルタ -->
   <div class="max-w-6xl mx-auto px-4 pt-4 space-y-2">
     <div id="status-bar" class="flex flex-wrap gap-2"></div>
-
-    <!-- タグ検索（本サイトの核）: 関心タグを組み合わせて案件を探す -->
-    <div class="bg-white border border-slate-200 rounded-xl p-3">
-      <div class="flex flex-wrap items-center gap-2">
-        <button onclick="toggleTagPanel()" id="tag-panel-btn"
-          class="text-sm px-3 py-1.5 rounded-lg border border-indigo-200 bg-indigo-50 text-indigo-700 hover:bg-indigo-100 transition font-medium">
-          🏷️ タグで探す <span id="tag-panel-arrow">▾</span>
-        </button>
-        <div id="selected-tags" class="flex flex-wrap gap-1.5 items-center"></div>
-        <div id="tag-mode-wrap" class="hidden items-center gap-1 text-xs">
-          <button id="mode-or" onclick="setTagMode('or')"
-            class="px-2 py-1 rounded-l-lg border text-xs"></button>
-          <button id="mode-and" onclick="setTagMode('and')"
-            class="px-2 py-1 rounded-r-lg border -ml-1 text-xs"></button>
-        </div>
-        <button id="tag-clear" onclick="clearTags()"
-          class="hidden text-xs text-slate-400 hover:text-slate-600 underline">全解除</button>
-      </div>
-
-      <!-- タグピッカー本体 -->
-      <div id="tag-panel" class="hidden mt-3 border-t border-slate-100 pt-3">
-        <input id="tag-filter" type="text" placeholder="タグ名で絞り込み（例: 風力、漁業、DX）"
-          oninput="renderTagPanel()"
-          class="w-full sm:w-80 border border-slate-200 rounded-lg px-3 py-1.5 text-sm bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-300 mb-2">
-        <div id="tag-categories" class="max-h-96 overflow-y-auto space-y-1 pr-1"></div>
-        <p class="text-xs text-slate-400 mt-2">数字は登録案件数（<span class="text-emerald-600">緑</span>は募集中の件数）。複数選ぶと「いずれか含む（OR）／すべて含む（AND）」を切り替えられます。</p>
-      </div>
-    </div>
   </div>
 
   <!-- 結果エリア -->
@@ -258,6 +281,29 @@
     function toggleFilter() {
       const p = document.getElementById('filter-panel');
       p.classList.toggle('open');
+    }
+
+    function toggleAdvPanel() {
+      const p = document.getElementById('adv-panel');
+      const arrow = document.getElementById('adv-arrow');
+      const opening = p.classList.contains('hidden');
+      p.classList.toggle('hidden');
+      arrow.textContent = opening ? '▴' : '▾';
+    }
+
+    function clearDates() {
+      ['deadline-from', 'deadline-to', 'published-from', 'published-to']
+        .forEach(id => document.getElementById(id).value = '');
+      search(0);
+    }
+
+    // 詳細ページへ移動（戻ったときに位置を復元できるようスクロール位置を保存）
+    function goDetail(id) {
+      try {
+        sessionStorage.setItem('backScroll',
+          JSON.stringify({ qs: location.search, y: window.scrollY }));
+      } catch (e) {}
+      location.href = '/tender/' + id;
     }
 
     const SOURCE_LABEL = { 'PORTAL': '調達ポータル', 'NEDO': 'NEDO', 'JST': 'JST', 'JOGMEC': 'JOGMEC', 'AICHI': '愛知県', 'TOKYO': '東京都' };
@@ -461,6 +507,10 @@
       const ministry = document.getElementById('ministry').value;
       const source = document.getElementById('source').value;
       const sort = document.getElementById('sort').value;
+      const dlf = document.getElementById('deadline-from').value;
+      const dlt = document.getElementById('deadline-to').value;
+      const pbf = document.getElementById('published-from').value;
+      const pbt = document.getElementById('published-to').value;
 
       const params = new URLSearchParams({ skip: page * PAGE_SIZE, limit: PAGE_SIZE });
       if (q) params.append('q', q);
@@ -470,6 +520,10 @@
       if (source) params.append('source', source);
       if (sort) params.append('sort', sort);
       if (currentDue) params.append('due_within', currentDue);
+      if (dlf) params.append('deadline_from', dlf);
+      if (dlt) params.append('deadline_to', dlt);
+      if (pbf) params.append('published_from', pbf);
+      if (pbt) params.append('published_to', pbt);
       if (selectedTags.length) {
         params.append('tags', selectedTags.join(','));
         params.append('tag_mode', tagMode);
@@ -485,6 +539,10 @@
       if (source) urlParams.set('source', source);
       if (sort) urlParams.set('sort', sort);
       if (currentDue) urlParams.set('due', currentDue);
+      if (dlf) urlParams.set('dlf', dlf);
+      if (dlt) urlParams.set('dlt', dlt);
+      if (pbf) urlParams.set('pbf', pbf);
+      if (pbt) urlParams.set('pbt', pbt);
       if (selectedTags.length) {
         urlParams.set('tags', selectedTags.join(','));
         if (tagMode !== 'or') urlParams.set('tag_mode', tagMode);
@@ -516,6 +574,15 @@
 
       document.getElementById('results').innerHTML = data.items.map(t => renderCard(t)).join('');
       renderPagination(data.total, page);
+
+      // 詳細ページから戻ってきた場合、保存したスクロール位置へ復元（1回だけ）
+      try {
+        const saved = JSON.parse(sessionStorage.getItem('backScroll') || 'null');
+        if (saved && saved.qs === location.search) {
+          sessionStorage.removeItem('backScroll');
+          window.scrollTo(0, saved.y);
+        }
+      } catch (e) {}
     }
 
     function renderCard(t) {
@@ -565,7 +632,7 @@
       const summaryHtml = renderSummary(t.summary);
 
       return `
-        <div onclick="location.href='/tender/${t.id}'"
+        <div onclick="goDetail(${t.id})"
              class="bg-white border border-slate-200 rounded-2xl p-4 card-hover cursor-pointer">
           <div class="flex items-start gap-3">
             <div class="flex flex-col gap-1.5 mt-0.5 shrink-0">
@@ -622,6 +689,8 @@
       document.getElementById('ministry').value = '';
       document.getElementById('source').value = '';
       document.getElementById('sort').value = '';
+      ['deadline-from', 'deadline-to', 'published-from', 'published-to']
+        .forEach(id => document.getElementById(id).value = '');
       selectedTags = [];
       tagMode = 'or';
       currentStatus = '';
@@ -645,6 +714,15 @@
       pendingMinistry = params.get('ministry') || '';
       currentStatus = params.get('status') || '';
       currentDue = parseInt(params.get('due') || '0', 10) || 0;
+      // 期間（詳細検索）の復元
+      const dateMap = { 'deadline-from': 'dlf', 'deadline-to': 'dlt',
+                        'published-from': 'pbf', 'published-to': 'pbt' };
+      let hasDate = false;
+      for (const [id, key] of Object.entries(dateMap)) {
+        const v = params.get(key);
+        if (v) { document.getElementById(id).value = v; hasDate = true; }
+      }
+      if (hasDate) toggleAdvPanel();  // 期間指定があればパネルを開いた状態に
       // タグ復元（tags=複数 / tag=単一・旧リンク互換）
       const tagsParam = params.get('tags') || params.get('tag') || '';
       selectedTags = tagsParam ? tagsParam.split(',').map(s => s.trim()).filter(Boolean) : [];
