@@ -241,10 +241,27 @@ FIELDNAMES = [
 ]
 
 
+def _safe_url(url: str) -> str:
+    """URLのパス・クエリに未エスケープの日本語等が含まれる場合にパーセントエンコードする。
+
+    東京都サイト等、リンクの href に日本語ファイル名をそのまま埋め込んでいる
+    ケースがあり、urllib はASCII外の文字を送信できずエラーになるため。
+    """
+    try:
+        url.encode("ascii")
+        return url  # 既にASCIIのみ→エンコード不要
+    except UnicodeEncodeError:
+        from urllib.parse import urlsplit, urlunsplit, quote
+        parts = urlsplit(url)
+        path = quote(parts.path, safe="/%")
+        query = quote(parts.query, safe="=&%")
+        return urlunsplit((parts.scheme, parts.netloc, path, query, parts.fragment))
+
+
 def _download(url: str) -> bytes:
     import urllib.request
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        req = urllib.request.Request(_safe_url(url), headers={"User-Agent": "Mozilla/5.0"})
         with urllib.request.urlopen(req, timeout=60) as resp:
             return resp.read()
     except Exception as e:  # noqa: BLE001
@@ -577,6 +594,11 @@ def main():
         return False
 
     targets = [r for r in merged.values() if needs_fetch(r)]
+    # 取得の優先順位：件数の少ない重要ソース（県/都公募など）を先に、大量のPORTALは後回し。
+    # PORTAL(数千件)が1回200件の枠を食い尽くし、県公募の本文・要約が埋まらない問題への対策。
+    _FETCH_PRIORITY = {"AICHI": 0, "TOKYO": 0, "NEDO": 1, "JST": 1,
+                       "JOGMEC": 1, "PORTAL": 2}
+    targets.sort(key=lambda r: _FETCH_PRIORITY.get(r.get("source"), 1))
     print(f"概要/予算を取得（増分）: {min(len(targets), MAX_DETAIL_PER_RUN)}件")
     for r in targets[:MAX_DETAIL_PER_RUN]:
         src = r.get("source", "")
