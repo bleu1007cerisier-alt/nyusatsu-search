@@ -470,10 +470,21 @@ def retag_rows(rows):
     from tag_master import ORG_TAG_RULES
     _org_rules = [(_re.compile(p), t) for p, t in ORG_TAG_RULES]
 
+    # 「過去の採択事例一覧」等は、当該公募と無関係な分野の事業者名・テーマが
+    # 大量に列挙され、タグの誤爆・希釈を招くため、見出し以降を切り捨てる。
+    _CASE_LIST_HEAD = _re.compile(
+        r"(令和\d+年度採択(案件|事業)|採択(案件|事業|者)一覧|"
+        r"これまでの採択|過去の採択|採択実績|採択事例)")
+
+    def _for_tagging(detail):
+        d = detail or ""
+        m = _CASE_LIST_HEAD.search(d)
+        return (d[:m.start()] if m else d)[:3000]
+
     sparse = []
     for r in rows:
         tags = generate_tags(r.get("title", ""), r.get("summary", ""),
-                             (r.get("detail") or "")[:3000])
+                             _for_tagging(r.get("detail")))
         # 発注機関名から発注元ファセットタグを付与（売り先でアンテナを張る実務者向け）
         org = r.get("organization") or ""
         for pat, tag in _org_rules:

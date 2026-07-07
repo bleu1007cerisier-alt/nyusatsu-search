@@ -134,24 +134,35 @@ def _compile_tag_matchers():
 _TAG_MATCHERS = _compile_tag_matchers()
 
 
+# 1件あたりのタグ上限。「重点領域の例示列挙」等を含む長文（スタートアップ広域公募等）は
+# 無関係な分野語まで多数ヒットしうるため、タイトル+要約に現れる語を優先して上限内に収める。
+MAX_TAGS_PER_ITEM = 10
+
+
 def generate_tags(*texts: str, extra: Optional[List[str]] = None) -> List[str]:
     """タイトル・要約・本文などから実務粒度のタグを自動付与する。
 
     texts[0]（タイトル）、texts[:2]（タイトル＋要約等）、全文の3階層で照合する。
     "!!" キーワード＝タイトルのみ / "!" ＝タイトル＋要約 / 無印＝全文。
+    タグ数が上限を超える場合、タイトル+要約に現れるタグを優先して残す
+    （本文中の「対象分野の例示列挙」等による無関係タグの希釈を防ぐ）。
     """
     title_only = _normalize_for_tags(texts[0] if texts else "")
     primary = _normalize_for_tags(" ".join(t for t in texts[:2] if t))
     blob = _normalize_for_tags(" ".join(t for t in texts if t))
     targets = (blob, primary, title_only)  # scope=0,1,2
-    tags: List[str] = []
+    primary_tags: List[str] = []   # タイトル+要約でも見つかった語（=信頼度が高い）
+    detail_only_tags: List[str] = []  # 全文（本文含む）でのみ見つかった語
     for tag, pats in _TAG_MATCHERS:
         for scope, p in pats:
             target = targets[scope]
             hit = p.search(target) if hasattr(p, "search") else (p in target)
             if hit:
-                tags.append(tag)
+                in_primary = (scope != 0) or bool(
+                    p.search(primary) if hasattr(p, "search") else (p in primary))
+                (primary_tags if in_primary else detail_only_tags).append(tag)
                 break
+    tags = primary_tags + detail_only_tags[:max(0, MAX_TAGS_PER_ITEM - len(primary_tags))]
     if extra:
         for t in extra:
             if t and t not in tags:
