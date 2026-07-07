@@ -141,6 +141,10 @@ def _ai_extract(raw_text: str, title: str = "") -> dict:
                     text = m.group(1).strip()
             try:
                 data = json.loads(text)
+                if isinstance(data, list):  # 稀に配列で返るケースの救済
+                    data = data[0] if data and isinstance(data[0], dict) else {}
+                if not isinstance(data, dict):
+                    raise ValueError("unexpected JSON shape")
             except Exception:
                 if attempt < 2:
                     continue
@@ -224,6 +228,7 @@ from scraper import (  # noqa: E402
     run_all_scrapers, fetch_nedo_detail, fetch_nedo_result,
     fetch_jst_detail, fetch_portal_detail, fetch_portal_award,
     fetch_jogmec_detail, fetch_aichi_detail, fetch_tokyo_detail, _extract_pdf_budget,
+    fetch_osaka_detail, fetch_osaka_proposal_detail, fetch_fukuoka_detail,
 )
 from datetime import date, timedelta
 import storage  # noqa: E402
@@ -640,7 +645,7 @@ def main():
 
     # 【増分】概要が未取得、または予算が未取得で未確認の案件だけ取得。
     # 本文に予算が無ければ公募要領PDFから補完。一度確認した案件は再取得しない。
-    _FETCH_SOURCES = {"NEDO", "JST", "PORTAL", "JOGMEC", "AICHI", "TOKYO"}
+    _FETCH_SOURCES = {"NEDO", "JST", "PORTAL", "JOGMEC", "AICHI", "TOKYO", "OSAKA", "FUKUOKA"}
 
     # PORTAL: ゴミ記号・ヘッダーのみの detail をリセット（→ 再取得 & AI要約の対象に）。
     # 空の detail は「取得済みだが portal 側に情報がない」ため再取得しない（無限ループ防止）。
@@ -669,8 +674,8 @@ def main():
     targets = [r for r in merged.values() if needs_fetch(r)]
     # 取得の優先順位：件数の少ない重要ソース（県/都公募など）を先に、大量のPORTALは後回し。
     # PORTAL(数千件)が1回200件の枠を食い尽くし、県公募の本文・要約が埋まらない問題への対策。
-    _FETCH_PRIORITY = {"AICHI": 0, "TOKYO": 0, "NEDO": 1, "JST": 1,
-                       "JOGMEC": 1, "PORTAL": 2}
+    _FETCH_PRIORITY = {"AICHI": 0, "TOKYO": 0, "OSAKA": 0, "FUKUOKA": 0,
+                       "NEDO": 1, "JST": 1, "JOGMEC": 1, "PORTAL": 2}
     targets.sort(key=lambda r: _FETCH_PRIORITY.get(r.get("source"), 1))
     print(f"概要/予算を取得（増分）: {min(len(targets), MAX_DETAIL_PER_RUN)}件")
     for r in targets[:MAX_DETAIL_PER_RUN]:
@@ -685,6 +690,12 @@ def main():
             info = fetch_aichi_detail(r["url"])
         elif src == "TOKYO":
             info = fetch_tokyo_detail(r["url"])
+        elif src == "OSAKA":
+            # 入札(EbController)とプロポーザル(公式サイト記事)でURL形式が異なる
+            info = (fetch_osaka_detail(r["url"]) if "EbController" in r["url"]
+                    else fetch_osaka_proposal_detail(r["url"]))
+        elif src == "FUKUOKA":
+            info = fetch_fukuoka_detail(r["url"])
         else:
             info = fetch_nedo_detail(r["url"])  # 概要＋予算（本文→無ければPDF）＋予定
         if info:  # ページ取得成功

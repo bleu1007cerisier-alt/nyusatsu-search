@@ -1961,6 +1961,391 @@ def fetch_tokyo_detail(url: str) -> Optional[Dict]:
 
 
 # ---------------------------------------------------------------------------
+# 大阪府（電子契約システム＝旧CALS/EC / プロポーザルは公式サイト静的ページ）
+# ---------------------------------------------------------------------------
+_OSAKA_BASE = "https://www.e-nyusatsu.pref.osaka.jp"
+_OSAKA_EB = _OSAKA_BASE + "/CALS/Publish/EbController"
+# 契約区分: 00=建設工事 01=測量・建設コンサル等 02=委託役務 03=物品
+_OSAKA_KEIYAKU_KBN = {"00": "建設工事", "01": "測量・建設コンサルタント等",
+                       "02": "委託役務", "03": "物品"}
+_OSAKA_DATE = re.compile(r"令和\s*(\d+)\s*年\s*(\d+)\s*月\s*(\d+)\s*日")
+_OSAKA_DATE_SLASH = re.compile(r"R(\d+)/(\d+)/(\d+)")
+
+
+def _osaka_iso(y, mo, da) -> str:
+    return f"{2018 + int(y):04d}-{int(mo):02d}-{int(da):02d}"
+
+
+def _osaka_session():
+    """セッションを確立したopenerを返す（検索・詳細どちらの前にも必要）。"""
+    import urllib.request, http.cookiejar
+    cj = http.cookiejar.CookieJar()
+    op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
+    op.addheaders = [("User-Agent", "Mozilla/5.0")]
+
+    def get(url, ref=None):
+        req = urllib.request.Request(
+            url, headers={"User-Agent": "Mozilla/5.0", **({"Referer": ref} if ref else {})})
+        return op.open(req, timeout=40).read().decode("shift_jis", "replace")
+
+    def post(url, data, ref=None):
+        import urllib.parse
+        body = urllib.parse.urlencode(data).encode("shift_jis", "replace")
+        req = urllib.request.Request(
+            url, data=body,
+            headers={"User-Agent": "Mozilla/5.0",
+                     "Content-Type": "application/x-www-form-urlencoded",
+                     **({"Referer": ref} if ref else {})})
+        return op.open(req, timeout=40).read().decode("shift_jis", "replace")
+
+    top_url = _OSAKA_EB + "?Shori=KokokuInfo"
+    get(top_url)
+    wp_url = _OSAKA_BASE + "/CALS/Publish/ebidmlit/jsp/common/EbKokokuCertificate.jsp"
+    get(wp_url, ref=top_url)
+    # 検索フォーム画面を一度経由する（未経由だとシステムエラーになる）
+    post(_OSAKA_EB, {"clientKind": "0", "screenID": "CPC000",
+                      "omeParameterID": "P001CPCS01", "RandomRequestKey": ""}, ref=wp_url)
+    return get, post
+
+
+def _osaka_parse_rows(html: str) -> List[Dict]:
+    rows = []
+    for tr in re.findall(r"<tr[^>]*>(.*?)</tr>", html, re.S | re.I):
+        m = re.search(r"open_tenpu\('([^']+)'\)", tr)
+        if not m:
+            continue
+        anken_no = m.group(1)
+        cells = [re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", c)).strip()
+                 for c in re.findall(r"<td[^>]*>(.*?)</td>", tr, re.S | re.I)]
+        cells = [c for c in cells if c is not None]
+        if len(cells) < 8:
+            continue
+        # [No, 部署, 件名, 入札方式, 業種/工種, 所在地, 公告日, 締切日, ...]
+        dept, title, method, kind, addr = cells[1], cells[2], cells[3], cells[4], cells[5]
+        pub_m = _OSAKA_DATE_SLASH.search(cells[6])
+        dl_m = _OSAKA_DATE_SLASH.search(cells[7])
+        pub = _osaka_iso("20" + pub_m.group(1) if len(pub_m.group(1)) == 1 else pub_m.group(1),
+                          pub_m.group(2), pub_m.group(3)) if pub_m else ""
+        deadline = _osaka_iso("20" + dl_m.group(1) if len(dl_m.group(1)) == 1 else dl_m.group(1),
+                               dl_m.group(2), dl_m.group(3)) if dl_m else ""
+        if not title or not anken_no:
+            continue
+        rows.append({"anken_no": anken_no, "title": title, "dept": dept,
+                      "method": method, "kind": kind, "addr": addr,
+                      "published_at": pub, "deadline": deadline})
+    return rows
+
+
+def _scrape_osaka_sync() -> List[Dict]:
+    from datetime import date
+    today = date.today()
+    nendo = str(today.year if today.month >= 4 else today.year - 1)
+    try:
+        get, post = _osaka_session()
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"大阪府セッション確立失敗: {e}")
+        return []
+
+    results = []
+    seen = set()
+    for kbn, kbn_label in _OSAKA_KEIYAKU_KBN.items():
+        try:
+            data = {
+                "screenID": "CPC000", "omeParameterID": "P002CPCS02", "clientKind": "0",
+                "searchKensakuDispKbn": "0", "searchKeiyakuKbn": kbn, "keiyakuKbn": kbn,
+                "searchOrganNumber": "00", "searchDepartNumber": "", "searchOfficeNumber": "",
+                "searchProjectName": "", "searchNyusatsuNo": "", "searchNyusatsuKbn": "",
+                "searchGyoshu": "", "searchAddress": "",
+                "searchKokokuStartDate": "", "searchKokokuEndDate": "",
+                "searchKaisatsuStartDate": "", "searchKaisatsuEndDate": "",
+                "searchNyusatsuStartDate": "", "searchNyusatsuEndDate": "",
+                "searchShowRange": "50", "showRange": "50",
+                "selectNendoIndex": "2", "searchNendo": nendo, "serverDateGengo": "令和",
+            }
+            html = post(_OSAKA_EB, data, ref=_OSAKA_EB)
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"大阪府検索失敗（{kbn_label}）: {e}")
+            continue
+        for r in _osaka_parse_rows(html):
+            if r["anken_no"] in seen:
+                continue
+            seen.add(r["anken_no"])
+            title = r["title"]
+            results.append({
+                "title":           title,
+                "category":        "入札",
+                "organization":    ("大阪府 " + r["dept"]).strip(),
+                "prefecture":      "大阪府",
+                "published_at":    r["published_at"],
+                "deadline":        r["deadline"],
+                "result_date":     "",
+                "result_url":      "",
+                "project_code":    f"OSAKA-{r['anken_no']}",
+                "awardee":         "",
+                "url":             f"{_OSAKA_EB}?ankenNo={r['anken_no']}",
+                "source":          "OSAKA",
+                "amount":          "",
+                "source_category": f"{kbn_label}/{r['kind']}",
+                "summary":         "",
+                "detail":          "",
+                "tags":            ",".join(generate_tags(title, r["dept"])),
+            })
+        # 負荷対策：区分ごとに間隔を空ける
+        import time as _time
+        _time.sleep(1.0)
+    logger.info(f"大阪府 入札: {len(results)}件取得")
+    return results
+
+
+async def scrape_osaka() -> List[Dict]:
+    """大阪府電子契約システム（旧CALS/EC）の入札公告を取得する。"""
+    try:
+        return await asyncio.to_thread(_scrape_osaka_sync)
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"大阪府スクレイパー例外: {e}")
+        return []
+
+
+def fetch_osaka_detail(url: str) -> Optional[Dict]:
+    """大阪府 入札案件の詳細（案件番号から）を取得する。添付書類はPDFのみ保存対象にする。"""
+    import urllib.parse
+    q = urllib.parse.urlparse(url).query
+    anken_no = dict(urllib.parse.parse_qsl(q)).get("ankenNo", "")
+    if not anken_no:
+        return None
+    try:
+        get, post = _osaka_session()
+        html = post(_OSAKA_EB, {"screenID": "CPC000", "omeParameterID": "P009CPCS09",
+                                 "clientKind": "0", "projectNumber": anken_no}, ref=_OSAKA_EB)
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"大阪府詳細取得失敗 {url}: {e}")
+        return None
+    # 「項目名」「値」の対を本文テキストとして連結
+    pairs = []
+    for tr in re.findall(r"<tr[^>]*>(.*?)</tr>", html, re.S | re.I):
+        cells = [re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", c)).strip()
+                 for c in re.findall(r"<td[^>]*>(.*?)</td>", tr, re.S | re.I)]
+        cells = [c for c in cells if c]
+        if len(cells) == 2:
+            pairs.append(f"{cells[0]}: {cells[1]}")
+    detail = "\n".join(pairs)
+    # 添付（拡張子.pdfのみR2対象。docx/xlsx等はリンクのみ保持）
+    attachments = []
+    for m in re.finditer(r"moveDownLoad\('([^']+)',\s*'([^']+)'\)", html):
+        data_name, disp_name = m.group(1), m.group(2)
+        attachments.append({
+            "name": disp_name, "kind": "公募要領",
+            "url": f"{_OSAKA_EB}?omeParameterID=P009DOWN02&dataName={data_name}"
+                   f"&dispFileName={urllib.parse.quote(disp_name)}&screenID=CPC000",
+        })
+    return {"detail": detail[:6000], "budget": "", "schedule": [], "attachments": attachments}
+
+
+# 大阪府 公募型プロポーザル（公式サイトに静的一覧。案件は各部局配下の個別ページ）
+_OSAKA_PROP_LIST = "https://www.pref.osaka.lg.jp/o040100/keiyaku_2/e-nyuusatsu/puropo.html"
+_PREF_OSAKA = "https://www.pref.osaka.lg.jp"
+
+
+def _scrape_osaka_proposal_sync() -> List[Dict]:
+    import urllib.request
+    op = urllib.request.build_opener()
+    op.addheaders = [("User-Agent", "Mozilla/5.0")]
+    try:
+        html = op.open(_OSAKA_PROP_LIST, timeout=40).read().decode("utf-8", "replace")
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"大阪府プロポーザル一覧取得失敗: {e}")
+        return []
+    soup = BeautifulSoup(html, "html.parser")
+    main = (soup.find("main") or soup.find(id=re.compile(r"content|main", re.I))
+            or soup.find(attrs={"class": re.compile(r"article|content|honbun|main", re.I)})
+            or soup)
+    results = []
+    seen = set()
+    for a in main.find_all("a", href=True):
+        href = a["href"]
+        text = a.get_text(" ", strip=True)
+        if not re.search(r"\.html?($|\?)", href, re.I):
+            continue
+        if not re.search(r"募集|提案|プロポーザル|公募|選定|委託先", text):
+            continue
+        full = href if href.startswith("http") else _PREF_OSAKA + href
+        if full in seen or "puropo.html" in full:
+            continue
+        seen.add(full)
+        title = re.sub(r"^【[^】]*】\s*", "", text).strip()
+        slug = re.sub(r"[^A-Za-z0-9]+", "-", href.rsplit("/", 1)[-1]).strip("-") or str(len(seen))
+        results.append({
+            "title":           title,
+            "category":        "プロポーザル",
+            "organization":    "大阪府",
+            "prefecture":      "大阪府",
+            "published_at":    "",
+            "deadline":        "",
+            "result_date":     "",
+            "result_url":      "",
+            "project_code":    f"OSAKA-P-{slug}",
+            "awardee":         "",
+            "url":             full,
+            "source":          "OSAKA",
+            "amount":          "",
+            "source_category": "",
+            "summary":         "",
+            "detail":          "",
+            "tags":            ",".join(generate_tags(title)),
+        })
+    logger.info(f"大阪府 プロポーザル: {len(results)}件取得")
+    return results
+
+
+async def scrape_osaka_proposal() -> List[Dict]:
+    try:
+        return await asyncio.to_thread(_scrape_osaka_proposal_sync)
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"大阪府プロポーザルスクレイパー例外: {e}")
+        return []
+
+
+def _fetch_pref_osaka_article(url: str) -> Optional[Dict]:
+    """pref.osaka.lg.jp の記事ページ本文を取得する（プロポーザル公募の事業内容材料）。"""
+    import urllib.request
+    try:
+        op = urllib.request.build_opener()
+        op.addheaders = [("User-Agent", "Mozilla/5.0")]
+        html = op.open(url, timeout=40).read().decode("utf-8", "replace")
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"大阪府プロポーザル詳細取得失敗 {url}: {e}")
+        return None
+    soup = BeautifulSoup(html, "html.parser")
+    main = (soup.find("main") or soup.find("article")
+            or soup.find(id=re.compile(r"content|main", re.I))
+            or soup.find(attrs={"class": re.compile(r"article|content|honbun|main", re.I)}))
+    node = main if main else soup
+    for tag in node.find_all(["script", "style", "nav", "header", "footer"]):
+        tag.decompose()
+    text = re.sub(r"\n{3,}", "\n\n", node.get_text("\n", strip=True))
+    attachments = []
+    for a in (main or soup).find_all("a", href=True):
+        href = a["href"]
+        if re.search(r"\.pdf($|\?)", href, re.I):
+            name = a.get_text(" ", strip=True) or "添付資料"
+            full = href if href.startswith("http") else _PREF_OSAKA + href
+            attachments.append({"name": name, "url": full, "kind": "公募要領"})
+    return {"detail": text[:6000], "budget": "", "schedule": [], "attachments": attachments}
+
+
+def fetch_osaka_proposal_detail(url: str) -> Optional[Dict]:
+    return _fetch_pref_osaka_article(url)
+
+
+# ---------------------------------------------------------------------------
+# 福岡県（公式サイト内「入札・公募」一覧。入札・プロポーザル・企画提案が混在）
+# ---------------------------------------------------------------------------
+_FUKUOKA_BASE = "https://www.pref.fukuoka.lg.jp"
+_FUKUOKA_LIST = _FUKUOKA_BASE + "/bid/index.php"
+
+
+def _scrape_fukuoka_sync(max_pages: int = 12) -> List[Dict]:
+    import urllib.request
+    op = urllib.request.build_opener()
+    op.addheaders = [("User-Agent", "Mozilla/5.0")]
+
+    def get(url):
+        return op.open(url, timeout=40).read().decode("utf-8", "replace")
+
+    results = []
+    seen = set()
+    for page in range(1, max_pages + 1):
+        url = _FUKUOKA_LIST if page == 1 else f"{_FUKUOKA_LIST}?page={page}"
+        try:
+            html = get(url)
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"福岡県一覧取得失敗（page={page}）: {e}")
+            break
+        blocks = re.findall(
+            r'<span class="article_date_y">([^<]+)</span>\s*'
+            r'<span class="article_date_md">([^<]+)</span>.*?'
+            r'<span class="article_title"><a href="([^"]+)">([^<]+)</a></span>\s*'
+            r'<span class="article_section">(?:<a[^>]*>([^<]*)</a>)?',
+            html, re.S)
+        if not blocks:
+            break
+        new_count = 0
+        for y, md, href, title, org in blocks:
+            full = href if href.startswith("http") else _FUKUOKA_BASE + href
+            if full in seen:
+                continue
+            seen.add(full)
+            new_count += 1
+            m = re.match(r"(\d+)月(\d+)日", md.strip())
+            pub = f"{y.strip().rstrip('年')}-{int(m.group(1)):02d}-{int(m.group(2)):02d}" if m else ""
+            title = title.strip()
+            cat = "プロポーザル" if re.search(r"プロポーザル|企画提案|企画競争", title) else "入札"
+            slug = re.sub(r"[^A-Za-z0-9]+", "-", href.rsplit("/", 1)[-1]).strip("-")
+            results.append({
+                "title":           re.sub(r"^【[^】]*】\s*", "", title),
+                "category":        cat,
+                "organization":    ("福岡県 " + (org or "").strip()).strip(),
+                "prefecture":      "福岡県",
+                "published_at":    pub,
+                "deadline":        "",
+                "result_date":     "",
+                "result_url":      "",
+                "project_code":    f"FUKUOKA-{slug}",
+                "awardee":         "",
+                "url":             full,
+                "source":          "FUKUOKA",
+                "amount":          "",
+                "source_category": "",
+                "summary":         "",
+                "detail":          "",
+                "tags":            ",".join(generate_tags(title, org or "")),
+            })
+        if new_count == 0:
+            break
+        import time as _time
+        _time.sleep(0.8)
+    logger.info(f"福岡県: {len(results)}件取得")
+    return results
+
+
+async def scrape_fukuoka() -> List[Dict]:
+    """福岡県公式サイト「入札・公募」一覧（/bid/）を取得する。"""
+    try:
+        return await asyncio.to_thread(_scrape_fukuoka_sync)
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"福岡県スクレイパー例外: {e}")
+        return []
+
+
+def fetch_fukuoka_detail(url: str) -> Optional[Dict]:
+    """福岡県 入札・公募 個別記事ページの本文を取得する。"""
+    import urllib.request
+    try:
+        op = urllib.request.build_opener()
+        op.addheaders = [("User-Agent", "Mozilla/5.0")]
+        html = op.open(url, timeout=40).read().decode("utf-8", "replace")
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"福岡県詳細取得失敗 {url}: {e}")
+        return None
+    soup = BeautifulSoup(html, "html.parser")
+    main = (soup.find("main") or soup.find("article")
+            or soup.find(id=re.compile(r"content|main", re.I))
+            or soup.find(attrs={"class": re.compile(r"article|content|honbun|main", re.I)}))
+    node = main if main else soup
+    for tag in node.find_all(["script", "style", "nav", "header", "footer"]):
+        tag.decompose()
+    text = re.sub(r"\n{3,}", "\n\n", node.get_text("\n", strip=True))
+    attachments = []
+    for a in (main or soup).find_all("a", href=True):
+        href = a["href"]
+        if re.search(r"\.pdf($|\?)", href, re.I):
+            name = a.get_text(" ", strip=True) or "添付資料"
+            full = href if href.startswith("http") else _FUKUOKA_BASE + href
+            attachments.append({"name": name, "url": full, "kind": "公募要領"})
+    return {"detail": text[:6000], "budget": "", "schedule": [], "attachments": attachments}
+
+
+# ---------------------------------------------------------------------------
 # 全スクレイパー統合
 # ---------------------------------------------------------------------------
 async def run_all_scrapers(portal_date_from: str = "", jogmec_max_id: int = 0) -> List[Dict]:
@@ -1979,6 +2364,9 @@ async def run_all_scrapers(portal_date_from: str = "", jogmec_max_id: int = 0) -
         scrape_aichi(),
         scrape_aichi_proposal(),
         scrape_tokyo(),
+        scrape_osaka(),
+        scrape_osaka_proposal(),
+        scrape_fukuoka(),
     ]
 
     scraped = await asyncio.gather(*tasks, return_exceptions=True)

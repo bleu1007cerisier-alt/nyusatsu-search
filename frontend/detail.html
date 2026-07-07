@@ -103,7 +103,7 @@
         .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
     }
-    const SOURCE_LABEL = { 'PORTAL': '調達ポータル', 'NEDO': 'NEDO', 'JST': 'JST', 'JOGMEC': 'JOGMEC', 'AICHI': '愛知県', 'TOKYO': '東京都' };
+    const SOURCE_LABEL = { 'PORTAL': '調達ポータル', 'NEDO': 'NEDO', 'JST': 'JST', 'JOGMEC': 'JOGMEC', 'AICHI': '愛知県', 'TOKYO': '東京都', 'OSAKA': '大阪府', 'FUKUOKA': '福岡県' };
     function srcLabel(s) { return SOURCE_LABEL[s] || s || ''; }
     function deadlineStatus(deadline) {
       if (!deadline) return { text: '未定', cls: 'text-gray-500', badge: '' };

@@ -447,6 +447,11 @@ DEV_SOURCES = [
     {"code": "TOKYO", "label": "東京都",
      "url": "https://www.my.metro.tokyo.lg.jp/business/search/?category=188514",
      "desc": "東京都の事業者募集・公募"},
+    {"code": "OSAKA", "label": "大阪府",
+     "url": "https://www.e-nyusatsu.pref.osaka.jp/CALS/Publish/EbController?Shori=KokokuInfo",
+     "desc": "大阪府の入札公告・プロポーザル"},
+    {"code": "FUKUOKA", "label": "福岡県",
+     "url": "https://www.pref.fukuoka.lg.jp/bid/", "desc": "福岡県の入札・公募・プロポーザル"},
 ]
 
 
