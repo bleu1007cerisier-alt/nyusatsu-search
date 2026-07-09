@@ -99,7 +99,14 @@ def main():
         for r in rows)
     fukuoka_results = fetch_fukuoka_results() if fukuoka_need else {}
 
+    # 「（入札中止）」等が付く案件は不成立で終わっているため、同名の別回（再公告）が
+    # 落札した場合に誤って紐づいてしまう。案件名だけの一致では判別できないため、
+    # 中止・不調を示す案件は突合対象から除外する。
+    _FUKUOKA_VOID = _re.compile(r"入札中止|不調|不落|中止|取消|取り止め")
+
     def _fukuoka_match(title):
+        if _FUKUOKA_VOID.search(title):
+            return None
         norm = _re.sub(r"[\s　]", "", title)
         for name, rec in fukuoka_results.items():
             if norm in name or name in norm:
