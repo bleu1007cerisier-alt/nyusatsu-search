@@ -47,6 +47,11 @@
           <div id="m-cost" class="text-2xl font-bold text-gray-800">—</div>
           <div id="cost-note" class="text-[10px] text-gray-400 mt-0.5"></div>
         </div>
+        <div class="bg-white border rounded-xl p-4">
+          <div class="text-xs text-gray-500">AIコスト 全期間累計</div>
+          <div id="m-cost-alltime" class="text-2xl font-bold text-gray-800">—</div>
+          <div class="text-[10px] text-gray-400 mt-0.5">リセットしても減らない・予算管理用の実額</div>
+        </div>
       </section>
 
       <!-- データソース -->
@@ -199,6 +204,9 @@
       // AIコスト：画面表示はローカルのベースライン(リセット地点)を差し引いた値
       window._cumCost = d.ai_cost_recent_usd || 0;
       renderCost();
+      // 全期間累計（直近50件枠の外側で管理・リセット不可・減らない）
+      document.getElementById('m-cost-alltime').textContent =
+        '$' + (d.ai_cost_alltime_usd || 0).toFixed(2);
       document.getElementById('ai-model').textContent=d.ai_model||'—';
       document.getElementById('console-link').href=d.console_url||'#';
 
@@ -278,7 +286,7 @@
       const shown = Math.max(0, cum - base);
       document.getElementById('m-cost').textContent = '$' + shown.toFixed(2);
       document.getElementById('cost-note').textContent =
-        base > 0 ? `累計 $${cum.toFixed(2)} / リセット地点 $${base.toFixed(2)}` : `累計 $${cum.toFixed(2)}`;
+        base > 0 ? `直近50件分 $${cum.toFixed(2)} / リセット地点 $${base.toFixed(2)}` : `直近50件分の合計 $${cum.toFixed(2)}`;
     }
     document.getElementById('cost-reset').addEventListener('click', ()=>{
       localStorage.setItem('costBaseline', String(window._cumCost || 0));

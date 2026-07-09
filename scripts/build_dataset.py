@@ -943,19 +943,29 @@ def _write_update_log(scraped, new, updated, total, portal_retry, repaired):
         "ai_cost_usd": round(cost, 4),
     }
     history = []
+    alltime_cost = 0.0
     if os.path.exists(log_path):
         try:
             with open(log_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
                 history = data.get("runs", []) if isinstance(data, dict) else []
+                # 直近50件の合計しか保持していなかった旧データからの移行時は、
+                # 既存のrunsの合計を初期値として引き継ぐ（過去分を消さない）
+                alltime_cost = float(data.get("cumulative_cost_usd_alltime")
+                                     if isinstance(data, dict) and data.get("cumulative_cost_usd_alltime") is not None
+                                     else sum(float(r.get("ai_cost_usd") or 0) for r in history))
         except (ValueError, OSError):
             history = []
     history.append(entry)
-    history = history[-50:]  # 直近50件のみ保持
-    # 累計コスト（全履歴の合計）
-    total_cost = round(sum(float(r.get("ai_cost_usd") or 0) for r in history), 4)
+    history = history[-50:]  # 表示用の直近50件のみ保持（生涯累計とは別管理）
+    # 直近50件の合計（＝古い実行ほど表示から消えていく参考値）
+    total_cost_recent = round(sum(float(r.get("ai_cost_usd") or 0) for r in history), 4)
+    # 生涯累計（このカウンタ自体は50件枠の対象外・一切減らない）
+    alltime_cost = round(alltime_cost + entry["ai_cost_usd"], 4)
     with open(log_path, "w", encoding="utf-8") as f:
-        json.dump({"runs": history, "cumulative_cost_usd_recent": total_cost}, f,
+        json.dump({"runs": history,
+                   "cumulative_cost_usd_recent": total_cost_recent,
+                   "cumulative_cost_usd_alltime": alltime_cost}, f,
                   ensure_ascii=False, indent=2)
     print(f"実行ログ更新: AI {entry['ai_calls']}回 / 推定コスト ${entry['ai_cost_usd']}")
 

@@ -556,13 +556,16 @@ def dev_status():
 
     # 自動更新履歴・AIコスト
     log_path = os.path.join(os.path.dirname(__file__), "../dataset/update_log.json")
-    runs, cost_recent = [], 0.0
+    runs, cost_recent, cost_alltime = [], 0.0, 0.0
     if os.path.exists(log_path):
         try:
             with open(log_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
             runs = data.get("runs", [])
+            # recent: 直近50件分のみの合計（表示している実行履歴と対応する参考値）
+            # alltime: 全期間の累計（50件を超えても減らない、予算管理用の正の値）
             cost_recent = data.get("cumulative_cost_usd_recent", 0.0)
+            cost_alltime = data.get("cumulative_cost_usd_alltime", cost_recent)
         except (ValueError, OSError):
             pass
 
@@ -587,6 +590,7 @@ def dev_status():
         "summarized": summarized,
         "summary_eligible": summary_eligible,
         "ai_cost_recent_usd": cost_recent,
+        "ai_cost_alltime_usd": cost_alltime,
         "ai_model": "claude-haiku-4-5",
         "console_url": "https://console.anthropic.com/settings/billing",
         # タグ充足状況（目標: 平均3.5タグ/件。要約が埋まると自然に上がる）

@@ -313,5 +313,6 @@
       "ai_cost_usd": 0.383
     }
   ],
-  "cumulative_cost_usd_recent": 12.0184
+  "cumulative_cost_usd_recent": 12.0184,
+  "cumulative_cost_usd_alltime": 12.0184
 }
