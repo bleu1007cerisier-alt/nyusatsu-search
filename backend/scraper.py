@@ -2079,7 +2079,9 @@ def _scrape_osaka_sync() -> List[Dict]:
                 "published_at":    r["published_at"],
                 "deadline":        r["deadline"],
                 "result_date":     "",
-                "result_url":      "",
+                # 案件番号は入札公告と共通のため、結果ページも同じURLで参照できる
+                # （check_results.py が result_url を見て fetch_osaka_result を呼ぶ）
+                "result_url":      f"{_OSAKA_EB}?ankenNo={r['anken_no']}",
                 "project_code":    f"OSAKA-{r['anken_no']}",
                 "awardee":         "",
                 "url":             f"{_OSAKA_EB}?ankenNo={r['anken_no']}",
@@ -2139,6 +2141,46 @@ def fetch_osaka_detail(url: str) -> Optional[Dict]:
                    f"&dispFileName={urllib.parse.quote(disp_name)}&screenID=CPC000",
         })
     return {"detail": detail[:6000], "budget": "", "schedule": [], "attachments": attachments}
+
+
+def fetch_osaka_result(url: str) -> Dict[str, str]:
+    """大阪府 入札結果（落札者）ページから決定事業者を返す（NEDO方式：result_url→fetch→awardee）。
+
+    案件番号は入札公告と共通のため、fetch_osaka_detail と同じURL(?ankenNo=)をそのまま使う。
+    未決定（「確認中」等）の場合は awardee 空文字を返す。
+    """
+    import urllib.parse
+    q = urllib.parse.urlparse(url).query
+    anken_no = dict(urllib.parse.parse_qsl(q)).get("ankenNo", "")
+    if not anken_no:
+        return {}
+    try:
+        get, post = _osaka_session()
+        html = post(_OSAKA_EB, {"screenID": "CPC000", "omeParameterID": "P005CPCS05",
+                                 "clientKind": "0", "projectNumber": anken_no}, ref=_OSAKA_EB)
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"大阪府結果取得失敗 {url}: {e}")
+        return {}
+    pairs = {}
+    for tr in re.findall(r"<tr[^>]*>(.*?)</tr>", html, re.S | re.I):
+        cells = [re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", c)).strip()
+                 for c in re.findall(r"<td[^>]*>(.*?)</td>", tr, re.S | re.I)]
+        cells = [c for c in cells if c]
+        if len(cells) == 2:
+            pairs[cells[0].replace(" ", "").strip()] = cells[1]
+    awardee = ""
+    for key in pairs:
+        if key.startswith("落札企業名称") or key.startswith("落札者"):
+            val = pairs[key].replace("&nbsp;", "").strip()
+            if val:
+                awardee = val
+            break
+    result_date = ""
+    kaisatsu = pairs.get("開札日時", "")
+    m = _OSAKA_DATE.search(kaisatsu)
+    if m:
+        result_date = _osaka_iso(m.group(1), m.group(2), m.group(3))
+    return {"awardee": awardee, "result_date": result_date} if awardee else {}
 
 
 # 大阪府 公募型プロポーザル（公式サイトに静的一覧。案件は各部局配下の個別ページ）
@@ -2242,6 +2284,24 @@ def fetch_osaka_proposal_detail(url: str) -> Optional[Dict]:
 # ---------------------------------------------------------------------------
 _FUKUOKA_BASE = "https://www.pref.fukuoka.lg.jp"
 _FUKUOKA_LIST = _FUKUOKA_BASE + "/bid/index.php"
+# 「落札者の公示」系タイトルの判定（表記が多様：「等について」「＜＞」「(落札者の公示について)「...」」等）。
+# 結果発表であり応募できる案件ではないため、一覧から除外する判定にはこのラベル一致だけを使う。
+_FUKUOKA_AWARD_LABEL = re.compile(r"落札者の公示|契約の相手方の公示|契約者の公示")
+
+
+def _fukuoka_award_contract_name(title: str) -> str:
+    """「落札者の公示」系タイトルから契約名称を取り出す（無ければ空文字）。
+
+    括弧の種類（「」（）()＜＞）がタイトルにより異なるため順に試す。契約名自体に
+    括弧が入れ子で含まれることがある（例:「...業務委託契約（筑後）」）ため、最初の
+    開き括弧から最後の閉じ括弧までを貪欲マッチで取る。ラベル自体を囲むだけの括弧
+    （"落札者の公示について"等）は除外する。
+    """
+    for lb, rb in (("「", "」"), ("（", "）"), ("(", ")"), ("＜", "＞")):
+        m = re.search(re.escape(lb) + r"(.+)" + re.escape(rb), title)
+        if m and "の公示" not in m.group(1):
+            return m.group(1).strip()
+    return ""
 
 
 def _scrape_fukuoka_sync(max_pages: int = 12) -> List[Dict]:
@@ -2276,9 +2336,13 @@ def _scrape_fukuoka_sync(max_pages: int = 12) -> List[Dict]:
                 continue
             seen.add(full)
             new_count += 1
+            title = title.strip()
+            if _FUKUOKA_AWARD_LABEL.search(title):
+                # 「落札者の公示」等は結果発表であり応募できる案件ではないため、
+                # 通常の案件一覧には含めない（決定事業者は fetch_fukuoka_results で別途取得）。
+                continue
             m = re.match(r"(\d+)月(\d+)日", md.strip())
             pub = f"{y.strip().rstrip('年')}-{int(m.group(1)):02d}-{int(m.group(2)):02d}" if m else ""
-            title = title.strip()
             cat = "プロポーザル" if re.search(r"プロポーザル|企画提案|企画競争", title) else "入札"
             slug = re.sub(r"[^A-Za-z0-9]+", "-", href.rsplit("/", 1)[-1]).strip("-")
             results.append({
@@ -2343,6 +2407,91 @@ def fetch_fukuoka_detail(url: str) -> Optional[Dict]:
             full = href if href.startswith("http") else _FUKUOKA_BASE + href
             attachments.append({"name": name, "url": full, "kind": "公募要領"})
     return {"detail": text[:6000], "budget": "", "schedule": [], "attachments": attachments}
+
+
+def _fukuoka_wareki_iso(text: str) -> str:
+    m = re.search(r"令和\s*(\d+)\s*年\s*(\d+)\s*月\s*(\d+)\s*日", text)
+    if not m:
+        return ""
+    y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    return f"{2018 + y:04d}-{mo:02d}-{d:02d}"
+
+
+def _parse_fukuoka_award_page(html: str) -> Dict[str, str]:
+    """「落札者の公示」記事本文から決定事業者・金額・決定日を抽出する。"""
+    soup = BeautifulSoup(html, "html.parser")
+    main = (soup.find("main") or soup.find("article")
+            or soup.find(id=re.compile(r"content|main", re.I))
+            or soup.find(attrs={"class": re.compile(r"article|content|honbun|main", re.I)}))
+    node = main if main else soup
+    for tag in node.find_all(["script", "style", "nav", "header", "footer"]):
+        tag.decompose()
+    flat = re.sub(r"\s+", "", node.get_text("\n", strip=True))
+
+    awardee = ""
+    # 表記が「氏名」「落札業者氏名」等揺れるため、本文中で最後に出現する「氏名」ラベルの
+    # 直後（＝実際の値の直前）から、次の「住所/所在地」ラベルか丸括弧番号までを値とみなす。
+    # 除外文字クラスにすると社名末尾の「事業所」等の「所」で誤って途切れるため使わない。
+    idx = flat.rfind("氏名")
+    if idx >= 0:
+        tail = flat[idx + 2: idx + 2 + 100]
+        m = re.match(r"(.+?)(?:[（(][０-９0-9]{1,2}[）)]|住所|所在地)", tail)
+        if m:
+            awardee = m.group(1).strip("　 ・:：")
+    amount = ""
+    am = re.search(r"落札金額\s*([0-9,，][0-9,，]*円)", flat)
+    if am:
+        amount = am.group(1)
+    result_date = _fukuoka_wareki_iso(
+        (re.search(r"落札者を決定した日([^\d]{0,3}令和\d+年\d+月\d+日)", flat) or [None, ""])[1] or flat)
+    return {"awardee": awardee, "amount": amount, "result_date": result_date}
+
+
+def fetch_fukuoka_results(max_pages: int = 5) -> Dict[str, Dict]:
+    """福岡県の「落札者の公示」記事を一括取得し、{契約名称: {awardee, amount, result_date}} を返す。
+
+    福岡県は入札公告と結果公示が別記事でIDの紐づけが無いため、記事タイトルの括弧内にある
+    契約名称で後から突合する（愛知県の一括取得方式と同じ考え方）。直近数ページのみ走査する
+    （新しい公示ほど先頭に出るため）。
+    """
+    import urllib.request, time as _time
+    op = urllib.request.build_opener()
+    op.addheaders = [("User-Agent", "Mozilla/5.0")]
+
+    def get(url):
+        return op.open(url, timeout=40).read().decode("utf-8", "replace")
+
+    out = {}
+    for page in range(1, max_pages + 1):
+        url = _FUKUOKA_LIST if page == 1 else f"{_FUKUOKA_LIST}?page={page}"
+        try:
+            html = get(url)
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"福岡県 落札者公示一覧取得失敗（page={page}）: {e}")
+            break
+        links = re.findall(r'<span class="article_title"><a href="([^"]+)">([^<]+)</a></span>', html)
+        if not links:
+            break
+        for href, title in links:
+            title = title.strip()
+            if not _FUKUOKA_AWARD_LABEL.search(title):
+                continue
+            contract_name = _fukuoka_award_contract_name(title)
+            if not contract_name or contract_name in out:
+                continue
+            full = href if href.startswith("http") else _FUKUOKA_BASE + href
+            try:
+                detail_html = get(full)
+            except Exception as e:  # noqa: BLE001
+                logger.error(f"福岡県 落札者公示取得失敗 {full}: {e}")
+                continue
+            rec = _parse_fukuoka_award_page(detail_html)
+            if rec.get("awardee"):
+                out[contract_name] = rec
+            _time.sleep(0.6)
+        _time.sleep(0.5)
+    logger.info(f"福岡県 落札者の公示: {len(out)}件取得")
+    return out
 
 
 # ---------------------------------------------------------------------------

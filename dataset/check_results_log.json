@@ -11,6 +11,36 @@
       "checked": 50,
       "updated": 36,
       "expired": 75
+    },
+    {
+      "at": "2026-07-09T05:35:34+00:00",
+      "checked": 30,
+      "updated": 16,
+      "expired": 77
+    },
+    {
+      "at": "2026-07-09T05:40:02+00:00",
+      "checked": 69,
+      "updated": 1,
+      "expired": 0
+    },
+    {
+      "at": "2026-07-09T05:45:21+00:00",
+      "checked": 68,
+      "updated": 0,
+      "expired": 0
+    },
+    {
+      "at": "2026-07-09T05:49:54+00:00",
+      "checked": 68,
+      "updated": 0,
+      "expired": 0
+    },
+    {
+      "at": "2026-07-09T06:01:45+00:00",
+      "checked": 278,
+      "updated": 35,
+      "expired": 0
     }
   ]
 }

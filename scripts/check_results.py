@@ -27,6 +27,7 @@ sys.path.insert(0, os.path.join(ROOT, "backend"))
 from scraper import (  # noqa: E402
     fetch_nedo_result, fetch_portal_award, fetch_jst_detail,
     fetch_jogmec_result_url, fetch_jogmec_result, fetch_aichi_results,
+    fetch_osaka_result, fetch_fukuoka_results,
 )
 import re as _re
 
@@ -90,6 +91,21 @@ def main():
         for r in rows)
     aichi_results = fetch_aichi_results() if aichi_need else {}
 
+    # 福岡県の決定事業者：「落札者の公示」記事を一括取得し、案件名で突合する
+    # （福岡県は入札公告と結果公示が別記事でIDの紐づけが無いため、愛知県と同じ一括方式）
+    fukuoka_need = any(
+        r.get("source") == "FUKUOKA" and not (r.get("awardee") or "").strip()
+        and (r.get("awardee_checked") or "") != "1"
+        for r in rows)
+    fukuoka_results = fetch_fukuoka_results() if fukuoka_need else {}
+
+    def _fukuoka_match(title):
+        norm = _re.sub(r"[\s　]", "", title)
+        for name, rec in fukuoka_results.items():
+            if norm in name or name in norm:
+                return rec
+        return None
+
     for row in rows:
         # 既に事業者確定 or 監視終了 → スキップ
         if (row.get("awardee") or "").strip():
@@ -120,6 +136,19 @@ def main():
                 updated += 1
             continue
 
+        # 福岡県：一括取得済みの「落札者の公示」記事から案件名で突合（ネットワークは1回だけ）
+        if src == "FUKUOKA":
+            rec = _fukuoka_match(row.get("title", ""))
+            if rec and rec.get("awardee"):
+                row["awardee"] = _ai_split_awardee(rec["awardee"])
+                row["awardee_checked"] = "1"
+                if rec.get("result_date") and not (row.get("result_date") or "").strip():
+                    row["result_date"] = rec["result_date"]
+                if rec.get("amount") and not (row.get("amount") or "").strip():
+                    row["amount"] = rec["amount"]
+                updated += 1
+            continue
+
         if checked >= MAX_CHECK_PER_RUN:
             continue
 
@@ -127,13 +156,18 @@ def main():
         info = {}
 
         if result_url:
-            # result_url がある場合は直接取得（NEDO・PORTAL）
+            # result_url がある場合は直接取得（NEDO・PORTAL・大阪府）
             if src == "PORTAL":
                 info = fetch_portal_award(result_url)
             elif src == "NEDO":
                 result_date = (row.get("result_date") or "").strip()
                 if result_date:
                     info = fetch_nedo_result(result_url)
+            elif src == "OSAKA":
+                # 入札締切前は未開札のため無駄打ちを避ける
+                deadline = (row.get("deadline") or "").strip()
+                if not deadline or deadline <= str(today):
+                    info = fetch_osaka_result(result_url)
             checked += 1
             time.sleep(DETAIL_SLEEP)
 

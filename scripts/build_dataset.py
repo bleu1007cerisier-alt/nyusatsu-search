@@ -239,7 +239,7 @@ CSV_PATH = os.path.join(DATASET_DIR, "tenders.csv")
 FIELDNAMES = [
     "id", "title", "category", "organization", "prefecture",
     "published_at", "deadline", "close_date", "result_date", "project_code", "awardee",
-    "awardee_checked", "amount", "budget_checked", "url",
+    "awardee_checked", "amount", "budget_checked", "url", "result_url",
     "source_category", "summary", "detail",
     "schedule", "attachments", "attachments_checked", "tags", "source",
     "first_seen", "last_seen",
@@ -605,6 +605,7 @@ def main():
                 "result_date": item.get("result_date") or prev.get("result_date", ""),
                 "project_code": item.get("project_code") or prev.get("project_code", ""),
                 "amount": item.get("amount") or prev.get("amount", ""),
+                "result_url": item.get("result_url") or prev.get("result_url", ""),
                 "source_category": item.get("source_category") or prev.get("source_category", ""),
                 # summary はAI要約専用のため、スクレイパーの値で上書きしない
                 "tags": item.get("tags") or prev.get("tags", ""),
