@@ -3276,6 +3276,160 @@ def fetch_niigata_detail(url: str) -> Optional[Dict]:
     return {"detail": text[:6000], "budget": "", "schedule": [], "attachments": attachments}
 
 
+# ---------------------------------------------------------------------------
+# 石川県（電子入札共同システム「SuperCALS」。セッションCookie＋POSTフォーム連鎖で
+# 検索を実行する古いJSPシステム。詳細は下記フローで攻略：
+#   1. POST ejParameterID=StartPage&KikanNO=1700100 → JSESSIONID発行
+#   2. POST ejParameterID=EjQSJ01&ejProcessName=start → 検索画面へ遷移
+#   3. POST ejParameterID=EjQSJ01&ejProcessName=findList（+検索条件） → 一覧取得
+#   4. POST ejParameterID=EjQSJ01&ejProcessName=getDetailPage
+#      &ejCategoryName=display&ejKeyNo={一覧内index}&ejFindVersion={一覧応答内の値}
+#      → 案件詳細取得
+# ejFindVersionは検索結果ごとに変わるため、一覧取得と詳細取得は同一セッション内で
+# 連続して行う必要がある（他ソースのような「後段で詳細だけ再取得」は不可）。
+# ---------------------------------------------------------------------------
+_ISHIKAWA_BASE = "https://www.ep-bis.supercals.jp"
+_ISHIKAWA_EJ = _ISHIKAWA_BASE + "/ebidPPIGPublish/EjPPIj"
+_ISHIKAWA_KIKAN = "1700100"
+_ISHIKAWA_PORTAL_URL = f"{_ISHIKAWA_EJ}?KikanNO={_ISHIKAWA_KIKAN}"
+
+_ISHIKAWA_ROW_RE = re.compile(
+    r'<TD class="DISP_LIST_L_R">\s*(\d+)\s*</TD>\s*'
+    r'<TD class="DISP_LIST_L_C">\s*([^<]*?)\s*</TD>\s*'
+    r'<TD class="DISP_LIST_L_L">\s*([^<]*?)\s*</TD>\s*'
+    r'<TD class="DISP_LIST_L_C">\s*([^<]*?)\s*</TD>\s*'
+    r'<TD class="DISP_LIST_L_L">\s*([^<]*?)\s*</TD>\s*'
+    r'<TD class="DISP_LIST_L_C">\s*([^<]*?)\s*</TD>\s*'
+    r'<TD class="DISP_LIST_L_R">\s*([^<]*?)\s*</TD>\s*'
+    r'<TD class="DISP_LIST_L_C">([^<]*)</TD>\s*'
+    r'<TD class="DISP_LIST_L_L"><A href="#" onClick="javascript:openYotei\(\'(\d+)\'\)',
+    re.S)
+
+
+def _ishikawa_wareki_iso(text: str) -> str:
+    m = re.search(r"令和\s*0*(\d+)\s*年\s*0*(\d+)\s*月\s*0*(\d+)\s*日", text)
+    if not m:
+        return ""
+    y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    return f"{2018 + y:04d}-{mo:02d}-{d:02d}"
+
+
+def _parse_ishikawa_detail(html: str) -> Dict[str, str]:
+    """石川県 案件詳細（getDetailPage応答）から組織・公告日・締切を抽出する。"""
+    soup = BeautifulSoup(html, "html.parser")
+    text = soup.get_text("\n", strip=True)
+    org = ""
+    m = re.search(r"令和\d+年度\s*\n(.*?)\n調達案件名称", text, re.S)
+    if m:
+        org = re.sub(r"\s+", "", m.group(1))
+    published_at = ""
+    m2 = re.search(r"公告日\n([^\n]+)", text)
+    if m2:
+        published_at = _ishikawa_wareki_iso(m2.group(1))
+    deadline = ""
+    # 一般競争・指名競争は「入札書受付日時」、随意契約は「見積書受付締切日時」とラベルが異なる
+    m3 = re.search(r"(?:入札書受付日時|見積書受付締切日時)\n(.*?)\n開札予定日時", text, re.S)
+    if m3:
+        dates = re.findall(r"令和\d+年\d+月\d+日", m3.group(1))
+        if dates:
+            deadline = _ishikawa_wareki_iso(dates[-1])
+    amount = ""
+    # 「予定価格」の次行は「（税別）」等の注記のことがあるため、その場合は次の行を値とみなす
+    m4 = re.search(r"予定価格\n+(?:[^\n]*[）)]\n+)?([^\n]+)", text)
+    if m4 and "非公開" not in m4.group(1):
+        amount = m4.group(1).strip()
+    return {"org": org, "published_at": published_at, "deadline": deadline,
+            "amount": amount, "detail": text[:4000]}
+
+
+def _scrape_ishikawa_sync() -> List[Dict]:
+    import hashlib
+    import time as _time
+    import urllib.request
+    import urllib.parse
+    import http.cookiejar
+
+    jar = http.cookiejar.CookieJar()
+    op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+    op.addheaders = [("User-Agent", "Mozilla/5.0")]
+
+    def post(data):
+        body = urllib.parse.urlencode(data).encode()
+        return op.open(_ISHIKAWA_EJ, data=body, timeout=40).read().decode("shift_jis", "replace")
+
+    try:
+        post({"ejParameterID": "StartPage", "KikanNO": _ISHIKAWA_KIKAN})
+        post({"ejParameterID": "EjQSJ01", "ejProcessName": "start"})
+        list_html = post({
+            "Nendo": "", "KikanNOnyu": _ISHIKAWA_KIKAN, "BukyokuNOnyu": "", "KakakariNOnyu": "",
+            "BidStDate": "", "BidEnDate": "", "ShikakuType": "", "EigyoHinmokuCD": "",
+            "SearchString1": "", "kkselect": "AND", "SearchString2": "",
+            "ejMaxDisplayRowCount": "50", "ejDisplaySort": "030006", "ejSortSequence": "desc",
+            "ejParameterID": "EjQSJ01", "ejProcessName": "findList", "ejShousaiDispFlag": "false",
+        })
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"石川県セッション確立・検索失敗: {e}")
+        return []
+
+    rows = _ISHIKAWA_ROW_RE.findall(list_html)
+    m = re.search(r'ejFindVersion" value="(\d+)"', list_html)
+    find_version = m.group(1) if m else ""
+    if not rows or not find_version:
+        logger.info("石川県: 該当案件なし、またはejFindVersion取得失敗")
+        return []
+
+    results = []
+    for _no, bid_date, title, _grade, gyoshu, _method, _price, update_date, idx in rows:
+        title = title.strip()
+        try:
+            dhtml = post({
+                "ejParameterID": "EjQSJ01", "ejProcessName": "getDetailPage",
+                "ejCategoryName": "display", "ejKeyNo": idx,
+                "ejFindVersion": find_version, "ejStartPosition": "0",
+                "ejMaxDisplayRowCount": "50", "ejShousaiDispFlag": "false",
+            })
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"石川県詳細取得失敗（{title}）: {e}")
+            continue
+        info = _parse_ishikawa_detail(dhtml)
+        slug = hashlib.md5((title + bid_date + update_date).encode("utf-8")).hexdigest()[:12]
+        results.append({
+            "title":           title,
+            "category":        "入札",
+            "organization":    ("石川県 " + info["org"]).strip(),
+            "prefecture":      "石川県",
+            "published_at":    info["published_at"],
+            "deadline":        info["deadline"],
+            "result_date":     "",
+            "result_url":      "",
+            "project_code":    f"ISHIKAWA-{slug}",
+            "awardee":         "",
+            "url":             f"{_ISHIKAWA_PORTAL_URL}#{slug}",
+            "source":          "ISHIKAWA",
+            "amount":          info["amount"],
+            "source_category": gyoshu.strip(),
+            "summary":         "",
+            "detail":          info["detail"],
+            "tags":            ",".join(generate_tags(title, info["org"])),
+        })
+        _time.sleep(0.5)
+    logger.info(f"石川県: {len(results)}件取得")
+    return results
+
+
+async def scrape_ishikawa() -> List[Dict]:
+    """石川県電子入札共同システム（SuperCALS）「入札予定」一覧を取得する。
+
+    一覧・詳細ともにセッション依存のため、他ソースと異なりこの関数だけで
+    detail・organization・deadlineまで全て確定させる（後段の詳細取得フェーズは通さない）。
+    """
+    try:
+        return await asyncio.to_thread(_scrape_ishikawa_sync)
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"石川県スクレイパー例外: {e}")
+        return []
+
+
 def _parse_fukuoka_award_page(html: str) -> Dict[str, str]:
     """「落札者の公示」記事本文から決定事業者・金額・決定日を抽出する。"""
     soup = BeautifulSoup(html, "html.parser")
@@ -3383,6 +3537,7 @@ async def run_all_scrapers(portal_date_from: str = "", jogmec_max_id: int = 0) -
         scrape_shizuoka(),
         scrape_fukui(),
         scrape_niigata(),
+        scrape_ishikawa(),
     ]
 
     scraped = await asyncio.gather(*tasks, return_exceptions=True)

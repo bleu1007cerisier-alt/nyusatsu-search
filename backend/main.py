@@ -476,6 +476,9 @@ DEV_SOURCES = [
     {"code": "NIIGATA", "label": "新潟県",
      "url": "https://www.pref.niigata.lg.jp/life/sub/8/",
      "desc": "新潟県の入札・発注・売却"},
+    {"code": "ISHIKAWA", "label": "石川県",
+     "url": "https://www.ep-bis.supercals.jp/ebidPPIGPublish/EjPPIj?KikanNO=1700100",
+     "desc": "石川県電子入札共同システムの入札予定"},
 ]
 
 
