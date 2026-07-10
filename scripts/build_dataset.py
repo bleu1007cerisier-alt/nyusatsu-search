@@ -229,6 +229,8 @@ from scraper import (  # noqa: E402
     fetch_jst_detail, fetch_portal_detail, fetch_portal_award,
     fetch_jogmec_detail, fetch_aichi_detail, fetch_tokyo_detail, _extract_pdf_budget,
     fetch_osaka_detail, fetch_osaka_proposal_detail, fetch_fukuoka_detail,
+    fetch_mie_detail, fetch_gifu_detail, fetch_yamanashi_detail, fetch_toyama_detail,
+    fetch_nagano_detail, fetch_shizuoka_detail, fetch_fukui_detail, fetch_niigata_detail,
 )
 from datetime import date, timedelta
 import storage  # noqa: E402
@@ -391,6 +393,24 @@ def _budget_from_r2(row: dict) -> str:
         except Exception as e:
             print(f"R2 PDF読込失敗 {key}: {e}")
     return ""
+
+
+def _interleave_by_priority(rows, priority_map):
+    """優先度でグループ化し、各優先度内はソース間でラウンドロビンに並べる。
+    件数の多いソース（愛知・岐阜等）が同一優先度内の他ソースの枠を独占し、
+    件数の少ない新規ソースがいつまでも詳細取得の順番に回ってこない問題を防ぐ。"""
+    from collections import defaultdict, deque
+    by_priority = defaultdict(lambda: defaultdict(deque))
+    for r in rows:
+        by_priority[priority_map.get(r.get("source"), 1)][r.get("source")].append(r)
+    ordered = []
+    for pri in sorted(by_priority):
+        buckets = list(by_priority[pri].values())
+        while any(buckets):
+            for b in buckets:
+                if b:
+                    ordered.append(b.popleft())
+    return ordered
 
 
 # 1回の実行で詳細/結果ページを取得する最大件数（負荷・実行時間対策。未取得分を順次埋める）
@@ -646,7 +666,8 @@ def main():
 
     # 【増分】概要が未取得、または予算が未取得で未確認の案件だけ取得。
     # 本文に予算が無ければ公募要領PDFから補完。一度確認した案件は再取得しない。
-    _FETCH_SOURCES = {"NEDO", "JST", "PORTAL", "JOGMEC", "AICHI", "TOKYO", "OSAKA", "FUKUOKA"}
+    _FETCH_SOURCES = {"NEDO", "JST", "PORTAL", "JOGMEC", "AICHI", "TOKYO", "OSAKA", "FUKUOKA",
+                       "MIE", "GIFU", "YAMANASHI", "TOYAMA", "NAGANO", "SHIZUOKA", "FUKUI", "NIIGATA"}
 
     # PORTAL: ゴミ記号・ヘッダーのみの detail をリセット（→ 再取得 & AI要約の対象に）。
     # 空の detail は「取得済みだが portal 側に情報がない」ため再取得しない（無限ループ防止）。
@@ -675,9 +696,10 @@ def main():
     targets = [r for r in merged.values() if needs_fetch(r)]
     # 取得の優先順位：件数の少ない重要ソース（県/都公募など）を先に、大量のPORTALは後回し。
     # PORTAL(数千件)が1回200件の枠を食い尽くし、県公募の本文・要約が埋まらない問題への対策。
-    _FETCH_PRIORITY = {"AICHI": 0, "TOKYO": 0, "OSAKA": 0, "FUKUOKA": 0,
-                       "NEDO": 1, "JST": 1, "JOGMEC": 1, "PORTAL": 2}
-    targets.sort(key=lambda r: _FETCH_PRIORITY.get(r.get("source"), 1))
+    _FETCH_PRIORITY = {"AICHI": 0, "TOKYO": 0, "OSAKA": 0, "FUKUOKA": 0, "MIE": 0, "GIFU": 0,
+                       "YAMANASHI": 0, "TOYAMA": 0, "NAGANO": 0, "SHIZUOKA": 0, "FUKUI": 0,
+                       "NIIGATA": 0, "NEDO": 1, "JST": 1, "JOGMEC": 1, "PORTAL": 2}
+    targets = _interleave_by_priority(targets, _FETCH_PRIORITY)
     print(f"概要/予算を取得（増分）: {min(len(targets), MAX_DETAIL_PER_RUN)}件")
     for r in targets[:MAX_DETAIL_PER_RUN]:
         src = r.get("source", "")
@@ -697,6 +719,22 @@ def main():
                     else fetch_osaka_proposal_detail(r["url"]))
         elif src == "FUKUOKA":
             info = fetch_fukuoka_detail(r["url"])
+        elif src == "MIE":
+            info = fetch_mie_detail(r["url"])
+        elif src == "GIFU":
+            info = fetch_gifu_detail(r["url"])
+        elif src == "YAMANASHI":
+            info = fetch_yamanashi_detail(r["url"])
+        elif src == "TOYAMA":
+            info = fetch_toyama_detail(r["url"])
+        elif src == "NAGANO":
+            info = fetch_nagano_detail(r["url"])
+        elif src == "SHIZUOKA":
+            info = fetch_shizuoka_detail(r["url"])
+        elif src == "FUKUI":
+            info = fetch_fukui_detail(r["url"])
+        elif src == "NIIGATA":
+            info = fetch_niigata_detail(r["url"])
         else:
             info = fetch_nedo_detail(r["url"])  # 概要＋予算（本文→無ければPDF）＋予定
         if info:  # ページ取得成功

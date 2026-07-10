@@ -311,8 +311,47 @@
       "ai_input_tokens": 232699,
       "ai_output_tokens": 49211,
       "ai_cost_usd": 0.383
+    },
+    {
+      "at": "2026-07-10T00:14:19+00:00",
+      "scraped": 1877,
+      "new": 345,
+      "updated": 1532,
+      "total": 7192,
+      "portal_retry": 0,
+      "repaired": 0,
+      "ai_calls": 219,
+      "ai_input_tokens": 747845,
+      "ai_output_tokens": 120270,
+      "ai_cost_usd": 1.0794
+    },
+    {
+      "at": "2026-07-10T04:49:21+00:00",
+      "scraped": 3423,
+      "new": 1556,
+      "updated": 1867,
+      "total": 8748,
+      "portal_retry": 0,
+      "repaired": 0,
+      "ai_calls": 221,
+      "ai_input_tokens": 1101950,
+      "ai_output_tokens": 132570,
+      "ai_cost_usd": 1.4118
+    },
+    {
+      "at": "2026-07-10T12:24:56+00:00",
+      "scraped": 3427,
+      "new": 5,
+      "updated": 3422,
+      "total": 8753,
+      "portal_retry": 0,
+      "repaired": 0,
+      "ai_calls": 221,
+      "ai_input_tokens": 366609,
+      "ai_output_tokens": 87420,
+      "ai_cost_usd": 0.643
     }
   ],
-  "cumulative_cost_usd_recent": 12.0184,
-  "cumulative_cost_usd_alltime": 12.0184
+  "cumulative_cost_usd_recent": 15.1526,
+  "cumulative_cost_usd_alltime": 15.1526
 }
