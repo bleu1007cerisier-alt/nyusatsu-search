@@ -2431,10 +2431,14 @@ _MIE_CATEGORIES = [
 
 def _mie_wareki_iso(text: str) -> str:
     m = re.search(r"令和\s*(\d+)\s*年\s*(\d+)\s*月\s*(\d+)\s*日", text)
-    if not m:
-        return ""
-    y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
-    return f"{2018 + y:04d}-{mo:02d}-{d:02d}"
+    if m:
+        y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        return f"{2018 + y:04d}-{mo:02d}-{d:02d}"
+    m = re.search(r"平成\s*(\d+)\s*年\s*(\d+)\s*月\s*(\d+)\s*日", text)
+    if m:
+        y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        return f"{1988 + y:04d}-{mo:02d}-{d:02d}"
+    return ""
 
 
 def _scrape_mie_sync(max_pages: int = 5) -> List[Dict]:
@@ -2470,14 +2474,15 @@ def _scrape_mie_sync(max_pages: int = 5) -> List[Dict]:
                 seen.add(full)
                 new_count += 1
                 title = title.strip()
-                pub = _mie_wareki_iso(d)
                 slug = re.sub(r"[^A-Za-z0-9]+", "-", href.rsplit("/", 1)[-1]).strip("-")
                 results.append({
                     "title":           title,
                     "category":        cat,
                     "organization":    ("三重県 " + (org or "").strip()).strip(),
                     "prefecture":      "三重県",
-                    "published_at":    pub,
+                    # 一覧の日付列は「コンペ実施日」等であり公告日ではないため、
+                    # published_at は詳細ページ（fetch_mie_detail）の値で補完する
+                    "published_at":    "",
                     "deadline":        "",
                     "result_date":     "",
                     "result_url":      "",
@@ -2520,6 +2525,9 @@ def fetch_mie_detail(url: str) -> Optional[Dict]:
         return None
     soup = BeautifulSoup(html, "html.parser")
     container = soup.find(id="center-contents") or soup
+    # 公告日はmain-textの外（タイトル直前のヘッダー部）に単独で置かれているため、
+    # containerの本文中で最初に出現する日付を公告日とみなす
+    published_at = _mie_wareki_iso(container.get_text("\n", strip=True))
     main = container.find(attrs={"class": re.compile(r"main-text", re.I)}) or container
     for tag in main.find_all(["script", "style", "nav", "header", "footer"]):
         tag.decompose()
@@ -2531,7 +2539,8 @@ def fetch_mie_detail(url: str) -> Optional[Dict]:
             name = li.get_text(" ", strip=True).split("(")[0].strip() or "添付資料"
             full = a["href"] if a["href"].startswith("http") else _MIE_BASE + a["href"]
             attachments.append({"name": name, "url": full, "kind": "公募要領"})
-    return {"detail": text[:6000], "budget": "", "schedule": [], "attachments": attachments}
+    return {"detail": text[:6000], "budget": "", "schedule": [], "attachments": attachments,
+            "published_at": published_at}
 
 
 # ---------------------------------------------------------------------------
