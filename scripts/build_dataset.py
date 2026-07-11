@@ -731,6 +731,10 @@ def main():
             # PORTAL はゴミdetailをリセット済みなので常に上書き。他ソースは空のときのみ
             if new_detail and (not cur_detail or r.get("source") == "PORTAL"):
                 r["detail"] = new_detail  # 生テキストを保持
+            # タイトルが一覧から取れなかった案件（PORTALで稀に発生）は
+            # 詳細ページの「調達案件名称」で補完する
+            if not (r.get("title") or "").strip() and info.get("title"):
+                r["title"] = info["title"]
             # 掲載日が一覧から取れないソース（愛知プロポ等）は詳細ページの値で補完
             if info.get("published_at") and not (r.get("published_at") or "").strip():
                 r["published_at"] = info["published_at"]

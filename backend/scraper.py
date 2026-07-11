@@ -1065,6 +1065,7 @@ def fetch_portal_detail(url: str) -> Dict[str, str]:
     bunrui = ""
     hinmoku = ""
     deadline = ""
+    anken_name = ""   # 調達案件名称（一覧でタイトルが取れなかった場合の補完用）
     # 入札書提出期限 / 応募期限 / 受付期限 などを優先的に取得
     _DEADLINE_TH = [
         "入札書提出期限", "入札書等提出期限", "入札書受付期限",
@@ -1078,7 +1079,9 @@ def fetch_portal_detail(url: str) -> Dict[str, str]:
         if not td:
             continue
         val = td.get_text(" ", strip=True)
-        if th_text == "公告内容" and not raw_kouji:
+        if th_text == "調達案件名称" and not anken_name:
+            anken_name = re.sub(r"^【|】$", "", val.strip())
+        elif th_text == "公告内容" and not raw_kouji:
             raw_kouji = _EMAIL_RE.sub("", val).strip()
         elif th_text == "分類" and not bunrui:
             bunrui = val
@@ -1155,6 +1158,7 @@ def fetch_portal_detail(url: str) -> Dict[str, str]:
         "deadline":    deadline,
         "close_date":  koukai_end,
         "choutatsushu": choutatsushu,
+        "title":       anken_name,
     }
 
 
