@@ -12,6 +12,8 @@ GitHub Actions では Secrets から以下を渡す：
 
 import os
 
+_cached_client = None
+
 
 def r2_enabled() -> bool:
     return all(
@@ -21,14 +23,31 @@ def r2_enabled() -> bool:
 
 
 def _client():
-    import boto3
-    return boto3.client(
-        "s3",
-        endpoint_url=os.environ["R2_ENDPOINT"],
-        aws_access_key_id=os.environ["R2_ACCESS_KEY_ID"],
-        aws_secret_access_key=os.environ["R2_SECRET_ACCESS_KEY"],
-        region_name="auto",
-    )
+    """R2クライアントをプロセス内で使い回す（毎回新規作成すると接続の使い捨てが
+    連続し、Cloudflare側やネットワーク経路で接続リセットが起きやすくなるため）。
+    タイムアウト・自動リトライも明示設定し、一時的な切断を自己回復させる。
+    """
+    global _cached_client
+    if _cached_client is None:
+        import boto3
+        from botocore.config import Config
+        _cached_client = boto3.client(
+            "s3",
+            endpoint_url=os.environ["R2_ENDPOINT"],
+            aws_access_key_id=os.environ["R2_ACCESS_KEY_ID"],
+            aws_secret_access_key=os.environ["R2_SECRET_ACCESS_KEY"],
+            region_name="auto",
+            config=Config(
+                connect_timeout=10, read_timeout=30,
+                retries={"max_attempts": 3, "mode": "standard"},
+            ),
+        )
+    return _cached_client
+
+
+def get_client():
+    """使い回し・リトライ設定済みのR2クライアントを返す（他モジュールから直接読む場合用）。"""
+    return _client()
 
 
 def object_exists(key: str) -> bool:

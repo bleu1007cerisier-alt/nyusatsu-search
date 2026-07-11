@@ -319,14 +319,8 @@ def _overview_from_r2(row: dict, max_pages: int = 8, max_lines: int = 50,
     if not atts:
         return ""
     import io
-    import boto3
     from pypdf import PdfReader
-    s3 = boto3.client(
-        "s3",
-        endpoint_url=os.environ.get("R2_ENDPOINT", ""),
-        aws_access_key_id=os.environ.get("R2_ACCESS_KEY_ID", ""),
-        aws_secret_access_key=os.environ.get("R2_SECRET_ACCESS_KEY", ""),
-    )
+    s3 = storage.get_client()
     bucket = os.environ.get("R2_BUCKET", "")
     # 用語集・操作マニュアル等の汎用資料は案件と無関係なので除外する
     _skip = _re_summary.compile(r'用語集|ヘルプ|操作|マニュアル|手引|ガイド|よくある質問|ＦＡＱ|FAQ')
@@ -365,14 +359,8 @@ def _budget_from_r2(row: dict) -> str:
     if not atts:
         return ""
     import io
-    import boto3
     from pypdf import PdfReader
-    s3 = boto3.client(
-        "s3",
-        endpoint_url=os.environ.get("R2_ENDPOINT", ""),
-        aws_access_key_id=os.environ.get("R2_ACCESS_KEY_ID", ""),
-        aws_secret_access_key=os.environ.get("R2_SECRET_ACCESS_KEY", ""),
-    )
+    s3 = storage.get_client()
     bucket = os.environ.get("R2_BUCKET", "")
     # 公募要領→仕様書→その他の順で試行
     priority = ["公募要領", "仕様書", "審査基準", "評価基準"]
