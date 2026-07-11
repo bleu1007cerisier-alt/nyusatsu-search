@@ -28,6 +28,8 @@ from scraper import (  # noqa: E402
     fetch_nedo_result, fetch_portal_award, fetch_jst_detail,
     fetch_jogmec_result_url, fetch_jogmec_result, fetch_aichi_results,
     fetch_osaka_result, fetch_fukuoka_results,
+    fetch_mie_results, fetch_niigata_results, fetch_ishikawa_results,
+    fetch_toyama_award, fetch_gifu_award,
 )
 import re as _re
 
@@ -113,6 +115,44 @@ def main():
                 return rec
         return None
 
+    # 三重・新潟・石川：結果記事は公告と別記事（またはID非連動）のため、
+    # 一括取得した結果一覧とタイトルのbigram類似度で突合する
+    mie_need = any(
+        r.get("source") == "MIE" and not (r.get("awardee") or "").strip()
+        and (r.get("awardee_checked") or "") != "1" for r in rows)
+    mie_results = fetch_mie_results() if mie_need else []
+
+    niigata_need = any(
+        r.get("source") == "NIIGATA" and not (r.get("awardee") or "").strip()
+        and (r.get("awardee_checked") or "") != "1" for r in rows)
+    niigata_results = fetch_niigata_results() if niigata_need else []
+
+    ishikawa_need = any(
+        r.get("source") == "ISHIKAWA" and not (r.get("awardee") or "").strip()
+        and (r.get("awardee_checked") or "") != "1" for r in rows)
+    ishikawa_results = fetch_ishikawa_results() if ishikawa_need else []
+
+    def _title_bigrams(s):
+        s = _re.sub(r"[\s　]", "", s or "")
+        return {s[i:i + 2] for i in range(len(s) - 1)}
+
+    def _bigram_match(title, candidates, threshold=0.5):
+        bg = _title_bigrams(title)
+        if not bg:
+            return None
+        best, score = None, 0.0
+        for rec in candidates:
+            cbg = rec.get("bigrams") or set()
+            if not cbg:
+                continue
+            inter = len(bg & cbg)
+            if not inter:
+                continue
+            j = inter / len(bg | cbg)
+            if j > score:
+                best, score = rec, j
+        return best if score >= threshold else None
+
     for row in rows:
         # 既に事業者確定 or 監視終了 → スキップ
         if (row.get("awardee") or "").strip():
@@ -146,6 +186,21 @@ def main():
         # 福岡県：一括取得済みの「落札者の公示」記事から案件名で突合（ネットワークは1回だけ）
         if src == "FUKUOKA":
             rec = _fukuoka_match(row.get("title", ""))
+            if rec and rec.get("awardee"):
+                row["awardee"] = _ai_split_awardee(rec["awardee"])
+                row["awardee_checked"] = "1"
+                if rec.get("result_date") and not (row.get("result_date") or "").strip():
+                    row["result_date"] = rec["result_date"]
+                if rec.get("amount") and not (row.get("amount") or "").strip():
+                    row["amount"] = rec["amount"]
+                updated += 1
+            continue
+
+        # 三重・新潟・石川：一括取得済みの結果一覧とタイトルのbigram類似度で突合
+        if src in ("MIE", "NIIGATA", "ISHIKAWA"):
+            candidates = {"MIE": mie_results, "NIIGATA": niigata_results,
+                          "ISHIKAWA": ishikawa_results}[src]
+            rec = _bigram_match(row.get("title", ""), candidates)
             if rec and rec.get("awardee"):
                 row["awardee"] = _ai_split_awardee(rec["awardee"])
                 row["awardee_checked"] = "1"
@@ -200,6 +255,22 @@ def main():
                     row["result_url"] = pdf_url
                     info = fetch_jogmec_result(pdf_url)
                     time.sleep(DETAIL_SLEEP)
+                checked += 1
+                time.sleep(DETAIL_SLEEP)
+
+        elif src == "TOYAMA":
+            # 富山県：タイトル・本文が同一URL上で更新されるため、そのURLを再取得するだけでよい
+            page_url = (row.get("url") or "").strip()
+            if page_url:
+                info = fetch_toyama_award(page_url) or {}
+                checked += 1
+                time.sleep(DETAIL_SLEEP)
+
+        elif src == "GIFU":
+            # 岐阜県：同上。決定事業者は「選定結果」PDF添付から取得する
+            page_url = (row.get("url") or "").strip()
+            if page_url:
+                info = fetch_gifu_award(page_url) or {}
                 checked += 1
                 time.sleep(DETAIL_SLEEP)
 

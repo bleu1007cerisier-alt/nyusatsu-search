@@ -2543,6 +2543,77 @@ def fetch_mie_detail(url: str) -> Optional[Dict]:
             "published_at": published_at}
 
 
+def _title_bigrams(s: str) -> set:
+    """タイトル類似度判定用のbigram集合を作る（公告と結果でタイトルの言い回しが微妙に
+    異なる場合でも高いJaccard類似度が出るよう、空白のみ除去して2文字組を取る）。"""
+    s = re.sub(r"[\s　]", "", s or "")
+    return {s[i:i + 2] for i in range(len(s) - 1)}
+
+
+# 三重県 企画提案コンペ結果一覧（公告一覧と同じ構造。プロポーザル系のみ対応、
+# 一般競争入札結果は落札者名がPDF添付のみのため対象外）
+_MIE_RESULT_CATEGORIES = [
+    "/app/nyusatsu/nyusatsu/00006836/1/0",  # 業務委託：企画提案コンペ結果
+    "/app/nyusatsu/nyusatsu/00006837/1/0",  # 印刷・その他：企画提案コンペ結果
+]
+
+
+def fetch_mie_results(max_pages: int = 5) -> List[Dict]:
+    """三重県 企画提案コンペの結果一覧を一括取得する。
+
+    案件ごとに独立した結果記事のため、決定事業者と公告記事の突合はタイトルの
+    bigram類似度で行う（check_results.py側）。返り値の各要素は
+    {"title", "bigrams", "awardee", "result_date"}。
+    """
+    import urllib.request
+    op = urllib.request.build_opener()
+    op.addheaders = [("User-Agent", "Mozilla/5.0")]
+
+    def get(url):
+        return op.open(url, timeout=40).read().decode("utf-8", "replace")
+
+    results = []
+    for path in _MIE_RESULT_CATEGORIES:
+        for page in range(1, max_pages + 1):
+            url = _MIE_BASE + path + ("/" if page == 1 else f"?SPI={page}")
+            try:
+                html = get(url)
+            except Exception as e:  # noqa: BLE001
+                logger.error(f"三重県結果一覧取得失敗（{path} page={page}）: {e}")
+                break
+            rows = re.findall(r'<td class="news-a"><a href="([^"]+)">([^<]+)</a>', html)
+            if not rows:
+                break
+            for href, title in rows:
+                full = href if href.startswith("http") else _MIE_BASE + href
+                try:
+                    dhtml = get(full)
+                except Exception as e:  # noqa: BLE001
+                    logger.error(f"三重県結果詳細取得失敗 {full}: {e}")
+                    continue
+                soup = BeautifulSoup(dhtml, "html.parser")
+                container = soup.find(id="center-contents") or soup
+                main = container.find(attrs={"class": re.compile(r"main-text", re.I)}) or container
+                text = main.get_text("\n", strip=True)
+                m = re.search(r"最優秀(?:受託候補者|提案者)\s*\n([^\n]+)", text)
+                awardee = m.group(1).strip() if m else ""
+                if not awardee:
+                    continue
+                title = title.strip()
+                results.append({
+                    "title": title,
+                    "bigrams": _title_bigrams(title),
+                    "awardee": awardee,
+                    "result_date": _mie_wareki_iso(text),
+                })
+                import time as _time
+                _time.sleep(0.4)
+            import time as _time
+            _time.sleep(0.5)
+    logger.info(f"三重県 企画提案コンペ結果: {len(results)}件取得")
+    return results
+
+
 # ---------------------------------------------------------------------------
 # 岐阜県（公式サイト「入札・公売」検索。ctg[]で種別を絞り込み、page=Nでページ送り）
 # ---------------------------------------------------------------------------
@@ -2658,6 +2729,44 @@ def fetch_gifu_detail(url: str) -> Optional[Dict]:
             full = a["href"] if a["href"].startswith("http") else _GIFU_BASE + a["href"]
             attachments.append({"name": name, "url": full, "kind": "公募要領"})
     return {"detail": text[:6000], "budget": "", "schedule": [], "attachments": attachments}
+
+
+def fetch_gifu_award(url: str) -> Optional[Dict]:
+    """岐阜県 案件の同一URLを再取得し、「選定結果」等のPDF添付があれば中身を解析して
+    決定事業者を返す（岐阜県はタイトル・添付が同一URL上で更新されるため、
+    結果もこの関数で取得する）。
+    """
+    import urllib.request
+    try:
+        op = urllib.request.build_opener()
+        op.addheaders = [("User-Agent", "Mozilla/5.0")]
+        html = op.open(url, timeout=40).read().decode("utf-8", "replace")
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"岐阜県結果取得失敗 {url}: {e}")
+        return None
+    soup = BeautifulSoup(html, "html.parser")
+    main = soup.find(id="main_body") or soup
+    pdf_url = ""
+    for a in main.find_all("a", href=True):
+        label = a.get_text(" ", strip=True)
+        if re.search(r"\.pdf($|\?)", a["href"], re.I) and re.search(r"選定結果|落札結果|入札結果", label):
+            pdf_url = a["href"] if a["href"].startswith("http") else _GIFU_BASE + a["href"]
+            break
+    if not pdf_url:
+        return None
+    try:
+        import io as _io
+        from pypdf import PdfReader
+        pdf_data = op.open(pdf_url, timeout=40).read()
+        reader = PdfReader(_io.BytesIO(pdf_data))
+        text = "\n".join((p.extract_text() or "") for p in reader.pages)
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"岐阜県結果PDF解析失敗 {pdf_url}: {e}")
+        return None
+    m = re.search(r"(?:最優秀提案者（契約交渉の相手方）|最優秀提案者|落札者|契約の相手方)\s*\n\s*([^\n]+)", text)
+    if not m:
+        return None
+    return {"awardee": m.group(1).strip()}
 
 
 # ---------------------------------------------------------------------------
@@ -2864,6 +2973,35 @@ def fetch_toyama_detail(url: str) -> Optional[Dict]:
             full = a["href"] if a["href"].startswith("http") else _TOYAMA_BASE + a["href"]
             attachments.append({"name": name, "url": full, "kind": "公募要領"})
     return {"detail": text[:6000], "budget": "", "schedule": [], "attachments": attachments}
+
+
+def fetch_toyama_award(url: str) -> Optional[Dict]:
+    """富山県 プロポーザル案件の同一URLを再取得し、契約候補者が決定していれば返す
+    （富山県はタイトル・本文が同一URL上で更新されるため、結果もこの関数で取得する）。
+    """
+    import urllib.request
+    try:
+        op = urllib.request.build_opener()
+        op.addheaders = [("User-Agent", "Mozilla/5.0")]
+        html = op.open(url, timeout=40).read().decode("utf-8", "replace")
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"富山県結果取得失敗 {url}: {e}")
+        return None
+    soup = BeautifulSoup(html, "html.parser")
+    main = soup.find(id="tmp_contents") or soup
+    text = main.get_text("\n", strip=True)
+    m = re.search(r"契約候補者\n(.*?)(?:\n\d+\.|\Z)", text, re.S)
+    if not m:
+        return None
+    block = m.group(1)
+    names = re.findall(r"[（(]\d+[）)]\s*([^\n]+)", block)
+    if not names:
+        first_line = block.strip().split("\n")[0].strip()
+        if first_line and "音順" not in first_line:
+            names = [first_line]
+    if not names:
+        return None
+    return {"awardee": "｜".join(names)}
 
 
 # ---------------------------------------------------------------------------
@@ -3285,6 +3423,72 @@ def fetch_niigata_detail(url: str) -> Optional[Dict]:
     return {"detail": text[:6000], "budget": "", "schedule": [], "attachments": attachments}
 
 
+def fetch_niigata_results(max_items: int = 30) -> List[Dict]:
+    """新潟県「入札・発注・売却」新着フィードから結果記事（審査結果・入札結果・評価結果）を
+    一括取得する。案件名の突合は「件名」欄（入札結果系）があればそれを、無ければ
+    （プロポーザル系）ラベルを除いたタイトル自体をbigram類似度の対象として返す。
+    """
+    import urllib.request
+    op = urllib.request.build_opener()
+    op.addheaders = [("User-Agent", "Mozilla/5.0")]
+
+    def get(url):
+        return op.open(url, timeout=40).read().decode("utf-8", "replace")
+
+    try:
+        html = get(_NIIGATA_LIST)
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"新潟県結果一覧取得失敗: {e}")
+        return []
+
+    rows = re.findall(
+        r'<span class="article_title"><a href="([^"]+)">([^<]+)</a>', html)
+    results = []
+    seen = set()
+    for href, title in rows:
+        title = title.strip()
+        if not re.search(r"審査結果|入札結果|評価結果", title):
+            continue
+        full = href if href.startswith("http") else _NIIGATA_BASE + href
+        if full in seen:
+            continue
+        seen.add(full)
+        try:
+            dhtml = get(full)
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"新潟県結果詳細取得失敗 {full}: {e}")
+            continue
+        soup = BeautifulSoup(dhtml, "html.parser")
+        main = soup.find(id="main_body") or soup
+        text = main.get_text("\n", strip=True)
+        m_name = re.search(r"件名[：:]\s*([^\n]+)", text)
+        match_text = m_name.group(1).strip() if m_name else re.sub(r"【[^】]*】", "", title).strip()
+        m_awardee = re.search(r"契約相手方[：:]\s*([^\n]+)", text)
+        awardee = m_awardee.group(1).strip() if m_awardee else ""
+        if not awardee:
+            m_awardee2 = re.search(r"契約候補者\s+([^\n]+)", text)
+            awardee = m_awardee2.group(1).strip() if m_awardee2 else ""
+        if not awardee:
+            continue
+        amount = ""
+        m_amount = re.search(r"落札価格[：:]\s*([^\n]+)", text)
+        if m_amount:
+            amount = m_amount.group(1).strip()
+        results.append({
+            "title": match_text,
+            "bigrams": _title_bigrams(match_text),
+            "awardee": awardee,
+            "amount": amount,
+            "result_date": _niigata_date_iso(text),
+        })
+        import time as _time
+        _time.sleep(0.4)
+        if len(results) >= max_items:
+            break
+    logger.info(f"新潟県 結果記事: {len(results)}件取得")
+    return results
+
+
 # ---------------------------------------------------------------------------
 # 石川県（電子入札共同システム「SuperCALS」。セッションCookie＋POSTフォーム連鎖で
 # 検索を実行する古いJSPシステム。詳細は下記フローで攻略：
@@ -3437,6 +3641,84 @@ async def scrape_ishikawa() -> List[Dict]:
     except Exception as e:  # noqa: BLE001
         logger.error(f"石川県スクレイパー例外: {e}")
         return []
+
+
+# 一覧行のタイトル＋openYoteiインデックスだけを緩く拾う（結果一覧は「入札予定」と
+# 列構成が異なる可能性があるため、列数を固定しない）
+_ISHIKAWA_RESULT_ROW_RE = re.compile(
+    r'<TD class="DISP_LIST_L_L"><A href="#" onClick="javascript:openYotei\(\'(\d+)\'\)"[^>]*>([^<]*)</A>',
+    re.S)
+
+
+def fetch_ishikawa_results() -> List[Dict]:
+    """石川県電子入札共同システム「入札結果」（ejParameterID=EjQRJ01）を一括取得する。
+
+    「入札予定」と同じセッション・POST連鎖の仕組みを使い回すが、列構成が異なる
+    可能性があるため一覧からはタイトルとopenYoteiインデックスのみを取得し、
+    決定事業者・案件名は詳細ページ（getDetailPage）のラベル付きフィールドから
+    抽出する（未検証：システム稼働時間内での動作確認が必要）。
+    """
+    import time as _time
+    import urllib.request
+    import urllib.parse
+    import http.cookiejar
+
+    jar = http.cookiejar.CookieJar()
+    op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+    op.addheaders = [("User-Agent", "Mozilla/5.0")]
+
+    def post(data):
+        body = urllib.parse.urlencode(data).encode()
+        return op.open(_ISHIKAWA_EJ, data=body, timeout=40).read().decode("shift_jis", "replace")
+
+    try:
+        post({"ejParameterID": "StartPage", "KikanNO": _ISHIKAWA_KIKAN})
+        post({"ejParameterID": "EjQRJ01", "ejProcessName": "start"})
+        list_html = post({
+            "Nendo": "", "KikanNOnyu": _ISHIKAWA_KIKAN, "BukyokuNOnyu": "", "KakakariNOnyu": "",
+            "BidStDate": "", "BidEnDate": "", "ShikakuType": "", "EigyoHinmokuCD": "",
+            "SearchString1": "", "kkselect": "AND", "SearchString2": "",
+            "ejMaxDisplayRowCount": "50", "ejDisplaySort": "030006", "ejSortSequence": "desc",
+            "ejParameterID": "EjQRJ01", "ejProcessName": "findList", "ejShousaiDispFlag": "false",
+        })
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"石川県入札結果セッション確立・検索失敗: {e}")
+        return []
+
+    rows = _ISHIKAWA_RESULT_ROW_RE.findall(list_html)
+    m = re.search(r'ejFindVersion" value="(\d+)"', list_html)
+    find_version = m.group(1) if m else ""
+    if not rows or not find_version:
+        logger.info("石川県入札結果: 該当案件なし、またはejFindVersion取得失敗")
+        return []
+
+    results = []
+    for idx, _title in rows:
+        try:
+            dhtml = post({
+                "ejParameterID": "EjQRJ01", "ejProcessName": "getDetailPage",
+                "ejCategoryName": "display", "ejKeyNo": idx,
+                "ejFindVersion": find_version, "ejStartPosition": "0",
+                "ejMaxDisplayRowCount": "50", "ejShousaiDispFlag": "false",
+            })
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"石川県入札結果詳細取得失敗（index={idx}）: {e}")
+            continue
+        soup = BeautifulSoup(dhtml, "html.parser")
+        text = soup.get_text("\n", strip=True)
+        m_name = re.search(r"調達案件名称\n([^\n]+)", text)
+        m_awardee = re.search(r"(?:落札者|契約の相手方|受注者)\s*\n?\s*([^\n]+)", text)
+        if not m_name or not m_awardee:
+            continue
+        results.append({
+            "title": m_name.group(1).strip(),
+            "bigrams": _title_bigrams(m_name.group(1).strip()),
+            "awardee": m_awardee.group(1).strip(),
+            "result_date": _ishikawa_wareki_iso(text),
+        })
+        _time.sleep(0.5)
+    logger.info(f"石川県 入札結果: {len(results)}件取得")
+    return results
 
 
 def _parse_fukuoka_award_page(html: str) -> Dict[str, str]:
