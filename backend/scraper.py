@@ -2441,7 +2441,7 @@ def _mie_wareki_iso(text: str) -> str:
     return ""
 
 
-def _scrape_mie_sync(max_pages: int = 5) -> List[Dict]:
+def _scrape_mie_sync(max_pages: int = 2) -> List[Dict]:
     import urllib.request
     op = urllib.request.build_opener()
     op.addheaders = [("User-Agent", "Mozilla/5.0")]
@@ -2634,7 +2634,7 @@ def _gifu_date_iso(text: str) -> str:
     return f"{y:04d}-{mo:02d}-{d:02d}"
 
 
-def _scrape_gifu_sync(max_pages: int = 6) -> List[Dict]:
+def _scrape_gifu_sync(max_pages: int = 2) -> List[Dict]:
     import urllib.request
     op = urllib.request.build_opener()
     op.addheaders = [("User-Agent", "Mozilla/5.0")]
