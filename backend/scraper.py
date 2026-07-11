@@ -3021,6 +3021,7 @@ def _nagano_date_iso(text: str) -> str:
 
 def _scrape_nagano_sync() -> List[Dict]:
     import urllib.request
+    from urllib.parse import urljoin
     op = urllib.request.build_opener()
     op.addheaders = [("User-Agent", "Mozilla/5.0")]
 
@@ -3040,7 +3041,7 @@ def _scrape_nagano_sync() -> List[Dict]:
         html, re.S)
     seen = set()
     for d, href, title, org_block in rows:
-        full = href if href.startswith("http") else "https://www.pref.nagano.lg.jp" + href
+        full = urljoin(_NAGANO_LIST, href)
         if full in seen:
             continue
         seen.add(full)
@@ -3082,6 +3083,7 @@ async def scrape_nagano() -> List[Dict]:
 def fetch_nagano_detail(url: str) -> Optional[Dict]:
     """長野県 入札・公募 個別記事ページの本文を取得する。"""
     import urllib.request
+    from urllib.parse import urljoin
     try:
         op = urllib.request.build_opener()
         op.addheaders = [("User-Agent", "Mozilla/5.0")]
@@ -3098,7 +3100,8 @@ def fetch_nagano_detail(url: str) -> Optional[Dict]:
     for a in main.find_all("a", href=True):
         if re.search(r"\.(pdf|zip|docx?|xlsx?)($|\?)", a["href"], re.I):
             name = re.sub(r"[（(][^）)]*(?:KB|MB)[）)]\s*$", "", a.get_text(" ", strip=True)).strip() or "添付資料"
-            full = a["href"] if a["href"].startswith("http") else "https://www.pref.nagano.lg.jp" + a["href"]
+            # 詳細ページが県立学校等の別ドメインにある場合もあるため、実ページURL基準で結合する
+            full = urljoin(url, a["href"])
             attachments.append({"name": name, "url": full, "kind": "公募要領"})
     return {"detail": text[:6000], "budget": "", "schedule": [], "attachments": attachments}
 
