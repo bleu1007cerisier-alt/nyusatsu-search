@@ -3111,6 +3111,223 @@ def fetch_nagano_detail(url: str) -> Optional[Dict]:
 
 
 # ---------------------------------------------------------------------------
+# 栃木県（「入札・公募」カテゴリ別一覧。業務委託/公共事業/物品/その他の4ページを横断。
+# 一覧は<li><a>のみで日付なし→掲載日は詳細ページの「更新日」で補完。newest-first順の
+# ため初回バックフィルは各カテゴリ先頭MAXだけに絞る。robots.txt禁止パス(/koujisoutatsu/)
+# には該当しない。）
+# ---------------------------------------------------------------------------
+_TOCHIGI_BASE = "https://www.pref.tochigi.lg.jp"
+_TOCHIGI_CATEGORIES = [
+    ("/kensei/nyuusatsu/koubo-itaku/index.html", "入札・公募（業務委託）"),
+    ("/kensei/nyuusatsu/koubo-koukyou/index.html", "入札・公募（公共事業）"),
+    ("/kensei/nyuusatsu/koubo-buppin/index.html", "入札・公募（物品調達）"),
+    ("/kensei/nyuusatsu/koubo-sonota/index.html", "入札・公募（その他）"),
+]
+_TOCHIGI_MAX_PER_CAT = 40  # 各カテゴリ先頭40件（浅めの初回バックフィル）
+
+
+def _scrape_tochigi_sync() -> List[Dict]:
+    import urllib.request
+    from urllib.parse import urljoin
+    op = urllib.request.build_opener()
+    op.addheaders = [("User-Agent", "Mozilla/5.0")]
+
+    def get(url):
+        return op.open(url, timeout=40).read().decode("utf-8", "replace")
+
+    results = []
+    seen = set()
+    for path, cat_label in _TOCHIGI_CATEGORIES:
+        try:
+            html = get(_TOCHIGI_BASE + path)
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"栃木県一覧取得失敗（{path}）: {e}")
+            continue
+        m = re.search(r"<h1>[^<]*</h1>\s*(.*?)(?:</div>|<h2)", html, re.S)
+        body = m.group(1) if m else html
+        items = re.findall(r'<li><a href="([^"]+)">([^<]+)</a></li>', body)
+        for href, title in items[:_TOCHIGI_MAX_PER_CAT]:
+            full = urljoin(_TOCHIGI_BASE + path, href)
+            if full in seen:
+                continue
+            seen.add(full)
+            title = title.strip()
+            cat = "プロポーザル" if re.search(r"プロポーザル|企画提案|企画競争", title) else "入札"
+            slug = re.sub(r"[^A-Za-z0-9]+", "-", href.rsplit("/", 1)[-1]).strip("-")
+            results.append({
+                "title":           title,
+                "category":        cat,
+                "organization":    "栃木県",
+                "prefecture":      "栃木県",
+                "published_at":    "",  # 一覧に日付なし→詳細ページの更新日で補完
+                "deadline":        "",
+                "result_date":     "",
+                "result_url":      "",
+                "project_code":    f"TOCHIGI-{slug}",
+                "awardee":         "",
+                "url":             full,
+                "source":          "TOCHIGI",
+                "amount":          "",
+                "source_category": cat_label,
+                "summary":         "",
+                "detail":          "",
+                "tags":            ",".join(generate_tags(title)),
+            })
+        import time as _time
+        _time.sleep(0.6)
+    logger.info(f"栃木県: {len(results)}件取得")
+    return results
+
+
+async def scrape_tochigi() -> List[Dict]:
+    """栃木県公式サイト 入札・公募（4カテゴリ）一覧を取得する。"""
+    try:
+        return await asyncio.to_thread(_scrape_tochigi_sync)
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"栃木県スクレイパー例外: {e}")
+        return []
+
+
+def fetch_tochigi_detail(url: str) -> Optional[Dict]:
+    """栃木県 入札・公募 個別記事ページの本文を取得する（更新日を掲載日として補完）。"""
+    import urllib.request
+    from urllib.parse import urljoin
+    try:
+        op = urllib.request.build_opener()
+        op.addheaders = [("User-Agent", "Mozilla/5.0")]
+        html = op.open(url, timeout=40).read().decode("utf-8", "replace")
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"栃木県詳細取得失敗 {url}: {e}")
+        return None
+    soup = BeautifulSoup(html, "html.parser")
+    main = soup.find(id="tmp_contents") or soup.find(id="tmp_read_contents") or soup
+    for tag in main.find_all(["script", "style", "nav", "header", "footer"]):
+        tag.decompose()
+    text = re.sub(r"\n{3,}", "\n\n", main.get_text("\n", strip=True))
+    published_at = ""
+    m = re.search(r"更新日[：:\s]*(\d{4})年(\d{1,2})月(\d{1,2})日", soup.get_text(" ", strip=True))
+    if m:
+        published_at = f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+    attachments = []
+    for a in main.find_all("a", href=True):
+        if re.search(r"\.(pdf|docx?|xlsx?)($|\?)", a["href"], re.I):
+            name = re.sub(r"[（(][^）)]*(?:KB|MB|バイト)[）)]\s*$", "", a.get_text(" ", strip=True)).strip() or "添付資料"
+            full = urljoin(url, a["href"])
+            attachments.append({"name": name, "url": full, "kind": "公募要領"})
+    return {"detail": text[:6000], "budget": "", "schedule": [], "attachments": attachments,
+            "published_at": published_at}
+
+
+# ---------------------------------------------------------------------------
+# 千葉県（「入札等の公告(物品・委託等)」→「現在公告中の案件」。企画提案(プロポーザル)
+# が中心の静的<li><a>一覧。現在公告中のみ＝件数が少なく初回から浅い。掲載日は詳細
+# ページの「更新日：令和X(YYYY)年M月D日」（和暦）から補完。建設工事は別系統で対象外。
+# ---------------------------------------------------------------------------
+_CHIBA_BASE = "https://www.pref.chiba.lg.jp"
+_CHIBA_LIST = _CHIBA_BASE + "/nyuu-kei/buppin-itaku/nyuusatsukoukoku/koukoku/index.html"
+
+
+def _chiba_wareki_iso(text: str) -> str:
+    # 「令和8(2026)年6月29日」「令和8年6月29日」両形式に対応
+    m = re.search(r"令和\s*(\d+)\s*(?:\(\d+\))?\s*年\s*(\d+)\s*月\s*(\d+)\s*日", text)
+    if m:
+        return f"{2018 + int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+    m = re.search(r"(\d{4})年\s*(\d+)\s*月\s*(\d+)\s*日", text)
+    if m:
+        return f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+    return ""
+
+
+def _scrape_chiba_sync() -> List[Dict]:
+    import urllib.request
+    from urllib.parse import urljoin
+    op = urllib.request.build_opener()
+    op.addheaders = [("User-Agent", "Mozilla/5.0")]
+
+    def get(url):
+        return op.open(url, timeout=40).read().decode("utf-8", "replace")
+
+    results = []
+    try:
+        html = get(_CHIBA_LIST)
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"千葉県一覧取得失敗: {e}")
+        return results
+    m = re.search(r"<h1[^>]*>現在公告中の案件</h1>(.*?)(?:<h2|</main|footer)", html, re.S)
+    body = m.group(1) if m else html
+    items = re.findall(r'<li>\s*<a href="\s*([^"]+?)\s*">([^<]+)</a>', body)
+    seen = set()
+    for href, title in items:
+        full = urljoin(_CHIBA_LIST, href.strip())
+        if full in seen:
+            continue
+        seen.add(full)
+        title = title.strip()
+        cat = "プロポーザル" if re.search(r"プロポーザル|企画提案|公募", title) else "入札"
+        slug = re.sub(r"[^A-Za-z0-9]+", "-", href.strip().rsplit("/", 1)[-1]).strip("-")
+        results.append({
+            "title":           title,
+            "category":        cat,
+            "organization":    "千葉県",
+            "prefecture":      "千葉県",
+            "published_at":    "",  # 一覧に日付なし→詳細ページの更新日で補完
+            "deadline":        "",
+            "result_date":     "",
+            "result_url":      "",
+            "project_code":    f"CHIBA-{slug}",
+            "awardee":         "",
+            "url":             full,
+            "source":          "CHIBA",
+            "amount":          "",
+            "source_category": "",
+            "summary":         "",
+            "detail":          "",
+            "tags":            ",".join(generate_tags(title)),
+        })
+    logger.info(f"千葉県: {len(results)}件取得")
+    return results
+
+
+async def scrape_chiba() -> List[Dict]:
+    """千葉県公式サイト「現在公告中の案件」（物品・委託等の企画提案）を取得する。"""
+    try:
+        return await asyncio.to_thread(_scrape_chiba_sync)
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"千葉県スクレイパー例外: {e}")
+        return []
+
+
+def fetch_chiba_detail(url: str) -> Optional[Dict]:
+    """千葉県 入札・公募 個別記事ページの本文を取得する（更新日を掲載日として補完）。"""
+    import urllib.request
+    from urllib.parse import urljoin
+    try:
+        op = urllib.request.build_opener()
+        op.addheaders = [("User-Agent", "Mozilla/5.0")]
+        html = op.open(url, timeout=40).read().decode("utf-8", "replace")
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"千葉県詳細取得失敗 {url}: {e}")
+        return None
+    soup = BeautifulSoup(html, "html.parser")
+    main = soup.find(id="tmp_contents") or soup
+    for tag in main.find_all(["script", "style", "nav", "header", "footer"]):
+        tag.decompose()
+    text = re.sub(r"\n{3,}", "\n\n", main.get_text("\n", strip=True))
+    published_at = ""
+    m = re.search(r"更新日[：:\s]*([^\n<]{6,25})", soup.get_text(" ", strip=True))
+    if m:
+        published_at = _chiba_wareki_iso(m.group(1))
+    attachments = []
+    for a in main.find_all("a", href=True):
+        if re.search(r"\.(pdf|docx?|xlsx?)($|\?)", a["href"], re.I):
+            name = re.sub(r"[（(][^）)]*(?:KB|MB|バイト)[）)]\s*$", "", a.get_text(" ", strip=True)).strip() or "添付資料"
+            full = urljoin(url, a["href"])
+            attachments.append({"name": name, "url": full, "kind": "公募要領"})
+    return {"detail": text[:6000], "budget": "", "schedule": [], "attachments": attachments,
+            "published_at": published_at}
+
+
+# ---------------------------------------------------------------------------
 # 静岡県（部局別ページ14件。横断一覧は無いため全部局を個別に巡回する。建設工事は対象外）
 # ---------------------------------------------------------------------------
 _SHIZUOKA_BASE = "https://www.pref.shizuoka.jp"
@@ -3836,6 +4053,8 @@ async def run_all_scrapers(portal_date_from: str = "", jogmec_max_id: int = 0) -
         scrape_fukui(),
         scrape_niigata(),
         scrape_ishikawa(),
+        scrape_tochigi(),
+        scrape_chiba(),
     ]
 
     scraped = await asyncio.gather(*tasks, return_exceptions=True)
