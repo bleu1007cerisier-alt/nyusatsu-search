@@ -2453,7 +2453,22 @@ def _mie_wareki_iso(text: str) -> str:
     return ""
 
 
-def _scrape_mie_sync(max_pages: int = 2) -> List[Dict]:
+def _mie_wareki_iso(text: str) -> str:
+    # 「令和08年7月24日」「平成31年4月18日」→ ISO。開札/公告日で降順ソートに使う。
+    m = re.search(r"(令和|平成)\s*(\d+)\s*年\s*(\d+)\s*月\s*(\d+)\s*日", text)
+    if not m:
+        return ""
+    era, y, mo, da = m.group(1), int(m.group(2)), int(m.group(3)), int(m.group(4))
+    year = (2018 + y) if era == "令和" else (1988 + y)
+    return f"{year:04d}-{mo:02d}-{da:02d}"
+
+
+def _scrape_mie_sync(max_pages: int = 40, window_days: int = 90) -> List[Dict]:
+    # 三重の一覧は開札/公告日の新しい順に全履歴（現役カテゴリは500件超）を返すため、
+    # 固定ページ数ではなく日付ウィンドウで打ち切る。直近window_days日以内〜将来日
+    # （＝現在公告中＋直近分）のみ収集し、古い行が出たらそのカテゴリを停止する。
+    from datetime import date, timedelta
+    cutoff_iso = (date.today() - timedelta(days=window_days)).isoformat()
     import urllib.request
     op = urllib.request.build_opener()
     op.addheaders = [("User-Agent", "Mozilla/5.0")]
@@ -2464,7 +2479,10 @@ def _scrape_mie_sync(max_pages: int = 2) -> List[Dict]:
     results = []
     seen = set()
     for path, cat in _MIE_CATEGORIES:
+        stop = False
         for page in range(1, max_pages + 1):
+            if stop:
+                break
             url = _MIE_BASE + path + ("/" if page == 1 else f"?SPI={page}")
             try:
                 html = get(url)
@@ -2480,6 +2498,11 @@ def _scrape_mie_sync(max_pages: int = 2) -> List[Dict]:
                 break
             new_count = 0
             for d, href, title, org in rows:
+                ld = _mie_wareki_iso(d)
+                # 開札/公告日が新しい順。ウィンドウより古い行に達したら以降は全て古い→停止
+                if ld and ld < cutoff_iso:
+                    stop = True
+                    break
                 full = href if href.startswith("http") else _MIE_BASE + href
                 if full in seen:
                     continue
@@ -2646,7 +2669,12 @@ def _gifu_date_iso(text: str) -> str:
     return f"{y:04d}-{mo:02d}-{d:02d}"
 
 
-def _scrape_gifu_sync(max_pages: int = 2) -> List[Dict]:
+def _scrape_gifu_sync(max_pages: int = 40, window_days: int = 90) -> List[Dict]:
+    # 岐阜の検索は「更新日の新しい順に全履歴（約3000件・2年超）」を返すため、
+    # 固定ページ数ではなく更新日ウィンドウで打ち切る。直近window_days日以内の
+    # 公告（＝現在公告中＋直近終了分）のみ収集し、それより古い行が出たら停止する。
+    from datetime import date, timedelta
+    cutoff_iso = (date.today() - timedelta(days=window_days)).isoformat()
     import urllib.request
     op = urllib.request.build_opener()
     op.addheaders = [("User-Agent", "Mozilla/5.0")]
@@ -2659,7 +2687,10 @@ def _scrape_gifu_sync(max_pages: int = 2) -> List[Dict]:
     for ctg_values in _GIFU_CATEGORIES:
         cat = "プロポーザル" if ctg_values == ("5",) else "入札"
         qs_ctg = "&".join(f"ctg[]={v}" for v in ctg_values)
+        stop = False
         for page in range(1, max_pages + 1):
+            if stop:
+                break
             url = f"{_GIFU_SEARCH}?{qs_ctg}&search=1&page={page}"
             try:
                 html = get(url)
@@ -2675,13 +2706,17 @@ def _scrape_gifu_sync(max_pages: int = 2) -> List[Dict]:
                 break
             new_count = 0
             for d, org, href, title in rows:
+                pub = _gifu_date_iso(d)
+                # 更新日が新しい順のため、ウィンドウ外に達したら以降は全て古い→停止
+                if pub and pub < cutoff_iso:
+                    stop = True
+                    break
                 full = href if href.startswith("http") else _GIFU_BASE + href
                 if full in seen:
                     continue
                 seen.add(full)
                 new_count += 1
                 title = title.strip()
-                pub = _gifu_date_iso(d)
                 slug = re.sub(r"[^A-Za-z0-9]+", "-", href.rsplit("/", 1)[-1]).strip("-")
                 results.append({
                     "title":           title,
