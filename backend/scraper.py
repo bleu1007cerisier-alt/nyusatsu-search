@@ -1658,23 +1658,29 @@ def _scrape_aichi_proposal_sync() -> List[Dict]:
     for m in re.finditer(r'<a[^>]+href="([^"]+)"[^>]*>(.*?)</a>', h, re.S):
         href, inner = m.group(1), m.group(2)
         title = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", inner)).strip()
-        # 記事ページ（.html）かつ 募集・委託・公募・プロポーザル系のみ
+        # 記事ページ（.html）かつ 募集・委託・公募・プロポーザル・入札系のみ。
+        # まとめページには補助金採択結果・協定締結・案内ページ等のノイズが多いため
+        # 案件語で絞るが、一般競争入札等の入札公告も取りこぼさないよう入札系語も含める。
         if not re.search(r"\.html?($|\?)", href):
             continue
-        if not re.search(r"募集|委託|公募|プロポーザル|選定|企画提案", title):
+        if not re.search(r"募集|委託|公募|プロポーザル|選定|企画提案|一般競争入札|指名競争入札|総合評価|競争入札", title):
             continue
         # 先頭の【…】更新マーカーを除去
         title = re.sub(r"^【[^】]*】\s*", "", title).strip()
         if len(title) < 6:
             continue
+        # 採択結果・締結報告・結果とりまとめ等は公募案件ではないため除外
+        if re.search(r"採択(結果|事業|案件)|決定しました|締結しました|取りまとめ", title):
+            continue
         url = href if href.startswith("http") else _PREF_AICHI + href
         if url in seen:
             continue
         seen.add(url)
+        cat = "入札" if re.search(r"一般競争入札|指名競争入札|総合評価|競争入札", title) else "プロポーザル"
         slug = re.sub(r"[^A-Za-z0-9_.\-]", "_", url.split("//", 1)[-1])[-60:]
         results.append({
             "title":           title,
-            "category":        "プロポーザル",
+            "category":        cat,
             "organization":    "愛知県",
             "prefecture":      "愛知県",
             "published_at":    "",
