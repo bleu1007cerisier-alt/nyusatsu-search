@@ -605,10 +605,12 @@ def main():
             prev = merged[key]
             # 最新情報で更新（締切・結果・タグ等）。detailは既存を維持（後段で補完）
             prev.update({
-                "title": item.get("title", prev.get("title", "")),
-                "category": item.get("category", prev.get("category", "")),
-                "organization": item.get("organization", prev.get("organization", "")),
-                "prefecture": item.get("prefecture", prev.get("prefecture", "")),
+                # スクレイパーが空値を返した場合に既存の正しい値を上書きしないよう or で補完する
+                # （PORTAL等で一覧にタイトルが無い案件の title が空で上書きされる不具合の対策）
+                "title": item.get("title") or prev.get("title", ""),
+                "category": item.get("category") or prev.get("category", ""),
+                "organization": item.get("organization") or prev.get("organization", ""),
+                "prefecture": item.get("prefecture") or prev.get("prefecture", ""),
                 "published_at": item.get("published_at") or prev.get("published_at", ""),
                 "deadline": item.get("deadline") or prev.get("deadline", ""),
                 "result_date": item.get("result_date") or prev.get("result_date", ""),
