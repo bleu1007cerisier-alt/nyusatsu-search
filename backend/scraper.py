@@ -2063,7 +2063,9 @@ def _scrape_osaka_sync() -> List[Dict]:
                 "searchKokokuStartDate": "", "searchKokokuEndDate": "",
                 "searchKaisatsuStartDate": "", "searchKaisatsuEndDate": "",
                 "searchNyusatsuStartDate": "", "searchNyusatsuEndDate": "",
-                "searchShowRange": "50", "showRange": "50",
+                # 各契約区分の現在公告中を全件取得（50件だと大量に取りこぼす。実測で
+                # 委託役務667/測量509/建設457/物品209＝計約1800件。頭打ち防止に大きめ）
+                "searchShowRange": "3000", "showRange": "3000",
                 "selectNendoIndex": "2", "searchNendo": nendo, "serverDateGengo": "令和",
             }
             html = post(_OSAKA_EB, data, ref=_OSAKA_EB)
@@ -2192,6 +2194,16 @@ _OSAKA_PROP_LIST = "https://www.pref.osaka.lg.jp/o040100/keiyaku_2/e-nyuusatsu/p
 _PREF_OSAKA = "https://www.pref.osaka.lg.jp"
 
 
+# 一覧の各行: 「令和X年M月D日～令和Y年M月D日：<a>案件名</a>：発注室・課」
+# （区切りは全角コロン／全角スペースの両方がある）。公募期間の開始=掲載日、終了=締切。
+_OSAKA_PROP_LI = re.compile(
+    r'<li>\s*令和\s*(\d+)\s*年\s*(\d+)\s*月\s*(\d+)\s*日'          # 公募開始
+    r'\s*[〜～]\s*令和\s*(\d+)\s*年\s*(\d+)\s*月\s*(\d+)\s*日'      # 公募終了
+    r'\s*[:：]?\s*<a href="([^"]+)">([^<]+)</a>'                    # 案件リンク
+    r'\s*[:：　]?\s*([^<]*)',                                       # 発注室・課（任意）
+    re.S)
+
+
 def _scrape_osaka_proposal_sync() -> List[Dict]:
     import urllib.request
     op = urllib.request.build_opener()
@@ -2201,32 +2213,28 @@ def _scrape_osaka_proposal_sync() -> List[Dict]:
     except Exception as e:  # noqa: BLE001
         logger.error(f"大阪府プロポーザル一覧取得失敗: {e}")
         return []
-    soup = BeautifulSoup(html, "html.parser")
-    main = (soup.find("main") or soup.find(id=re.compile(r"content|main", re.I))
-            or soup.find(attrs={"class": re.compile(r"article|content|honbun|main", re.I)})
-            or soup)
     results = []
     seen = set()
-    for a in main.find_all("a", href=True):
-        href = a["href"]
-        text = a.get_text(" ", strip=True)
-        if not re.search(r"\.html?($|\?)", href, re.I):
-            continue
-        if not re.search(r"募集|提案|プロポーザル|公募|選定|委託先", text):
-            continue
+    # 案件名テキストのキーワードで絞るのではなく、一覧の<li>（公募期間つき）を直接パースする。
+    # 案件名に「プロポーザル」等の語が無い案件（大多数）を取りこぼしていた不具合の修正。
+    for m in _OSAKA_PROP_LI.finditer(html):
+        sy, sm, sd, ey, em, ed, href, title, dept = m.groups()
         full = href if href.startswith("http") else _PREF_OSAKA + href
         if full in seen or "puropo.html" in full:
             continue
         seen.add(full)
-        title = re.sub(r"^【[^】]*】\s*", "", text).strip()
+        title = re.sub(r"^【[^】]*】\s*", "", title).strip()
+        dept = re.sub(r"\s+", "", dept or "").strip()
+        pub = _osaka_iso(sy, sm, sd)          # _osaka_iso が令和→西暦変換する
+        deadline = _osaka_iso(ey, em, ed)
         slug = re.sub(r"[^A-Za-z0-9]+", "-", href.rsplit("/", 1)[-1]).strip("-") or str(len(seen))
         results.append({
             "title":           title,
             "category":        "プロポーザル",
-            "organization":    "大阪府",
+            "organization":    ("大阪府 " + dept).strip(),
             "prefecture":      "大阪府",
-            "published_at":    "",
-            "deadline":        "",
+            "published_at":    pub,
+            "deadline":        deadline,
             "result_date":     "",
             "result_url":      "",
             "project_code":    f"OSAKA-P-{slug}",
@@ -2237,7 +2245,7 @@ def _scrape_osaka_proposal_sync() -> List[Dict]:
             "source_category": "",
             "summary":         "",
             "detail":          "",
-            "tags":            ",".join(generate_tags(title)),
+            "tags":            ",".join(generate_tags(title, dept)),
         })
     logger.info(f"大阪府 プロポーザル: {len(results)}件取得")
     return results
@@ -3328,6 +3336,125 @@ def fetch_chiba_detail(url: str) -> Optional[Dict]:
 
 
 # ---------------------------------------------------------------------------
+# 京都府（「入札・プロポーザル情報」新着一覧。<table class="list_table">が2つ
+# （入札情報／プロポーザル情報）。各行が「M月D日公告」＋案件名リンク。日付は年が
+# 無いため当月基準で補完（当月以前=今年、それ以降=前年の年度繰り越し）。詳細ページに
+# 更新日(西暦)もあり補完に使える。建設工事系は含まれるが除外はしない（委託・物品中心）。
+# ---------------------------------------------------------------------------
+_KYOTO_BASE = "https://www.pref.kyoto.jp"
+_KYOTO_LIST = _KYOTO_BASE + "/shinchaku/nyusatsu/index.html"
+
+
+def _kyoto_date_iso(md: str) -> str:
+    # 「7月1日公告」→ 年を補完してISO。当月以前は今年、先の月は前年度扱い。
+    import datetime as _dt
+    m = re.search(r"(\d{1,2})\s*月\s*(\d{1,2})\s*日", md)
+    if not m:
+        return ""
+    mo, d = int(m.group(1)), int(m.group(2))
+    today = _dt.date.today()
+    year = today.year if mo <= today.month else today.year - 1
+    try:
+        return f"{year:04d}-{mo:02d}-{d:02d}"
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _scrape_kyoto_sync() -> List[Dict]:
+    import urllib.request
+    from urllib.parse import urljoin
+    op = urllib.request.build_opener()
+    op.addheaders = [("User-Agent", "Mozilla/5.0")]
+
+    def get(url):
+        return op.open(url, timeout=40).read().decode("utf-8", "replace")
+
+    results = []
+    try:
+        html = get(_KYOTO_LIST)
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"京都府一覧取得失敗: {e}")
+        return results
+    # 2つの list_table を、直前のh2見出しでカテゴリ判定
+    seen = set()
+    for sec in re.finditer(r'<h2>.*?>([^<]+)</h2>(.*?)</table>', html, re.S):
+        head = sec.group(1)
+        cat = "プロポーザル" if "プロポーザル" in head else "入札"
+        rows = re.findall(
+            r'<td class="date_year"><p>([^<]+)</p></td>\s*'
+            r'<td><p><a href="([^"]+)">([^<]+)</a>', sec.group(2), re.S)
+        for md, href, title in rows:
+            full = urljoin(_KYOTO_LIST, href.strip())
+            if full in seen:
+                continue
+            seen.add(full)
+            title = title.strip()
+            row_cat = "プロポーザル" if re.search(r"プロポーザル|企画提案|企画競争", title) else cat
+            slug = re.sub(r"[^A-Za-z0-9]+", "-", href.strip().rsplit("/", 1)[-1]).strip("-")
+            results.append({
+                "title":           title,
+                "category":        row_cat,
+                "organization":    "京都府",
+                "prefecture":      "京都府",
+                "published_at":    _kyoto_date_iso(md),
+                "deadline":        "",
+                "result_date":     "",
+                "result_url":      "",
+                "project_code":    f"KYOTO-{slug}",
+                "awardee":         "",
+                "url":             full,
+                "source":          "KYOTO",
+                "amount":          "",
+                "source_category": "",
+                "summary":         "",
+                "detail":          "",
+                "tags":            ",".join(generate_tags(title)),
+            })
+    logger.info(f"京都府: {len(results)}件取得")
+    return results
+
+
+async def scrape_kyoto() -> List[Dict]:
+    """京都府公式サイト「入札・プロポーザル情報」新着一覧を取得する。"""
+    try:
+        return await asyncio.to_thread(_scrape_kyoto_sync)
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"京都府スクレイパー例外: {e}")
+        return []
+
+
+def fetch_kyoto_detail(url: str) -> Optional[Dict]:
+    """京都府 入札・公募 個別記事ページの本文を取得する（更新日を掲載日の補完に使う）。"""
+    import urllib.request
+    from urllib.parse import urljoin
+    try:
+        op = urllib.request.build_opener()
+        op.addheaders = [("User-Agent", "Mozilla/5.0")]
+        html = op.open(url, timeout=40).read().decode("utf-8", "replace")
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"京都府詳細取得失敗 {url}: {e}")
+        return None
+    soup = BeautifulSoup(html, "html.parser")
+    main = (soup.find(id=re.compile(r"contents|honbun|main", re.I))
+            or soup.find("main") or soup)
+    for tag in main.find_all(["script", "style", "nav", "header", "footer"]):
+        tag.decompose()
+    text = re.sub(r"\n{3,}", "\n\n", main.get_text("\n", strip=True))
+    published_at = ""
+    m = re.search(r"(?:更新日|掲載日)[：:\s]*(\d{4})年(\d{1,2})月(\d{1,2})日", soup.get_text(" ", strip=True))
+    if m:
+        published_at = f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+    attachments = []
+    for a in main.find_all("a", href=True):
+        if re.search(r"\.(pdf|docx?|xlsx?)($|\?)", a["href"], re.I):
+            name = re.sub(r"[（(][^）)]*(?:KB|MB|バイト)[）)]\s*$", "", a.get_text(" ", strip=True)).strip() or "添付資料"
+            full = urljoin(url, a["href"])
+            attachments.append({"name": name, "url": full, "kind": "公募要領"})
+    return {"detail": text[:6000], "budget": "", "schedule": [], "attachments": attachments,
+            "published_at": published_at}
+
+
+# ---------------------------------------------------------------------------
 # 静岡県（部局別ページ14件。横断一覧は無いため全部局を個別に巡回する。建設工事は対象外）
 # ---------------------------------------------------------------------------
 _SHIZUOKA_BASE = "https://www.pref.shizuoka.jp"
@@ -4055,6 +4182,7 @@ async def run_all_scrapers(portal_date_from: str = "", jogmec_max_id: int = 0) -
         scrape_ishikawa(),
         scrape_tochigi(),
         scrape_chiba(),
+        scrape_kyoto(),
     ]
 
     scraped = await asyncio.gather(*tasks, return_exceptions=True)
