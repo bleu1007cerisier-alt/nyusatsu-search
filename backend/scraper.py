@@ -3352,7 +3352,7 @@ def fetch_chiba_detail(url: str) -> Optional[Dict]:
     from urllib.parse import urljoin
     # 電子調達システム(SuperCALS)の案件はセッション依存でスクレイパー側が
     # 詳細まで確定済み。ポータルURLをここで叩いても意味がないためスキップ。
-    if "supercals.jp" in url:
+    if "ebidPPIPublish" in url:
         return None
     try:
         op = urllib.request.build_opener()
@@ -3409,18 +3409,22 @@ def _parse_chiba_cals_detail(html_text: str) -> Dict:
     cells = re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", re.sub(r"<script.*?</script>", "", html_text, flags=re.S | re.I), re.S | re.I)
     cells = [re.sub(r"\s+", " ", _html.unescape(re.sub(r"<[^>]+>", "", c))).replace("\xa0", " ").strip() for c in cells]
     cells = [c for c in cells if c]
+    # SuperCALS PPIの詳細ラベルは県で微妙に異なる（千葉/福井で共用するため両対応）:
+    #   締切: 千葉「入札締切予定日時」/ 福井「入札書受付終了予定日」
+    #   発注: 千葉「入札担当部署」/ 福井「発注機関」等
+    #   工種: 千葉「工種又は業種」/ 福井「工事種別」
     info = {"org": "", "published_at": "", "deadline": "", "amount": "", "gyoshu": ""}
     for i, c in enumerate(cells):
         nxt = cells[i + 1] if i + 1 < len(cells) else ""
-        if c == "入札担当部署":
+        if c in ("入札担当部署", "発注機関", "発注部署") and not info["org"]:
             info["org"] = re.sub(r"\s+", " ", nxt).strip()
         elif c == "公告日":
             info["published_at"] = _chiba_cals_wareki(nxt)
-        elif "入札締切" in c:
+        elif ("入札締切" in c or "入札書受付終了" in c or "入札受付締切" in c) and not info["deadline"]:
             info["deadline"] = _chiba_cals_wareki(nxt)
-        elif c.startswith("予定価格"):
+        elif c.startswith("予定価格") and not info["amount"]:
             info["amount"] = nxt.strip()
-        elif "工種" in c or "業種" in c:
+        elif ("工種" in c or "業種" in c or "工事種別" in c) and not info["gyoshu"]:
             info["gyoshu"] = nxt.strip()
     return info
 
@@ -3859,10 +3863,167 @@ async def scrape_fukui() -> List[Dict]:
         return []
 
 
+# ---------------------------------------------------------------------------
+# 福井県 建設工事・業務委託等（福井県電子入札システム SuperCALS「入札情報サービス」）。
+# 既存の福井スクレイパー(cat4502)は公募型プロポのみで入札を含まないため、電子入札
+# システムの入札予定(公告)をセッションPOST連鎖で取得して補完する。千葉と同じ
+# EjPPIj系だが、福井は EbidCD(電子/紙)・SearchDateType・NyusatuHousiki1〜5(入札方式
+# チェックボックス)が必須で、これらが無いと「文字列認識失敗エラー」になる。
+# 一覧は公告日の昇順・1ページ最大100件。ChoutatsuCD=00(工事)/01(業務委託等)。
+# ---------------------------------------------------------------------------
+_FUKUI_CALS_EJ = "https://www2.ebid.pref.fukui.jp/ebidPPIPublish/EjPPIj"
+_FUKUI_CALS_KIKAN = "0001000"  # 福井県本体（departArray[0]）
+_FUKUI_CALS_CHOUTATSU = [("00", "工事"), ("01", "業務委託等")]
+_FUKUI_CALS_MAX_DETAIL = 220
+
+
+def _scrape_fukui_cals_sync() -> List[Dict]:
+    import hashlib
+    import html as _html
+    import time as _time
+    import urllib.request
+    import urllib.parse
+    import http.cookiejar
+    from datetime import date, timedelta
+
+    # 締切(入札書受付終了予定日)が過ぎた終了案件を落とす窓。
+    cutoff = (date.today() - timedelta(days=1)).isoformat()
+    today = date.today()
+    fy = today.year if today.month >= 4 else today.year - 1
+
+    jar = http.cookiejar.CookieJar()
+    op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+    op.addheaders = [("User-Agent", "Mozilla/5.0"), ("Referer", _FUKUI_CALS_EJ)]
+
+    def post(pairs):
+        body = urllib.parse.urlencode(pairs).encode()
+        return op.open(_FUKUI_CALS_EJ, data=body, timeout=60).read().decode("cp932", "replace")
+
+    def get(url):
+        return op.open(url, timeout=60).read().decode("cp932", "replace")
+
+    results: List[Dict] = []
+    detail_budget = _FUKUI_CALS_MAX_DETAIL
+    try:
+        get(_FUKUI_CALS_EJ)
+        post([("ejParameterID", "StartPage")])
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"福井県電子入札セッション確立失敗: {e}")
+        return results
+
+    for cd, cd_label in _FUKUI_CALS_CHOUTATSU:
+        try:
+            post([("ejParameterID", "EjPSJ01"), ("ejProcessName", "start")])
+            get(_FUKUI_CALS_EJ + "?ejParameterID=EjPSJ01&ejShousaiDispFlag=false&ejProcessName=getCondPage")
+            lst = post([
+                ("Nendo", str(fy)), ("KikanNO", _FUKUI_CALS_KIKAN), ("ejMaxDisplayRowCount", "100"),
+                ("BukyokuNO", ""), ("KakakariNO", ""), ("ChoutatsuCD", cd), ("BidSuccessfulMethodType", ""),
+                ("EbidCD", "1"),
+                ("NyusatuHousiki1", "01"), ("NyusatuHousiki2", "02"), ("NyusatuHousiki3", "03"),
+                ("NyusatuHousiki4", "04"), ("NyusatuHousiki5", "05"),
+                ("KoujiSyubetu", ""), ("SearchDateType", "1"), ("kkselect", "AND"),
+                ("mojisel1", ""), ("mojisel2", ""), ("BidStDate", ""), ("BidEnDate", ""),
+                ("getStpos", "0"), ("ejParameterID", "EjPSJ01"), ("ejProcessName", "findList"),
+                ("ejShousaiDispFlag", "false"),
+            ])
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"福井県電子入札検索失敗（{cd_label}）: {e}")
+            continue
+
+        fv = re.search(r'ejFindVersion"\s*value="(\d+)"', lst)
+        find_version = fv.group(1) if fv else ""
+        if not find_version:
+            logger.info(f"福井県電子入札（{cd_label}）: ejFindVersion取得失敗")
+            continue
+
+        for tr in re.findall(r"<TR[^>]*>(.*?)</TR>", lst, re.S | re.I):
+            if "openYotei" not in tr:
+                continue
+            idxm = re.search(r"openYotei\('?(\d+)'?\)", tr)
+            if not idxm:
+                continue
+            idx = idxm.group(1)
+            tds = re.findall(r"<TD[^>]*>(.*?)</TD>", tr, re.S)
+            cells = [re.sub(r"\s+", " ", _html.unescape(re.sub(r"<[^>]+>", "", c))).replace("\xa0", " ").strip() for c in tds]
+            # 列: No, 公告日, 開札予定?, 締切?, 案件名, 場所, 発注機関 …（数はcd依存）
+            koukoku = _chiba_cals_wareki(cells[1]) if len(cells) > 1 else ""
+            # 案件名: リンクセル（openYoteiを含むTD）のテキスト
+            title = ""
+            for c in cells:
+                if len(c) >= 6 and not re.match(r"^[\dR\-\s:APM/]+$", c) and "福井県" not in c:
+                    title = c
+                    break
+            if not title:
+                continue
+
+            org, published, deadline, amount, gyoshu = "福井県", koukoku, "", "", cd_label
+            if detail_budget > 0:
+                try:
+                    dv = post([
+                        ("ejParameterID", "EjPSJ01"), ("ejProcessName", "getDetailPage"),
+                        ("ejCategoryName", "display"), ("ejKeyNo", idx), ("ejFindVersion", find_version),
+                        ("ejStartPosition", "0"), ("ejMaxDisplayRowCount", "100"), ("ejShousaiDispFlag", "false"),
+                    ])
+                    detail_budget -= 1
+                    info = _parse_chiba_cals_detail(dv)
+                    org = info["org"] or org
+                    published = info["published_at"] or koukoku
+                    deadline = info["deadline"]
+                    amount = info["amount"]
+                    gyoshu = info["gyoshu"] or cd_label
+                    _time.sleep(0.25)
+                except Exception as e:  # noqa: BLE001
+                    logger.error(f"福井県電子入札詳細取得失敗（{title}）: {e}")
+
+            # 締切が過ぎた終了案件は除外（締切不明はキープ）
+            if deadline and deadline < cutoff:
+                continue
+
+            slug = hashlib.md5((title + koukoku + idx + cd).encode("utf-8")).hexdigest()[:12]
+            results.append({
+                "title":           title,
+                "category":        "入札",
+                "organization":    org,
+                "prefecture":      "福井県",
+                "published_at":    published,
+                "deadline":        deadline,
+                "result_date":     "",
+                "result_url":      "",
+                "project_code":    f"FUKUI-CALS-{slug}",
+                "awardee":         "",
+                "url":             f"{_FUKUI_CALS_EJ}?KikanNO={_FUKUI_CALS_KIKAN}#{slug}",
+                "source":          "FUKUI",
+                "amount":          amount,
+                "source_category": gyoshu,
+                "summary":         "",
+                "detail":          "",
+                "tags":            ",".join(generate_tags(title, org)),
+            })
+    logger.info(f"福井県 建設工事・業務委託(電子入札): {len(results)}件取得")
+    return results
+
+
+async def scrape_fukui_cals() -> List[Dict]:
+    """福井県 建設工事・業務委託等（福井県電子入札システム）の入札予定(公告)を取得する。
+
+    セッション依存のためこの関数内でorganization・公告日・締切まで確定させる
+    （fetch_fukui_detailはebidPPIPublish URLをスキップする）。一覧は公告日昇順で
+    1ページ100件のため、各調達区分の先頭100件（＝締切が近い順）を対象とする。
+    """
+    try:
+        return await asyncio.to_thread(_scrape_fukui_cals_sync)
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"福井県電子入札スクレイパー例外: {e}")
+        return []
+
+
 def fetch_fukui_detail(url: str) -> Optional[Dict]:
     """福井県 入札・公募 個別記事ページの本文を取得する。"""
     import urllib.request
     from urllib.parse import urljoin
+    # 電子入札システム(SuperCALS)の案件はセッション依存で詳細確定済み。スキップ。
+    if "ebidPPIPublish" in url:
+        return None
     try:
         op = urllib.request.build_opener()
         op.addheaders = [("User-Agent", "Mozilla/5.0")]
@@ -4399,6 +4560,7 @@ async def run_all_scrapers(portal_date_from: str = "", jogmec_max_id: int = 0) -
         scrape_nagano(),
         scrape_shizuoka(),
         scrape_fukui(),
+        scrape_fukui_cals(),
         scrape_niigata(),
         scrape_ishikawa(),
         scrape_tochigi(),

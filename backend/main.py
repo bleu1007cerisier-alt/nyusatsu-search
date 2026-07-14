@@ -472,7 +472,7 @@ DEV_SOURCES = [
      "desc": "静岡県の入札・業務委託・プロポーザル等"},
     {"code": "FUKUI", "label": "福井県",
      "url": "https://www.pref.fukui.lg.jp/gyosei/tetuduki/cat4502/index.html",
-     "desc": "福井県の公募型プロポーザル"},
+     "desc": "福井県の公募型プロポーザル＋電子入札の建設工事・業務委託等"},
     {"code": "NIIGATA", "label": "新潟県",
      "url": "https://www.pref.niigata.lg.jp/life/sub/8/",
      "desc": "新潟県の入札・発注・売却"},
