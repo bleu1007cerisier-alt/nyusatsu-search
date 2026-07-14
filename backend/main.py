@@ -484,7 +484,7 @@ DEV_SOURCES = [
      "desc": "栃木県の入札・公募（業務委託・公共事業・物品・その他）"},
     {"code": "CHIBA", "label": "千葉県",
      "url": "https://www.pref.chiba.lg.jp/nyuu-kei/buppin-itaku/nyuusatsukoukoku/koukoku/index.html",
-     "desc": "千葉県の入札等の公告（物品・委託等の企画提案）"},
+     "desc": "千葉県の入札等の公告（物品・委託等の企画提案＋電子調達の建設工事・測量）"},
     {"code": "KYOTO", "label": "京都府",
      "url": "https://www.pref.kyoto.jp/shinchaku/nyusatsu/index.html",
      "desc": "京都府の入札・プロポーザル情報"},

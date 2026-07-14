@@ -680,6 +680,11 @@ def main():
     def needs_fetch(r):
         if r.get("source") not in _FETCH_SOURCES or not r.get("url"):
             return False
+        # 電子調達システム(SuperCALS)の案件はセッション依存でスクレイパーが
+        # 詳細確定済み。URLはポータル指定のため後段の詳細取得対象から除外する
+        # （千葉CALS等。放置すると200件枠を空振りで食い潰す）。
+        if "supercals.jp" in (r.get("url") or ""):
+            return False
         # budget_checked=1 が「詳細取得を一度試みた」フラグ。立っていなければ必ず取得する
         if (r.get("budget_checked") or "") != "1":
             return True
