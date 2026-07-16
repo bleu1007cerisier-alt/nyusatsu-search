@@ -454,8 +454,21 @@
       "ai_input_tokens": 576214,
       "ai_output_tokens": 103550,
       "ai_cost_usd": 0.8752
+    },
+    {
+      "at": "2026-07-16T01:46:45+00:00",
+      "scraped": 5779,
+      "new": 693,
+      "updated": 5086,
+      "total": 13068,
+      "portal_retry": 0,
+      "repaired": 0,
+      "ai_calls": 195,
+      "ai_input_tokens": 520805,
+      "ai_output_tokens": 101216,
+      "ai_cost_usd": 0.8215
     }
   ],
-  "cumulative_cost_usd_recent": 23.6331,
-  "cumulative_cost_usd_alltime": 23.6331
+  "cumulative_cost_usd_recent": 24.4546,
+  "cumulative_cost_usd_alltime": 24.4546
 }
