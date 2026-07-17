@@ -4403,6 +4403,145 @@ async def scrape_okayama() -> List[Dict]:
         return []
 
 
+# ---------------------------------------------------------------------------
+# 愛媛県（新規）。県公式「入札情報（物品・委託等）」list92-339 は個別案件が主
+# （article_title/article_date）。集約ページ（令和X年度…案件（物品）／発注情報／
+# オープンカウンター等）は除外。物品の個別案件は当年度サマリー表(公告日/案件名/開札日)
+# を展開して取得。直近window_daysで現行分に絞る。
+# ---------------------------------------------------------------------------
+_EHIME_BASE = "https://www.pref.ehime.jp"
+_EHIME_LIST = _EHIME_BASE + "/site/nyusatsu/list92-339.html"
+_EHIME_ROW = re.compile(
+    r'article_title[^>]*><a href="([^"]+)">([^<]+)</a>.{0,150}?'
+    r'article_date[^>]*>([^<]+)<', re.S)
+# 集約・ハブページ（個別案件でない）を除外する
+_EHIME_SKIP = re.compile(r"令和\d+年度.*案件（|発注情報（|オープンカウンター|掲載ページ|福祉施設からの物品の購入|入札・発注情報|一覧$")
+_EHIME_WINDOW_DAYS = 120
+
+
+def _ehime_wareki_iso(text: str) -> str:
+    m = re.search(r"令和\s*(\d+)\s*年\s*(\d+)\s*月\s*(\d+)\s*日", text)
+    if m:
+        return f"{2018 + int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+    m = re.search(r"(\d{4})\s*年\s*(\d+)\s*月\s*(\d+)\s*日", text)
+    return f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}" if m else ""
+
+
+def _scrape_ehime_sync() -> List[Dict]:
+    import urllib.request
+    from urllib.parse import urljoin
+    from datetime import date, timedelta
+    op = urllib.request.build_opener()
+    op.addheaders = [("User-Agent", "Mozilla/5.0")]
+
+    def get(url):
+        return op.open(url, timeout=40).read().decode("utf-8", "replace")
+
+    cutoff = (date.today() - timedelta(days=_EHIME_WINDOW_DAYS)).isoformat()
+    try:
+        html_doc = get(_EHIME_LIST)
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"愛媛県一覧取得失敗: {e}")
+        return []
+
+    results, seen = [], set()
+    buppin_summary_url = ""
+
+    def _add(title, url, pub, cat, is_result, gyoshu=""):
+        if url in seen:
+            return
+        seen.add(url)
+        slug = re.sub(r"[^A-Za-z0-9]+", "-", url.rsplit("/", 1)[-1]).strip("-") or str(len(seen))
+        results.append({
+            "title": title, "category": cat, "organization": "愛媛県", "prefecture": "愛媛県",
+            "published_at": "" if is_result else pub, "deadline": "",
+            "result_date": pub if is_result else "", "result_url": url if is_result else "",
+            "project_code": f"EHIME-{'R-' if is_result else ''}{slug}", "awardee": "",
+            "awardee_checked": "1" if is_result else "",
+            "amount": "", "url": url, "source": "EHIME",
+            "source_category": gyoshu or ("入札結果" if is_result else ""),
+            "summary": "", "detail": "", "tags": ",".join(generate_tags(title)),
+        })
+
+    for m in _EHIME_ROW.finditer(html_doc):
+        href, raw_title, date_raw = m.group(1), re.sub(r"<[^>]+>", "", m.group(2)).strip(), m.group(3)
+        title = re.sub(r"^（[^）]*更新）\s*", "", __import__("html").unescape(raw_title)).strip()
+        pub = _ehime_wareki_iso(date_raw)
+        # 当年度の物品サマリーは後で展開
+        if re.search(r"令和\d+年度一般競争入札案件（物品）", title):
+            if not buppin_summary_url:
+                buppin_summary_url = urljoin(_EHIME_LIST, href)
+            continue
+        if _EHIME_SKIP.search(title):
+            continue
+        if pub and pub < cutoff:
+            continue
+        if len(title) < 5:
+            continue
+        is_result = bool(re.search(r"結果|落札", title))
+        cat = "プロポーザル" if re.search(r"プロポーザル|企画提案|企画競争", title) else "入札"
+        _add(title, urljoin(_EHIME_LIST, href), pub, cat, is_result)
+
+    # 物品サマリー表（公告日 / 案件名[PDF] / 開札日 / 方式）を展開
+    if buppin_summary_url:
+        try:
+            bh = get(buppin_summary_url)
+            for tr in re.findall(r"<tr[^>]*>(.*?)</tr>", bh, re.S | re.I):
+                if "href" not in tr or "購入" not in tr and "製造" not in tr and "調達" not in tr and "借入" not in tr:
+                    continue
+                cells = [re.sub(r"\s+", " ", __import__("html").unescape(re.sub(r"<[^>]+>", "", c))).strip()
+                         for c in re.findall(r"<td[^>]*>(.*?)</td>", tr, re.S)]
+                cells = [c for c in cells if c]
+                am = re.search(r'href="([^"]+)"', tr)
+                if len(cells) < 2 or not am:
+                    continue
+                pub = _ehime_wareki_iso(cells[0])
+                name = re.sub(r"\s*\[PDF[^\]]*\].*$", "", cells[1]).strip()
+                if not name or (pub and pub < cutoff):
+                    continue
+                _add(name, urljoin(buppin_summary_url, am.group(1)), pub, "入札", False, gyoshu="物品")
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"愛媛県物品サマリー展開失敗: {e}")
+
+    logger.info(f"愛媛県: {len(results)}件取得")
+    return results
+
+
+async def scrape_ehime() -> List[Dict]:
+    """愛媛県公式サイトの入札情報（物品・委託等）を取得する。"""
+    try:
+        return await asyncio.to_thread(_scrape_ehime_sync)
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"愛媛県スクレイパー例外: {e}")
+        return []
+
+
+def fetch_ehime_detail(url: str) -> Optional[Dict]:
+    """愛媛県 入札公告 個別ページの本文を取得する（PDFはスキップ）。"""
+    import urllib.request
+    from urllib.parse import urljoin
+    if re.search(r"\.pdf($|\?)", url, re.I):
+        return None
+    try:
+        op = urllib.request.build_opener()
+        op.addheaders = [("User-Agent", "Mozilla/5.0")]
+        html_doc = op.open(url, timeout=40).read().decode("utf-8", "replace")
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"愛媛県詳細取得失敗 {url}: {e}")
+        return None
+    soup = BeautifulSoup(html_doc, "html.parser")
+    main = soup.find(id="main_body") or soup.find("main") or soup
+    for tag in main.find_all(["script", "style", "nav", "header", "footer"]):
+        tag.decompose()
+    text = re.sub(r"\n{3,}", "\n\n", main.get_text("\n", strip=True))
+    attachments = []
+    for a in main.find_all("a", href=True):
+        if re.search(r"\.(pdf|docx?|xlsx?)($|\?)", a["href"], re.I):
+            name = re.sub(r"[（(][^）)]*(?:KB|MB|バイト)[）)]\s*$", "", a.get_text(" ", strip=True)).strip() or "添付資料"
+            attachments.append({"name": name, "url": urljoin(url, a["href"]), "kind": "公告文"})
+    return {"detail": text[:6000], "budget": "", "schedule": [], "attachments": attachments, "published_at": ""}
+
+
 def fetch_okayama_detail(url: str) -> Optional[Dict]:
     """岡山県 入札公告 個別ページの本文を取得する。"""
     import urllib.request
@@ -5825,6 +5964,7 @@ async def run_all_scrapers(portal_date_from: str = "", jogmec_max_id: int = 0) -
         scrape_wakayama(),
         scrape_hiroshima(),
         scrape_okayama(),
+        scrape_ehime(),
     ]
 
     scraped = await asyncio.gather(*tasks, return_exceptions=True)
