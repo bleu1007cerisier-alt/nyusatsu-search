@@ -4521,7 +4521,17 @@ async def scrape_ehime() -> List[Dict]:
 # で並ぶ。doc IDの先頭8桁が日付。港湾・道路・委託業務が多い。直近window日で現行分に絞る。
 # ---------------------------------------------------------------------------
 _KOCHI_BASE = "https://www.pref.kochi.lg.jp"
-_KOCHI_LIST = _KOCHI_BASE + "/category/bunya/shigoto_sangyo/nyusatsujoho/"
+_KOCHI_CAT = _KOCHI_BASE + "/category/bunya/shigoto_sangyo/nyusatsujoho/"
+# トップは直近の混在一覧。各サブカテゴリの more@docs_1.html が全件一覧。
+# (hint: プロポ扱いにするか) の順で巡回し、doc IDの日付でwindow内に絞る。
+_KOCHI_LISTS = [
+    (_KOCHI_CAT, False),
+    (_KOCHI_CAT + "buppinchotatsujoho/", False),                       # 物品調達
+    (_KOCHI_CAT + "ippankyosonyusatsu/more@docs_1.html", False),        # 一般競争入札(工事・委託)
+    (_KOCHI_CAT + "ippankyosonyusatsu_proposal/more@docs_1.html", True),  # プロポーザル
+    (_KOCHI_CAT + "ippankyosonyusatsu_proposal_ninidantai/", True),     # 任意団体プロポ
+    (_KOCHI_CAT + "kenyuchi/", False),                                  # 県有地
+]
 _KOCHI_ROW = re.compile(r'<a href="(/doc/(\d{8})\d+/?)"[^>]*>([^<]+)</a>')
 _KOCHI_WINDOW_DAYS = 120
 
@@ -4533,32 +4543,33 @@ def _scrape_kochi_sync() -> List[Dict]:
     op = urllib.request.build_opener()
     op.addheaders = [("User-Agent", "Mozilla/5.0")]
     cutoff = (date.today() - timedelta(days=_KOCHI_WINDOW_DAYS)).isoformat()
-    try:
-        html_doc = op.open(_KOCHI_LIST, timeout=40).read().decode("utf-8", "replace")
-    except Exception as e:  # noqa: BLE001
-        logger.error(f"高知県一覧取得失敗: {e}")
-        return []
     import html as _html
     results, seen = [], set()
-    for m in _KOCHI_ROW.finditer(html_doc):
-        href, ymd, raw_title = m.group(1), m.group(2), _html.unescape(m.group(3)).strip()
-        pub = f"{ymd[0:4]}-{ymd[4:6]}-{ymd[6:8]}"
-        if not re.search(r"公告|入札|委託|プロポ|企画提案|調達|結果|募集", raw_title):
+    for list_url, proposal_hint in _KOCHI_LISTS:
+        try:
+            html_doc = op.open(list_url, timeout=40).read().decode("utf-8", "replace")
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"高知県一覧取得失敗（{list_url}）: {e}")
             continue
-        if pub < cutoff:  # 古い常設ページ等を除外
-            continue
-        url = urljoin(_KOCHI_BASE, href)
-        if url in seen:
-            continue
-        seen.add(url)
-        title = re.sub(r"^(?:\d+月\d+日[^【]*)?【[^】]*】\s*", "", raw_title).strip()
-        title = re.sub(r"^【[^】]*】\s*", "", title).strip()
-        if len(title) < 5:
-            continue
-        is_result = bool(re.search(r"入札結果|落札|開札結果|結果について", raw_title))
-        cat = "プロポーザル" if re.search(r"プロポーザル|企画提案|企画競争", raw_title) else "入札"
-        slug = ymd + re.sub(r"\D", "", href)[-5:]
-        results.append({
+        for m in _KOCHI_ROW.finditer(html_doc):
+            href, ymd, raw_title = m.group(1), m.group(2), _html.unescape(m.group(3)).strip()
+            pub = f"{ymd[0:4]}-{ymd[4:6]}-{ymd[6:8]}"
+            if not re.search(r"公告|入札|委託|プロポ|企画提案|調達|結果|募集|工事|業務", raw_title):
+                continue
+            if pub < cutoff:  # 古い常設ページ等を除外
+                continue
+            url = urljoin(_KOCHI_BASE, href)
+            if url in seen:
+                continue
+            seen.add(url)
+            title = re.sub(r"^(?:\d+月\d+日[^【]*)?【[^】]*】\s*", "", raw_title).strip()
+            title = re.sub(r"^【[^】]*】\s*", "", title).strip()
+            if len(title) < 5:
+                continue
+            is_result = bool(re.search(r"入札結果|落札|開札結果|結果について", raw_title))
+            cat = "プロポーザル" if (proposal_hint or re.search(r"プロポーザル|企画提案|企画競争", raw_title)) else "入札"
+            slug = ymd + re.sub(r"\D", "", href)[-5:]
+            results.append({
             "title": title, "category": cat, "organization": "高知県", "prefecture": "高知県",
             "published_at": "" if is_result else pub, "deadline": "",
             "result_date": pub if is_result else "", "result_url": url if is_result else "",
@@ -4586,50 +4597,80 @@ async def scrape_kochi() -> List[Dict]:
 # </span><div class="title"><a href="kijiXXXX/index.html">案件名</a>。委託・物品を巡回。
 # ---------------------------------------------------------------------------
 _SAGA_BASE = "https://www.pref.saga.lg.jp"
+# (list番号, class_id, 表示名)。1ページ目は本体HTML、2ページ目以降は
+# hpkijilistpagerhandler.ashx?class_id=…&pg=N（Referer必須）で全件取得。
 _SAGA_CATEGORIES = [
-    ("/list02043.html", "委託・役務"),
-    ("/list02059.html", "物品"),
+    ("02043", "2043", "委託・役務"),
+    ("02059", "2059", "物品"),
 ]
+_SAGA_PAGER = (_SAGA_BASE +
+               "/dynamic/hpkiji/pub/hpkijilistpagerhandler.ashx"
+               "?c_id=3&class_id={cls}&class_set_id=1&pg={pg}&kbn=kijilist&top_id=0")
 _SAGA_ROW = re.compile(
     r'<span class="upddate">(\d{4})年(\d{1,2})月(\d{1,2})日更新</span>\s*'
     r'<div class="title">\s*<a href="([^"]+)">([^<]+)</a>', re.S)
+_SAGA_WINDOW_DAYS = 180
 
 
 def _scrape_saga_sync() -> List[Dict]:
     import urllib.request
     from urllib.parse import urljoin
+    from datetime import date, timedelta
     import html as _html
-    op = urllib.request.build_opener()
-    op.addheaders = [("User-Agent", "Mozilla/5.0")]
+    cutoff = (date.today() - timedelta(days=_SAGA_WINDOW_DAYS)).isoformat()
     results, seen = [], set()
-    for path, cat_label in _SAGA_CATEGORIES:
+    for list_no, cls, cat_label in _SAGA_CATEGORIES:
+        top_url = f"{_SAGA_BASE}/list{list_no}.html"
+
+        def _fetch(url, ref=None):
+            hd = {"User-Agent": "Mozilla/5.0"}
+            if ref:
+                hd["Referer"] = ref
+                hd["X-Requested-With"] = "XMLHttpRequest"
+            req = urllib.request.Request(url, headers=hd)
+            return urllib.request.urlopen(req, timeout=40).read().decode("utf-8", "replace")
+
+        # 全ページのHTMLを集める（pg1=本体, pg2..=AJAXハンドラ）
+        pages = []
         try:
-            html_doc = op.open(_SAGA_BASE + path, timeout=40).read().decode("utf-8", "replace")
+            pages.append(_fetch(top_url))
         except Exception as e:  # noqa: BLE001
             logger.error(f"佐賀県一覧取得失敗（{cat_label}）: {e}")
             continue
-        for m in _SAGA_ROW.finditer(html_doc):
-            y, mo, d, href, title = m.group(1), m.group(2), m.group(3), m.group(4), _html.unescape(m.group(5)).strip()
-            url = urljoin(_SAGA_BASE + path, href)
-            if url in seen:
-                continue
-            seen.add(url)
-            if len(title) < 5 or "随意契約の契約内容" in title:
-                continue
-            pub = f"{int(y):04d}-{int(mo):02d}-{int(d):02d}"
-            is_result = bool(re.search(r"決定しました|落札|入札結果|結果について", title))
-            cat = "プロポーザル" if re.search(r"プロポーザル|企画提案|企画競争", title) else "入札"
-            slug = re.sub(r"[^A-Za-z0-9]+", "-", href.split("/", 1)[0]).strip("-") or str(len(seen))
-            results.append({
-                "title": title, "category": cat, "organization": "佐賀県", "prefecture": "佐賀県",
-                "published_at": "" if is_result else pub, "deadline": "",
-                "result_date": pub if is_result else "", "result_url": url if is_result else "",
-                "project_code": f"SAGA-{'R-' if is_result else ''}{slug}", "awardee": "",
-                "awardee_checked": "1" if is_result else "",
-                "amount": "", "url": url, "source": "SAGA",
-                "source_category": cat_label + (" 結果" if is_result else ""),
-                "summary": "", "detail": "", "tags": ",".join(generate_tags(title)),
-            })
+        for pg in range(2, 40):
+            try:
+                h = _fetch(_SAGA_PAGER.format(cls=cls, pg=pg), ref=top_url)
+            except Exception:  # noqa: BLE001
+                break
+            if not _SAGA_ROW.search(h):
+                break
+            pages.append(h)
+
+        for html_doc in pages:
+            for m in _SAGA_ROW.finditer(html_doc):
+                y, mo, d, href, title = m.group(1), m.group(2), m.group(3), m.group(4), _html.unescape(m.group(5)).strip()
+                url = urljoin(top_url, href)
+                if url in seen:
+                    continue
+                pub = f"{int(y):04d}-{int(mo):02d}-{int(d):02d}"
+                if pub < cutoff:  # 古い案件は除外
+                    continue
+                seen.add(url)
+                if len(title) < 5 or "随意契約の契約内容" in title:
+                    continue
+                is_result = bool(re.search(r"決定しました|落札|入札結果|結果について", title))
+                cat = "プロポーザル" if re.search(r"プロポーザル|企画提案|企画競争", title) else "入札"
+                slug = re.sub(r"[^A-Za-z0-9]+", "-", href.split("/", 1)[0]).strip("-") or str(len(seen))
+                results.append({
+                    "title": title, "category": cat, "organization": "佐賀県", "prefecture": "佐賀県",
+                    "published_at": "" if is_result else pub, "deadline": "",
+                    "result_date": pub if is_result else "", "result_url": url if is_result else "",
+                    "project_code": f"SAGA-{'R-' if is_result else ''}{slug}", "awardee": "",
+                    "awardee_checked": "1" if is_result else "",
+                    "amount": "", "url": url, "source": "SAGA",
+                    "source_category": cat_label + (" 結果" if is_result else ""),
+                    "summary": "", "detail": "", "tags": ",".join(generate_tags(title)),
+                })
     logger.info(f"佐賀県: {len(results)}件取得")
     return results
 
