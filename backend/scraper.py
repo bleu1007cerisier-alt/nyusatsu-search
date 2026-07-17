@@ -3420,7 +3420,9 @@ def _parse_chiba_cals_detail(html_text: str) -> Dict:
             info["org"] = re.sub(r"\s+", " ", nxt).strip()
         elif c == "公告日":
             info["published_at"] = _chiba_cals_wareki(nxt)
-        elif ("入札締切" in c or "入札書受付終了" in c or "入札受付締切" in c) and not info["deadline"]:
+        elif ("入札締切" in c or "入札書受付終了" in c or "入札受付締切" in c
+              or "開札予定日" in c) and not info["deadline"]:
+            # 締切優先。無ければ開札予定日時をフォールバック（石川等は締切ラベルが無い）
             info["deadline"] = _chiba_cals_wareki(nxt)
         elif c.startswith("予定価格") and not info["amount"]:
             info["amount"] = nxt.strip()
@@ -3522,7 +3524,9 @@ def _scrape_chiba_cals_sync() -> List[Dict]:
                 except Exception as e:  # noqa: BLE001
                     logger.error(f"千葉県電子調達詳細取得失敗（{title}）: {e}")
 
-            slug = hashlib.md5((title + yotei + idx + cd).encode("utf-8")).hexdigest()[:12]
+            # slugは実行間で安定な値のみ（idx=位置番号は毎回変わりURLがぶれて重複蓄積
+            # するため使わない）。案件名＋公告/予定日で一意化（CSVから復元可能な値）。
+            slug = hashlib.md5((title + yotei).encode("utf-8")).hexdigest()[:12]
             results.append({
                 "title":           title,
                 "category":        "入札",
@@ -3979,7 +3983,8 @@ def _scrape_fukui_cals_sync() -> List[Dict]:
             if deadline and deadline < cutoff:
                 continue
 
-            slug = hashlib.md5((title + koukoku + idx + cd).encode("utf-8")).hexdigest()[:12]
+            # slugは実行間で安定な値のみ（idxは毎回変わるため除外。重複蓄積防止）
+            slug = hashlib.md5((title + koukoku).encode("utf-8")).hexdigest()[:12]
             results.append({
                 "title":           title,
                 "category":        "入札",
@@ -4376,6 +4381,153 @@ async def scrape_ishikawa() -> List[Dict]:
         return []
 
 
+# ---------------------------------------------------------------------------
+# 石川県 建設工事・測量コンサル（ep-bis SuperCALS。既存の石川スクレイパーは
+# ebidPPIGPublish=物品/役務のみで建設工事が欠落していたため補完する）。
+# 建設は ebidPPIPublish（Gなし）/ EjPSJ01（千葉と同型）。ep-bisは複数県共用ホスト
+# のため機関番号 KikanNO=1700000（石川県）で絞る。件数が多い（工事だけで千件超）ので
+# 公告日ウィンドウ＋詳細取得上限で負荷を抑える。詳細ラベルは締切が無く開札予定日時。
+# ---------------------------------------------------------------------------
+_ISHIKAWA_CALS_EJ = _ISHIKAWA_BASE + "/ebidPPIPublish/EjPPIj"   # Gなし＝建設系
+_ISHIKAWA_CALS_KIKAN = "1700000"  # 石川県（departArray, 物品の1700100とは別）
+_ISHIKAWA_CALS_CHOUTATSU = [("00", "工事"), ("01", "測量・コンサル")]
+_ISHIKAWA_CALS_WINDOW_DAYS = 30
+_ISHIKAWA_CALS_MAX_DETAIL = 150   # 共用ホスト(ep-bis)配慮の詳細取得上限
+
+
+def _scrape_ishikawa_cals_sync() -> List[Dict]:
+    import hashlib
+    import html as _html
+    import time as _time
+    import urllib.request
+    import urllib.parse
+    import http.cookiejar
+    from datetime import date, timedelta
+
+    today = date.today()
+    lo = today - timedelta(days=_ISHIKAWA_CALS_WINDOW_DAYS)
+    bs, be = lo.strftime("%Y/%m/%d"), today.strftime("%Y/%m/%d")
+    cutoff_iso = lo.isoformat()
+    fy = today.year if today.month >= 4 else today.year - 1
+
+    jar = http.cookiejar.CookieJar()
+    op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+    op.addheaders = [("User-Agent", "Mozilla/5.0"), ("Referer", _ISHIKAWA_CALS_EJ)]
+
+    def post(pairs):
+        body = urllib.parse.urlencode(pairs).encode()
+        return op.open(_ISHIKAWA_CALS_EJ, data=body, timeout=60).read().decode("cp932", "replace")
+
+    def get(url):
+        return op.open(url, timeout=60).read().decode("cp932", "replace")
+
+    results: List[Dict] = []
+    detail_budget = _ISHIKAWA_CALS_MAX_DETAIL
+    try:
+        get(f"{_ISHIKAWA_CALS_EJ}?KikanNO={_ISHIKAWA_CALS_KIKAN}")
+        post([("ejParameterID", "StartPage"), ("KikanNO", _ISHIKAWA_CALS_KIKAN)])
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"石川県建設セッション確立失敗: {e}")
+        return results
+
+    for cd, cd_label in _ISHIKAWA_CALS_CHOUTATSU:
+        try:
+            post([("ejParameterID", "EjPSJ01"), ("ejProcessName", "start")])
+            get(_ISHIKAWA_CALS_EJ + "?ejParameterID=EjPSJ01&ejShousaiDispFlag=false&ejProcessName=getCondPage")
+            lst = post([
+                ("Nendo", str(fy)), ("KikanNO", _ISHIKAWA_CALS_KIKAN), ("ChoutatsuCD", cd),
+                ("BukyokuNO", ""), ("KoujiSyubetu", ""), ("BidStDate", bs), ("BidEnDate", be),
+                ("kkselect", "AND"), ("mojisel1", ""), ("mojisel2", ""),
+                ("chiiki_dataList", ""), ("chiikisentaku", ""), ("getStpos", "0"), ("AllhitSize", "0"),
+                ("ejMaxDisplayRowCount", "700"), ("ejDisplaySort", "030006"), ("ejSortSequence", "desc"),
+                ("ejParameterID", "EjPSJ01"), ("ejProcessName", "findList"), ("ejShousaiDispFlag", "false"),
+            ])
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"石川県建設検索失敗（{cd_label}）: {e}")
+            continue
+
+        if "多すぎ" in lst or "700件以内" in lst:
+            logger.warning(f"石川県建設（{cd_label}）: 件数超過。ウィンドウを狭める必要あり")
+        fv = re.search(r'ejFindVersion"\s*value="(\d+)"', lst)
+        find_version = fv.group(1) if fv else ""
+        if not find_version:
+            logger.info(f"石川県建設（{cd_label}）: 該当なしまたはejFindVersion取得失敗")
+            continue
+
+        for tr in re.findall(r"<TR[^>]*>(.*?)</TR>", lst, re.S | re.I):
+            if "openYotei" not in tr:
+                continue
+            idxm = re.search(r"openYotei\('?(\d+)'?\)", tr)
+            if not idxm:
+                continue
+            idx = idxm.group(1)
+            tds = re.findall(r"<TD[^>]*>(.*?)</TD>", tr, re.S)
+            cells = [re.sub(r"\s+", " ", _html.unescape(re.sub(r"<[^>]+>", "", c))).replace("\xa0", " ").strip() for c in tds]
+            koukoku = _chiba_cals_wareki(cells[1]) if len(cells) > 1 else ""
+            title = re.sub(r"\s*※\s*添付有\s*$", "", cells[2]).strip() if len(cells) > 2 else ""
+            price = cells[6] if len(cells) > 6 else ""
+            if not title:
+                continue
+            if koukoku and koukoku < cutoff_iso:
+                continue
+
+            org, published, deadline, amount, gyoshu = "石川県", koukoku, "", price, cd_label
+            if detail_budget > 0:
+                try:
+                    dv = post([
+                        ("ejParameterID", "EjPSJ01"), ("ejProcessName", "getDetailPage"),
+                        ("ejCategoryName", "display"), ("ejKeyNo", idx), ("ejFindVersion", find_version),
+                        ("ejStartPosition", "0"), ("ejMaxDisplayRowCount", "700"), ("ejShousaiDispFlag", "false"),
+                    ])
+                    detail_budget -= 1
+                    info = _parse_chiba_cals_detail(dv)
+                    org = info["org"] or org
+                    published = info["published_at"] or koukoku
+                    deadline = info["deadline"]
+                    amount = info["amount"] or price
+                    gyoshu = info["gyoshu"] or cd_label
+                    _time.sleep(0.3)
+                except Exception as e:  # noqa: BLE001
+                    logger.error(f"石川県建設詳細取得失敗（{title}）: {e}")
+
+            # slugは実行間で安定な値のみ（idxは毎回変わるため除外。重複蓄積防止）
+            slug = hashlib.md5((title + koukoku).encode("utf-8")).hexdigest()[:12]
+            results.append({
+                "title":           title,
+                "category":        "入札",
+                "organization":    org,
+                "prefecture":      "石川県",
+                "published_at":    published,
+                "deadline":        deadline,
+                "result_date":     "",
+                "result_url":      "",
+                "project_code":    f"ISHIKAWA-CALS-{slug}",
+                "awardee":         "",
+                "url":             f"{_ISHIKAWA_CALS_EJ}?KikanNO={_ISHIKAWA_CALS_KIKAN}#{slug}",
+                "source":          "ISHIKAWA",
+                "amount":          amount,
+                "source_category": gyoshu,
+                "summary":         "",
+                "detail":          "",
+                "tags":            ",".join(generate_tags(title, org)),
+            })
+    logger.info(f"石川県 建設工事・測量(電子入札): {len(results)}件取得")
+    return results
+
+
+async def scrape_ishikawa_cals() -> List[Dict]:
+    """石川県 建設工事・測量コンサル（ep-bis SuperCALS）の入札予定(公告)を取得する。
+
+    セッション依存のためこの関数内で公告日・開札予定・工事種別・予定価格まで確定させる。
+    ep-bisは複数県共用ホストのため詳細取得は上限つき・throttle付きで丁寧にアクセスする。
+    """
+    try:
+        return await asyncio.to_thread(_scrape_ishikawa_cals_sync)
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"石川県建設スクレイパー例外: {e}")
+        return []
+
+
 # 一覧行のタイトル＋openYoteiインデックスだけを緩く拾う（結果一覧は「入札予定」と
 # 列構成が異なる可能性があるため、列数を固定しない）
 _ISHIKAWA_RESULT_ROW_RE = re.compile(
@@ -4563,6 +4715,7 @@ async def run_all_scrapers(portal_date_from: str = "", jogmec_max_id: int = 0) -
         scrape_fukui_cals(),
         scrape_niigata(),
         scrape_ishikawa(),
+        scrape_ishikawa_cals(),
         scrape_tochigi(),
         scrape_chiba(),
         scrape_chiba_cals(),

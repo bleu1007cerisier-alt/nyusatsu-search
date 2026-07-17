@@ -478,7 +478,7 @@ DEV_SOURCES = [
      "desc": "新潟県の入札・発注・売却"},
     {"code": "ISHIKAWA", "label": "石川県",
      "url": "https://www.ep-bis.supercals.jp/ebidPPIGPublish/EjPPIj?KikanNO=1700100",
-     "desc": "石川県電子入札共同システムの入札予定"},
+     "desc": "石川県電子入札共同システムの入札予定（物品・役務＋建設工事・測量コンサル）"},
     {"code": "TOCHIGI", "label": "栃木県",
      "url": "https://www.pref.tochigi.lg.jp/kensei/nyuusatsu/index.html",
      "desc": "栃木県の入札・公募（業務委託・公共事業・物品・その他）"},
