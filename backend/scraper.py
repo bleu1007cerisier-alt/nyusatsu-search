@@ -4088,6 +4088,99 @@ async def scrape_hyogo() -> List[Dict]:
         return []
 
 
+# ---------------------------------------------------------------------------
+# 滋賀県（新規）。県公式の静的「公告一覧（物品・委託・役務）」。各項目が
+# <li class="display_date"><time datetime="YYYY-MM-DD">…<a href="XX.html">○○の公告（案件名）</a>。
+# 日付(公告日)が一覧に入っている。締切は詳細ページ側。琵琶湖・生物多様性等が多く海洋系に好適。
+# ---------------------------------------------------------------------------
+_SHIGA_LIST = "https://www.pref.shiga.lg.jp/zigyousya/nyusatsubaikyaku/itaku/"
+_SHIGA_ROW = re.compile(
+    r'<time[^>]*datetime="(\d{4}-\d{2}-\d{2})[^"]*"[^>]*>.*?'
+    r'<a href="([^"]+)">([^<]+)</a>', re.S)
+
+
+def _scrape_shiga_sync() -> List[Dict]:
+    import urllib.request
+    from urllib.parse import urljoin
+    op = urllib.request.build_opener()
+    op.addheaders = [("User-Agent", "Mozilla/5.0")]
+    try:
+        html_doc = op.open(_SHIGA_LIST, timeout=40).read().decode("utf-8", "replace")
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"滋賀県一覧取得失敗: {e}")
+        return []
+    results, seen = [], set()
+    for m in _SHIGA_ROW.finditer(html_doc):
+        date_iso, href, raw_title = m.group(1), m.group(2), m.group(3).strip()
+        if ".htm" not in href:
+            continue
+        url = urljoin(_SHIGA_LIST, href)
+        if url in seen:
+            continue
+        seen.add(url)
+        # 「公募型プロポーザルの公告（案件名）」→ 案件名を取り出す
+        mt = re.search(r"公告(?:（|\()(.+?)(?:）|\))\s*$", raw_title)
+        title = (mt.group(1) if mt else raw_title).strip()
+        if len(title) < 4:
+            continue
+        cat = "プロポーザル" if "プロポーザル" in raw_title or "企画提案" in raw_title else "入札"
+        slug = re.sub(r"[^A-Za-z0-9]+", "-", href.rsplit("/", 1)[-1]).strip("-") or str(len(seen))
+        results.append({
+            "title":           title,
+            "category":        cat,
+            "organization":    "滋賀県",
+            "prefecture":      "滋賀県",
+            "published_at":    date_iso,
+            "deadline":        "",
+            "result_date":     "",
+            "result_url":      "",
+            "project_code":    f"SHIGA-{slug}",
+            "awardee":         "",
+            "url":             url,
+            "source":          "SHIGA",
+            "amount":          "",
+            "source_category": "",
+            "summary":         "",
+            "detail":          "",
+            "tags":            ",".join(generate_tags(title)),
+        })
+    logger.info(f"滋賀県: {len(results)}件取得")
+    return results
+
+
+async def scrape_shiga() -> List[Dict]:
+    """滋賀県公式サイト「公告一覧（物品・委託・役務）」を取得する。"""
+    try:
+        return await asyncio.to_thread(_scrape_shiga_sync)
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"滋賀県スクレイパー例外: {e}")
+        return []
+
+
+def fetch_shiga_detail(url: str) -> Optional[Dict]:
+    """滋賀県 入札公告 個別ページの本文を取得する（締切等を補完）。"""
+    import urllib.request
+    from urllib.parse import urljoin
+    try:
+        op = urllib.request.build_opener()
+        op.addheaders = [("User-Agent", "Mozilla/5.0")]
+        html_doc = op.open(url, timeout=40).read().decode("utf-8", "replace")
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"滋賀県詳細取得失敗 {url}: {e}")
+        return None
+    soup = BeautifulSoup(html_doc, "html.parser")
+    main = soup.find(id="tmp_contents") or soup.find("main") or soup
+    for tag in main.find_all(["script", "style", "nav", "header", "footer"]):
+        tag.decompose()
+    text = re.sub(r"\n{3,}", "\n\n", main.get_text("\n", strip=True))
+    attachments = []
+    for a in main.find_all("a", href=True):
+        if re.search(r"\.(pdf|docx?|xlsx?)($|\?)", a["href"], re.I):
+            name = re.sub(r"[（(][^）)]*(?:KB|MB|バイト)[）)]\s*$", "", a.get_text(" ", strip=True)).strip() or "添付資料"
+            attachments.append({"name": name, "url": urljoin(url, a["href"]), "kind": "公告文"})
+    return {"detail": text[:6000], "budget": "", "schedule": [], "attachments": attachments, "published_at": ""}
+
+
 # 兵庫県 開札結果（応札結果）。入札公告と同じ縦型テーブル構造。落札者・落札金額は
 # 各結果詳細ページ（部署ごとに書式バラバラ・PDF等）にあり定型抽出できないため、
 # 結果レコードとして案件名・発注機関・開札日(入札日)・公式結果ページリンクを収録する。
@@ -5410,6 +5503,7 @@ async def run_all_scrapers(portal_date_from: str = "", jogmec_max_id: int = 0) -
         scrape_kyoto(),
         scrape_hyogo(),
         scrape_hyogo_results(),
+        scrape_shiga(),
     ]
 
     scraped = await asyncio.gather(*tasks, return_exceptions=True)
