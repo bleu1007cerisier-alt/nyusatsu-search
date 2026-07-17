@@ -4088,6 +4088,91 @@ async def scrape_hyogo() -> List[Dict]:
         return []
 
 
+# 兵庫県 開札結果（応札結果）。入札公告と同じ縦型テーブル構造。落札者・落札金額は
+# 各結果詳細ページ（部署ごとに書式バラバラ・PDF等）にあり定型抽出できないため、
+# 結果レコードとして案件名・発注機関・開札日(入札日)・公式結果ページリンクを収録する。
+_HYOGO_RESULT_CATEGORIES = [
+    ("/bid/bid_res_02.html", "委託・役務"),
+    ("/bid/bid_res_03.html", "工事・設計"),
+]
+
+
+def _scrape_hyogo_results_sync() -> List[Dict]:
+    import urllib.request
+    from urllib.parse import urljoin
+    op = urllib.request.build_opener()
+    op.addheaders = [("User-Agent", "Mozilla/5.0")]
+
+    def get(url):
+        return op.open(url, timeout=40).read().decode("utf-8", "replace")
+
+    results, seen = [], set()
+    for path, cat_label in _HYOGO_RESULT_CATEGORIES:
+        try:
+            html_doc = get(_HYOGO_BASE + path)
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"兵庫県開札結果取得失敗（{cat_label}）: {e}")
+            continue
+        for tb in re.findall(r"<table[^>]*>(.*?)</table>", html_doc, re.S | re.I):
+            if "名称" not in tb or not re.search(r'href="/[a-z]', tb):
+                continue
+            fields, link = {}, ""
+            for row in re.findall(r"<tr[^>]*>(.*?)</tr>", tb, re.S | re.I):
+                cells = re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", row, re.S | re.I)
+                if len(cells) < 2:
+                    continue
+                label = re.sub(r"<[^>]+>", "", cells[0]).strip()
+                val = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", cells[1])).strip()
+                fields[label] = val
+                if label == "名称":
+                    lm = re.search(r'href="([^"]+)"', cells[1])
+                    if lm:
+                        link = lm.group(1)
+            title = re.sub(r"(?:の)?(?:入札|開札|審査)?結果$", "", fields.get("名称", "")).strip()
+            if not title or not link:
+                continue
+            url = urljoin(_HYOGO_BASE, link)
+            if url in seen:
+                continue
+            seen.add(url)
+            method = fields.get("入札方法", "")
+            cat = "プロポーザル" if re.search(r"プロポーザル|企画提案|公募型", method + title) else "入札"
+            org = ("兵庫県 " + fields.get("発注機関", "")).strip()
+            rdate = _hyogo_date_iso(fields.get("入札日", "") or fields.get("開札日", ""))
+            slug = re.sub(r"[^A-Za-z0-9]+", "-", link.rsplit("/", 1)[-1]).strip("-") or str(len(seen))
+            results.append({
+                "title":           title,
+                "category":        cat,
+                "organization":    org,
+                "prefecture":      "兵庫県",
+                "published_at":    "",
+                "deadline":        "",
+                "result_date":     rdate,
+                "result_url":      url,
+                "project_code":    f"HYOGO-R-{slug}",
+                "awardee":         "",   # 結果ページの書式が不定型のため落札者はリンク先で確認
+                "awardee_checked": "1",  # 自動抽出しない（監視終了）
+                "amount":          "",
+                "url":             url,
+                "source":          "HYOGO",
+                "source_category": (fields.get("種別", cat_label) + " 開札結果").strip(),
+                "summary":         "",
+                "detail":          "",
+                "tags":            ",".join(generate_tags(title, fields.get("発注機関", ""))),
+            })
+    logger.info(f"兵庫県 開札結果: {len(results)}件取得")
+    return results
+
+
+async def scrape_hyogo_results() -> List[Dict]:
+    """兵庫県の開札結果（応札結果）を取得する。落札者はリンク先で確認（自動抽出不可）。"""
+    try:
+        return await asyncio.to_thread(_scrape_hyogo_results_sync)
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"兵庫県開札結果スクレイパー例外: {e}")
+        return []
+
+
 def fetch_hyogo_detail(url: str) -> Optional[Dict]:
     """兵庫県 入札公告 個別ページの本文を取得する。"""
     import urllib.request
@@ -5324,6 +5409,7 @@ async def run_all_scrapers(portal_date_from: str = "", jogmec_max_id: int = 0) -
         scrape_chiba_cals(),
         scrape_kyoto(),
         scrape_hyogo(),
+        scrape_hyogo_results(),
     ]
 
     scraped = await asyncio.gather(*tasks, return_exceptions=True)
