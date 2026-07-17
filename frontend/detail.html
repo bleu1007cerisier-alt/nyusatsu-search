@@ -53,7 +53,7 @@
       </div>
 
       <div class="mb-6">
-        <h2 id="detail-label" class="text-sm font-semibold text-gray-700 mb-2">📋 概要</h2>
+        <h2 id="detail-label" class="text-sm font-semibold text-gray-700 mb-2">📋 公募概要</h2>
         <div id="detail" class="text-sm text-gray-600 leading-relaxed"></div>
       </div>
 
@@ -196,7 +196,7 @@
       const detailEl = document.getElementById('detail');
       const detailLabel = document.getElementById('detail-label');
       if (summaryText && (summaryText.startsWith('・') || summaryText.includes('\n・'))) {
-        detailLabel.textContent = '📋 AI要約（箇条書き）';
+        detailLabel.textContent = '📋 公募概要';
         const lines = summaryText.split('\n').filter(l => l.trim());
         const ul = document.createElement('ul');
         ul.className = 'space-y-1';
