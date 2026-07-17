@@ -4312,6 +4312,121 @@ async def scrape_hiroshima() -> List[Dict]:
         return []
 
 
+# ---------------------------------------------------------------------------
+# 岡山県（新規）。県公式「業務委託等」「物品調達」がカテゴリのハブで、実案件は
+# サブカテゴリ list328-XXXX / list355-XXXX に <li><span class="article_title"><a>案件名</a>…
+# <span class="article_date">…日付…</span> の形で並ぶ。ハブ→サブ巡回で全件収集。
+# ---------------------------------------------------------------------------
+_OKAYAMA_BASE = "https://www.pref.okayama.jp"
+_OKAYAMA_HUBS = ["/site/321/list328.html", "/site/321/list355.html"]
+_OKAYAMA_ROW = re.compile(
+    r'<li><span class="article_title"><a href="([^"]+)">([^<]+)</a>.*?'
+    r'<span class="article_date">([^<]*)</span>', re.S)
+
+
+def _scrape_okayama_sync() -> List[Dict]:
+    import urllib.request
+    from urllib.parse import urljoin
+    op = urllib.request.build_opener()
+    op.addheaders = [("User-Agent", "Mozilla/5.0")]
+
+    def get(url):
+        return op.open(url, timeout=40).read().decode("utf-8", "replace")
+
+    # ハブからサブカテゴリ一覧URLを集める
+    sublists = []
+    for hub in _OKAYAMA_HUBS:
+        try:
+            hub_html = get(_OKAYAMA_BASE + hub)
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"岡山県ハブ取得失敗（{hub}）: {e}")
+            continue
+        base_no = re.search(r"list(\d+)\.html", hub).group(1)
+        for sp in sorted(set(re.findall(rf"/site/321/list{base_no}-\d+\.html", hub_html))):
+            if sp not in sublists:
+                sublists.append(sp)
+        if hub not in sublists:  # ハブ自体にも案件がある場合に備え含める
+            sublists.append(hub)
+
+    results, seen = [], set()
+    for sp in sublists:
+        try:
+            html_doc = get(_OKAYAMA_BASE + sp)
+        except Exception:  # noqa: BLE001
+            continue
+        for m in _OKAYAMA_ROW.finditer(html_doc):
+            href, title, date_raw = m.group(1), m.group(2).strip(), m.group(3)
+            if "/site/321/" not in href or not href.endswith(".html"):
+                continue
+            url = urljoin(_OKAYAMA_BASE, href)
+            if url in seen:
+                continue
+            seen.add(url)
+            title = re.sub(r"^【[^】]*】\s*", "", title).strip()
+            if len(title) < 4:
+                continue
+            dm = re.search(r"(\d{4})年(\d{1,2})月(\d{1,2})日", date_raw)
+            pub = f"{int(dm.group(1)):04d}-{int(dm.group(2)):02d}-{int(dm.group(3)):02d}" if dm else ""
+            is_result = bool(re.search(r"結果|落札", title))
+            cat = "プロポーザル" if re.search(r"プロポーザル|企画提案|公募", title) else "入札"
+            slug = re.sub(r"[^A-Za-z0-9]+", "-", href.rsplit("/", 1)[-1]).strip("-") or str(len(seen))
+            results.append({
+                "title":           title,
+                "category":        cat,
+                "organization":    "岡山県",
+                "prefecture":      "岡山県",
+                "published_at":    "" if is_result else pub,
+                "deadline":        "",
+                "result_date":     pub if is_result else "",
+                "result_url":      url if is_result else "",
+                "project_code":    f"OKAYAMA-{'R-' if is_result else ''}{slug}",
+                "awardee":         "",
+                "awardee_checked": "1" if is_result else "",
+                "amount":          "",
+                "url":             url,
+                "source":          "OKAYAMA",
+                "source_category": "入札結果" if is_result else "",
+                "summary":         "",
+                "detail":          "",
+                "tags":            ",".join(generate_tags(title)),
+            })
+    logger.info(f"岡山県: {len(results)}件取得")
+    return results
+
+
+async def scrape_okayama() -> List[Dict]:
+    """岡山県公式サイトの入札公告（業務委託・物品の各カテゴリ）を取得する。"""
+    try:
+        return await asyncio.to_thread(_scrape_okayama_sync)
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"岡山県スクレイパー例外: {e}")
+        return []
+
+
+def fetch_okayama_detail(url: str) -> Optional[Dict]:
+    """岡山県 入札公告 個別ページの本文を取得する。"""
+    import urllib.request
+    from urllib.parse import urljoin
+    try:
+        op = urllib.request.build_opener()
+        op.addheaders = [("User-Agent", "Mozilla/5.0")]
+        html_doc = op.open(url, timeout=40).read().decode("utf-8", "replace")
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"岡山県詳細取得失敗 {url}: {e}")
+        return None
+    soup = BeautifulSoup(html_doc, "html.parser")
+    main = soup.find(id="main_body") or soup.find("main") or soup
+    for tag in main.find_all(["script", "style", "nav", "header", "footer"]):
+        tag.decompose()
+    text = re.sub(r"\n{3,}", "\n\n", main.get_text("\n", strip=True))
+    attachments = []
+    for a in main.find_all("a", href=True):
+        if re.search(r"\.(pdf|docx?|xlsx?)($|\?)", a["href"], re.I):
+            name = re.sub(r"[（(][^）)]*(?:KB|MB|バイト)[）)]\s*$", "", a.get_text(" ", strip=True)).strip() or "添付資料"
+            attachments.append({"name": name, "url": urljoin(url, a["href"]), "kind": "公告文"})
+    return {"detail": text[:6000], "budget": "", "schedule": [], "attachments": attachments, "published_at": ""}
+
+
 def fetch_hiroshima_detail(url: str) -> Optional[Dict]:
     """広島県 入札公告 個別ページの本文を取得する。"""
     import urllib.request
@@ -5709,6 +5824,7 @@ async def run_all_scrapers(portal_date_from: str = "", jogmec_max_id: int = 0) -
         scrape_shiga(),
         scrape_wakayama(),
         scrape_hiroshima(),
+        scrape_okayama(),
     ]
 
     scraped = await asyncio.gather(*tasks, return_exceptions=True)
