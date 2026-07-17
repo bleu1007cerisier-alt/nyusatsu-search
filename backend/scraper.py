@@ -4516,6 +4516,95 @@ async def scrape_ehime() -> List[Dict]:
         return []
 
 
+# ---------------------------------------------------------------------------
+# 高知県（新規）。県公式「入札情報」カテゴリに個別公告が <a href="/doc/YYYYMMDD…/">案件名</a>
+# で並ぶ。doc IDの先頭8桁が日付。港湾・道路・委託業務が多い。直近window日で現行分に絞る。
+# ---------------------------------------------------------------------------
+_KOCHI_BASE = "https://www.pref.kochi.lg.jp"
+_KOCHI_LIST = _KOCHI_BASE + "/category/bunya/shigoto_sangyo/nyusatsujoho/"
+_KOCHI_ROW = re.compile(r'<a href="(/doc/(\d{8})\d+/?)"[^>]*>([^<]+)</a>')
+_KOCHI_WINDOW_DAYS = 120
+
+
+def _scrape_kochi_sync() -> List[Dict]:
+    import urllib.request
+    from urllib.parse import urljoin
+    from datetime import date, timedelta
+    op = urllib.request.build_opener()
+    op.addheaders = [("User-Agent", "Mozilla/5.0")]
+    cutoff = (date.today() - timedelta(days=_KOCHI_WINDOW_DAYS)).isoformat()
+    try:
+        html_doc = op.open(_KOCHI_LIST, timeout=40).read().decode("utf-8", "replace")
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"高知県一覧取得失敗: {e}")
+        return []
+    import html as _html
+    results, seen = [], set()
+    for m in _KOCHI_ROW.finditer(html_doc):
+        href, ymd, raw_title = m.group(1), m.group(2), _html.unescape(m.group(3)).strip()
+        pub = f"{ymd[0:4]}-{ymd[4:6]}-{ymd[6:8]}"
+        if not re.search(r"公告|入札|委託|プロポ|企画提案|調達|結果|募集", raw_title):
+            continue
+        if pub < cutoff:  # 古い常設ページ等を除外
+            continue
+        url = urljoin(_KOCHI_BASE, href)
+        if url in seen:
+            continue
+        seen.add(url)
+        title = re.sub(r"^(?:\d+月\d+日[^【]*)?【[^】]*】\s*", "", raw_title).strip()
+        title = re.sub(r"^【[^】]*】\s*", "", title).strip()
+        if len(title) < 5:
+            continue
+        is_result = bool(re.search(r"入札結果|落札|開札結果|結果について", raw_title))
+        cat = "プロポーザル" if re.search(r"プロポーザル|企画提案|企画競争", raw_title) else "入札"
+        slug = ymd + re.sub(r"\D", "", href)[-5:]
+        results.append({
+            "title": title, "category": cat, "organization": "高知県", "prefecture": "高知県",
+            "published_at": "" if is_result else pub, "deadline": "",
+            "result_date": pub if is_result else "", "result_url": url if is_result else "",
+            "project_code": f"KOCHI-{'R-' if is_result else ''}{slug}", "awardee": "",
+            "awardee_checked": "1" if is_result else "",
+            "amount": "", "url": url, "source": "KOCHI",
+            "source_category": "入札結果" if is_result else "",
+            "summary": "", "detail": "", "tags": ",".join(generate_tags(title)),
+        })
+    logger.info(f"高知県: {len(results)}件取得")
+    return results
+
+
+async def scrape_kochi() -> List[Dict]:
+    """高知県公式サイトの入札情報（公告一覧）を取得する。"""
+    try:
+        return await asyncio.to_thread(_scrape_kochi_sync)
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"高知県スクレイパー例外: {e}")
+        return []
+
+
+def fetch_kochi_detail(url: str) -> Optional[Dict]:
+    """高知県 入札公告 個別ページの本文を取得する。"""
+    import urllib.request
+    from urllib.parse import urljoin
+    try:
+        op = urllib.request.build_opener()
+        op.addheaders = [("User-Agent", "Mozilla/5.0")]
+        html_doc = op.open(url, timeout=40).read().decode("utf-8", "replace")
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"高知県詳細取得失敗 {url}: {e}")
+        return None
+    soup = BeautifulSoup(html_doc, "html.parser")
+    main = soup.find(id="main_body") or soup.find("main") or soup.find(id="tmp_contents") or soup
+    for tag in main.find_all(["script", "style", "nav", "header", "footer"]):
+        tag.decompose()
+    text = re.sub(r"\n{3,}", "\n\n", main.get_text("\n", strip=True))
+    attachments = []
+    for a in main.find_all("a", href=True):
+        if re.search(r"\.(pdf|docx?|xlsx?)($|\?)", a["href"], re.I):
+            name = re.sub(r"[（(][^）)]*(?:KB|MB|バイト)[）)]\s*$", "", a.get_text(" ", strip=True)).strip() or "添付資料"
+            attachments.append({"name": name, "url": urljoin(url, a["href"]), "kind": "公告文"})
+    return {"detail": text[:6000], "budget": "", "schedule": [], "attachments": attachments, "published_at": ""}
+
+
 def fetch_ehime_detail(url: str) -> Optional[Dict]:
     """愛媛県 入札公告 個別ページの本文を取得する（PDFはスキップ）。"""
     import urllib.request
@@ -5965,6 +6054,7 @@ async def run_all_scrapers(portal_date_from: str = "", jogmec_max_id: int = 0) -
         scrape_hiroshima(),
         scrape_okayama(),
         scrape_ehime(),
+        scrape_kochi(),
     ]
 
     scraped = await asyncio.gather(*tasks, return_exceptions=True)
