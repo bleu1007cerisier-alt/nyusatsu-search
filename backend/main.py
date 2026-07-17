@@ -454,7 +454,7 @@ DEV_SOURCES = [
      "url": "https://www.pref.fukuoka.lg.jp/bid/", "desc": "福岡県の入札・公募・プロポーザル"},
     {"code": "MIE", "label": "三重県",
      "url": "https://www.pref.mie.lg.jp/app/nyusatsu/nyusatsu/00006836/0/0/",
-     "desc": "三重県の入札公告・企画提案コンペ"},
+     "desc": "三重県の入札公告・企画提案コンペ＋電子調達(efftis)の入札予定（建設工事等）"},
     {"code": "GIFU", "label": "岐阜県",
      "url": "https://www.pref.gifu.lg.jp/bid/search/search.php?ctg[]=5&search=1",
      "desc": "岐阜県の入札公告・公募型プロポーザル"},

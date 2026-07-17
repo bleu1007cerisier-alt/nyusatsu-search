@@ -2554,9 +2554,170 @@ async def scrape_mie() -> List[Dict]:
         return []
 
 
+# ---------------------------------------------------------------------------
+# 汎用 efftis「入札情報公開システム(/ppi/pub)」スクレイパー。三重・京都・富山が同ベンダー
+# （efftis）。既存の各県スクレイパーは入札(建設含む)を取りこぼしているためこれで補完する。
+# 特長: 一覧に全情報（案件名/発注機関/工種/入札方式/受付締切）があり詳細フェッチ不要。
+# 詳細は deep-link URL（pub?s=P002&a=4&ankenNo=…）で公式ページに直接飛べる。
+# フロー: GET(フォーム) → POST s=P004,a=4(1ページ目) → 以降 s=P002,a=3 で次ページ(セッション制)。
+# cfg: base(str,/ppi/pub), pref(str), source(str), max_pages(int)
+# ---------------------------------------------------------------------------
+_EFFTIS_ANKEN_RE = re.compile(r"openDetailBidding\('pub\?s=P002&a=4&ankenNo=(\d+)'\)")
+
+
+def _efftis_collect_fields(form_html: str) -> Dict[str, str]:
+    f = {}
+    for m in re.finditer(r'<input[^>]+name="([^"]+)"[^>]*>', form_html, re.I):
+        tag, n = m.group(0), m.group(1)
+        ty = (re.search(r'type="([^"]+)"', tag) or ["", "text"])[1]
+        if ty.lower() in ("checkbox", "radio") and "checked" not in tag.lower():
+            continue
+        f[n] = (re.search(r'value="([^"]*)"', tag) or ["", ""])[1]
+    for m in re.finditer(r'<select[^>]+name="([^"]+)"[^>]*>(.*?)</select>', form_html, re.S | re.I):
+        sel = re.search(r'<option[^>]*selected[^>]*value="([^"]*)"', m.group(2)) or re.search(r'<option[^>]*value="([^"]*)"', m.group(2))
+        f[m.group(1)] = sel.group(1) if sel else ""
+    return f
+
+
+def _efftis_wareki(text: str) -> str:
+    # 「令和8/7/14」「R8/7/17」「令和08/07/14」→ ISO
+    m = re.search(r"(?:令和|R)\s*(\d{1,2})\s*/\s*(\d{1,2})\s*/\s*(\d{1,2})", text)
+    if not m:
+        return ""
+    return f"{2018 + int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+
+
+def _efftis_clean_title(s: str) -> str:
+    import html as _html
+    s = _html.unescape(s)
+    s = re.sub(r"【[^】]*】", "", s)                       # 【7/17 …追加・差替】等の修正メモ
+    s = re.sub(r"※[^。]*。", "", s)                        # ※…しました。
+    # 「令和8年7月17日；予定価格の公表及び添付ファイルを修正しました。」等の日付つき告知
+    s = re.sub(r"令和\d+年\d+月\d+日[；;：:].*?(?:しました|します)。", "", s)
+    s = re.sub(r"(?:予定価格の公表|添付ファイル|質問(?:回答)?)[^。]*(?:しました|します|追加・差替)。?", "", s)
+    s = re.sub(r"公告日\s*(?:令和|R)?\s*\d+\s*/\s*\d+\s*/\s*\d+", "", s)  # 公告日 令和8/7/14
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _scrape_efftis_ppi(cfg: Dict) -> List[Dict]:
+    import urllib.request
+    import urllib.parse
+    import http.cookiejar
+    import time as _time
+    import html as _html
+
+    base, pref, source = cfg["base"], cfg["pref"], cfg["source"]
+    max_pages = cfg.get("max_pages", 40)
+
+    jar = http.cookiejar.CookieJar()
+    op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+    op.addheaders = [("User-Agent", "Mozilla/5.0"), ("Referer", base)]
+
+    def postf(fields):
+        body = urllib.parse.urlencode(fields).encode()
+        req = urllib.request.Request(base, data=body, headers={"Content-Type": "application/x-www-form-urlencoded"})
+        return op.open(req, timeout=60).read().decode("cp932", "replace")
+
+    results: List[Dict] = []
+    seen = set()
+    try:
+        form = op.open(base, timeout=40).read().decode("cp932", "replace")
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"{pref}(efftis)フォーム取得失敗: {e}")
+        return results
+
+    fields = _efftis_collect_fields(form)
+    fields["s"], fields["a"] = "P004", "4"     # 入札予定(公告)検索
+    for page in range(1, max_pages + 1):
+        try:
+            html_res = postf(fields)
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"{pref}(efftis)検索失敗（page={page}）: {e}")
+            break
+        rows = [tr for tr in re.findall(r"<tr[^>]*>(.*?)</tr>", html_res, re.S | re.I)
+                if "openDetailBidding" in tr]
+        for tr in rows:
+            am = _EFFTIS_ANKEN_RE.search(tr)
+            if not am:
+                continue
+            anken = am.group(1)
+            if anken in seen:
+                continue
+            seen.add(anken)
+            tds = re.findall(r"<td[^>]*>(.*?)</td>", tr, re.S | re.I)
+            cells = [re.sub(r"\s+", " ", _html.unescape(re.sub(r"<[^>]+>", "", c))).replace("\xa0", " ").strip() for c in tds]
+            # 列: [No, 発注機関+施行番号, 修正, 案件名, 入札方式, 工種, 格付, 受付期間, 状態]
+            org_raw = cells[1] if len(cells) > 1 else ""
+            org = re.sub(r"\d{4,}$", "", org_raw).strip() or pref
+            name_cell = cells[3] if len(cells) > 3 else ""
+            title = _efftis_clean_title(name_cell)
+            method = cells[4] if len(cells) > 4 else ""
+            gyoshu = cells[5] if len(cells) > 5 else ""
+            recv = cells[7] if len(cells) > 7 else ""
+            pubm = re.search(r"公告日\s*((?:令和|R)?\s*\d+\s*/\s*\d+\s*/\s*\d+)", name_cell)
+            published = _efftis_wareki(pubm.group(1)) if pubm else ""
+            deadline = ""
+            if "～" in recv:
+                deadline = _efftis_wareki(recv.split("～", 1)[1])
+            elif recv:
+                deadline = _efftis_wareki(recv)
+            if not title:
+                continue
+            results.append({
+                "title":           title,
+                "category":        "プロポーザル" if "プロポ" in method else "入札",
+                "organization":    (pref + " " + org).strip() if not org.startswith(pref) else org,
+                "prefecture":      pref,
+                "published_at":    published,
+                "deadline":        deadline,
+                "result_date":     "",
+                "result_url":      "",
+                "project_code":    f"{source}-EFFTIS-{anken}",
+                "awardee":         "",
+                "url":             f"{base}?s=P002&a=4&ankenNo={anken}",
+                "source":          source,
+                "amount":          "",
+                "source_category": gyoshu or method,
+                "summary":         "",
+                "detail":          "",
+                "tags":            ",".join(generate_tags(title, org)),
+            })
+        # 次ページ判定
+        pg = re.search(r"(\d+)\s*/\s*(\d+)\s*ページ", html_res)
+        if not pg or int(pg.group(1)) >= int(pg.group(2)):
+            break
+        fields = _efftis_collect_fields(html_res)
+        fields["s"], fields["a"] = "P002", "3"   # 次ページ
+        _time.sleep(0.25)
+    logger.info(f"{pref} 入札(efftis電子調達): {len(results)}件取得")
+    return results
+
+
+_MIE_EFFTIS_CFG = {
+    "base": "https://mie.efftis.jp/24000/ppi/pub",
+    "pref": "三重県", "source": "MIE", "max_pages": 40,
+}
+
+
+async def scrape_mie_efftis() -> List[Dict]:
+    """三重県 入札予定（公告）を三重県電子調達システム(efftis)から取得する。
+
+    既存の三重スクレイパーは企画提案コンペ中心で建設等の入札が欠落していたため補完。
+    一覧に全項目があり詳細取得不要。URLは案件個別のdeep-link（公式ページに直接遷移可）。
+    """
+    try:
+        return await asyncio.to_thread(_scrape_efftis_ppi, _MIE_EFFTIS_CFG)
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"三重県efftisスクレイパー例外: {e}")
+        return []
+
+
 def fetch_mie_detail(url: str) -> Optional[Dict]:
     """三重県 入札・公募 個別記事ページの本文を取得する。"""
     import urllib.request
+    # 電子調達(efftis)の案件は一覧で情報確定済み・詳細はdeep-link。スキップ。
+    if "efftis.jp" in url:
+        return None
     try:
         op = urllib.request.build_opener()
         op.addheaders = [("User-Agent", "Mozilla/5.0")]
@@ -5025,6 +5186,7 @@ async def run_all_scrapers(portal_date_from: str = "", jogmec_max_id: int = 0) -
         scrape_osaka_proposal(),
         scrape_fukuoka(),
         scrape_mie(),
+        scrape_mie_efftis(),
         scrape_gifu(),
         scrape_yamanashi(),
         scrape_toyama(),

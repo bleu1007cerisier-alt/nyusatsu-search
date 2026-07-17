@@ -704,7 +704,7 @@ def main():
         # スクレイパーが詳細確定済み。URLはポータル指定のため後段の詳細取得対象から
         # 除外する（千葉・福井CALS等。放置すると200件枠を空振りで食い潰す）。
         # ebidPPIPublish はSuperCALS PPIの共通パス（chiba-ep-bis/ebid.pref.fukui等）。
-        if "ebidPPIPublish" in (r.get("url") or ""):
+        if "ebidPPIPublish" in (r.get("url") or "") or "efftis.jp" in (r.get("url") or ""):
             return False
         # budget_checked=1 が「詳細取得を一度試みた」フラグ。立っていなければ必ず取得する
         if (r.get("budget_checked") or "") != "1":
