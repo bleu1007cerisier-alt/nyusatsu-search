@@ -3993,6 +3993,126 @@ def fetch_kyoto_detail(url: str) -> Optional[Dict]:
 
 
 # ---------------------------------------------------------------------------
+# 兵庫県（新規）。県公式の静的な入札公告ページ（カテゴリ別）。1案件=1テーブルで
+# 名称/種別/発注機関/入札方法/入札予定日/公示日/申込期限日 が縦に並ぶ。日付は西暦。
+# 委託・役務／工事・設計／その他 の3カテゴリを巡回。CALS不要でクリーンに取れる。
+# ---------------------------------------------------------------------------
+_HYOGO_BASE = "https://web.pref.hyogo.lg.jp"
+_HYOGO_CATEGORIES = [
+    ("/bid/bid_opn_02.html", "委託・役務"),
+    ("/bid/bid_opn_03.html", "工事・設計"),
+    ("/bid/bid_opn_04.html", "その他"),
+]
+
+
+def _hyogo_date_iso(text: str) -> str:
+    m = re.search(r"(\d{4})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日", text)
+    if not m:
+        return ""
+    return f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+
+
+def _scrape_hyogo_sync() -> List[Dict]:
+    import urllib.request
+    from urllib.parse import urljoin
+    op = urllib.request.build_opener()
+    op.addheaders = [("User-Agent", "Mozilla/5.0")]
+
+    def get(url):
+        return op.open(url, timeout=40).read().decode("utf-8", "replace")
+
+    results, seen = [], set()
+    for path, cat_label in _HYOGO_CATEGORIES:
+        try:
+            html_doc = get(_HYOGO_BASE + path)
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"兵庫県一覧取得失敗（{cat_label}）: {e}")
+            continue
+        for tb in re.findall(r"<table[^>]*>(.*?)</table>", html_doc, re.S | re.I):
+            if "名称" not in tb or not re.search(r'href="/[a-z]', tb):
+                continue
+            # 縦型テーブル: 各行 <th/td>ラベル</><td>値</>
+            fields = {}
+            link = ""
+            for row in re.findall(r"<tr[^>]*>(.*?)</tr>", tb, re.S | re.I):
+                cells = re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", row, re.S | re.I)
+                if len(cells) < 2:
+                    continue
+                label = re.sub(r"<[^>]+>", "", cells[0]).strip()
+                val = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", cells[1])).strip()
+                fields[label] = val
+                if label == "名称":
+                    lm = re.search(r'href="([^"]+)"', cells[1])
+                    if lm:
+                        link = lm.group(1)
+            title = fields.get("名称", "").strip()
+            if not title or not link:
+                continue
+            url = urljoin(_HYOGO_BASE, link)
+            if url in seen:
+                continue
+            seen.add(url)
+            method = fields.get("入札方法", "")
+            cat = "プロポーザル" if re.search(r"プロポーザル|企画提案|公募型", method + title) else "入札"
+            org = ("兵庫県 " + fields.get("発注機関", "")).strip()
+            slug = re.sub(r"[^A-Za-z0-9]+", "-", link.rsplit("/", 1)[-1]).strip("-") or str(len(seen))
+            results.append({
+                "title":           title,
+                "category":        cat,
+                "organization":    org,
+                "prefecture":      "兵庫県",
+                "published_at":    _hyogo_date_iso(fields.get("公示日", "")),
+                "deadline":        _hyogo_date_iso(fields.get("申込期限日", "")),
+                "result_date":     "",
+                "result_url":      "",
+                "project_code":    f"HYOGO-{slug}",
+                "awardee":         "",
+                "url":             url,
+                "source":          "HYOGO",
+                "amount":          "",
+                "source_category": fields.get("種別", cat_label),
+                "summary":         "",
+                "detail":          "",
+                "tags":            ",".join(generate_tags(title, fields.get("発注機関", ""))),
+            })
+    logger.info(f"兵庫県: {len(results)}件取得")
+    return results
+
+
+async def scrape_hyogo() -> List[Dict]:
+    """兵庫県公式サイトの入札公告（委託・役務／工事・設計／その他）を取得する。"""
+    try:
+        return await asyncio.to_thread(_scrape_hyogo_sync)
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"兵庫県スクレイパー例外: {e}")
+        return []
+
+
+def fetch_hyogo_detail(url: str) -> Optional[Dict]:
+    """兵庫県 入札公告 個別ページの本文を取得する。"""
+    import urllib.request
+    from urllib.parse import urljoin
+    try:
+        op = urllib.request.build_opener()
+        op.addheaders = [("User-Agent", "Mozilla/5.0")]
+        html_doc = op.open(url, timeout=40).read().decode("utf-8", "replace")
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"兵庫県詳細取得失敗 {url}: {e}")
+        return None
+    soup = BeautifulSoup(html_doc, "html.parser")
+    main = soup.find(id="tmp_contents") or soup.find("main") or soup
+    for tag in main.find_all(["script", "style", "nav", "header", "footer"]):
+        tag.decompose()
+    text = re.sub(r"\n{3,}", "\n\n", main.get_text("\n", strip=True))
+    attachments = []
+    for a in main.find_all("a", href=True):
+        if re.search(r"\.(pdf|docx?|xlsx?)($|\?)", a["href"], re.I):
+            name = re.sub(r"[（(][^）)]*(?:KB|MB|バイト)[）)]\s*$", "", a.get_text(" ", strip=True)).strip() or "添付資料"
+            attachments.append({"name": name, "url": urljoin(url, a["href"]), "kind": "公告文"})
+    return {"detail": text[:6000], "budget": "", "schedule": [], "attachments": attachments, "published_at": ""}
+
+
+# ---------------------------------------------------------------------------
 # 静岡県（部局別ページ14件。横断一覧は無いため全部局を個別に巡回する。建設工事は対象外）
 # ---------------------------------------------------------------------------
 _SHIZUOKA_BASE = "https://www.pref.shizuoka.jp"
@@ -5203,6 +5323,7 @@ async def run_all_scrapers(portal_date_from: str = "", jogmec_max_id: int = 0) -
         scrape_chiba(),
         scrape_chiba_cals(),
         scrape_kyoto(),
+        scrape_hyogo(),
     ]
 
     scraped = await asyncio.gather(*tasks, return_exceptions=True)
