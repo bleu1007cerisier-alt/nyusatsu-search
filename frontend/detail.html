@@ -80,6 +80,9 @@
         </a>
         <span class="text-xs text-gray-400">出典: <span id="source"></span></span>
       </div>
+      <p id="ebid-note" style="display:none" class="mt-2 text-xs text-amber-700">
+        ※この案件は電子入札システム内にあり、個別ページへ直接リンクできません。開いた画面で上記の<strong>案件名</strong>を検索してご確認ください（当ページに主要情報は掲載しています）。
+      </p>
 
       <!-- 注意書き -->
       <div class="mt-4 text-xs text-gray-500 bg-amber-50 border border-amber-200 rounded-lg p-3 leading-relaxed">
@@ -247,7 +250,19 @@
         }).join('');
       }
 
-      document.getElementById('orig-link').href = t.url;
+      // 公式ページリンク。電子入札システム(SuperCALS)は案件個別の固定URLが無く
+      // トップ/一覧に飛ぶため、#断片を除去しラベルと注記を切り替える。
+      const origLink = document.getElementById('orig-link');
+      const isEbid = /ebidPPIG?Publish/.test(t.url || '');
+      if (isEbid) {
+        origLink.href = (t.url || '').split('#')[0];
+        origLink.textContent = '🔗 電子入札システムを開く（案件名で検索）';
+        const note = document.getElementById('ebid-note');
+        if (note) note.style.display = '';
+      } else {
+        origLink.href = t.url;
+        origLink.textContent = '🔗 公式ページで原文・応募方法を見る';
+      }
       document.getElementById('source').textContent = srcLabel(t.source);
 
       // テーマが近い案件
