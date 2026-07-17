@@ -250,13 +250,13 @@
         }).join('');
       }
 
-      // 公式ページリンク。電子入札システム(SuperCALS)は案件個別の固定URLが無く
-      // トップ/一覧に飛ぶため、#断片を除去しラベルと注記を切り替える。
+      // 公式ページリンク。電子入札システム(SuperCALS=ebidPPI / 大阪CALS=EbController)は
+      // 案件個別の固定URLが無くトップ/メニューに飛ぶため、#断片を除去しラベルと注記を切り替える。
       const origLink = document.getElementById('orig-link');
-      const isEbid = /ebidPPIG?Publish/.test(t.url || '');
+      const isEbid = /ebidPPIG?Publish/.test(t.url || '') || /EbController/.test(t.url || '');
       if (isEbid) {
         origLink.href = (t.url || '').split('#')[0];
-        origLink.textContent = '🔗 電子入札システムを開く（案件名で検索）';
+        origLink.textContent = '🔗 電子入札・調達システムで確認（案件名で検索）';
         const note = document.getElementById('ebid-note');
         if (note) note.style.display = '';
       } else {
