@@ -466,7 +466,7 @@ DEV_SOURCES = [
      "desc": "富山県の入札公告・公募型プロポーザル"},
     {"code": "NAGANO", "label": "長野県",
      "url": "https://www.pref.nagano.lg.jp/kensa/puropo-kokoku.html",
-     "desc": "長野県の公募型プロポーザル"},
+     "desc": "長野県の公募型プロポーザル＋電子入札の建設工事・測量コンサル（現在公告中）"},
     {"code": "SHIZUOKA", "label": "静岡県",
      "url": "https://www.pref.shizuoka.jp/kensei/nyusatsukobai/index.html",
      "desc": "静岡県の入札・業務委託・プロポーザル等"},

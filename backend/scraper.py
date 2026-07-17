@@ -3133,10 +3133,155 @@ async def scrape_nagano() -> List[Dict]:
         return []
 
 
+# ---------------------------------------------------------------------------
+# 長野県 建設工事・測量コンサル等（長野県市町村電子調達システム SuperCALS）。
+# 既存の長野スクレイパーは公募型プロポのみで入札が丸ごと欠落していたため補完する。
+# ppi.e-nagano.lg.jp/ebidPPIPublish/EjPPIj（千葉と同型）。KikanNO=2000000（長野県。
+# 市町村は2020100等）。一覧に状態列があり「落札/開札済」等が混在するため、現在公告中
+# （公告掲載中/入札書受付中/開札執行前）だけに絞る。案件名は詳細ページから取得。
+# ---------------------------------------------------------------------------
+_NAGANO_CALS_EJ = "https://www.ppi.e-nagano.lg.jp/ebidPPIPublish/EjPPIj"
+_NAGANO_CALS_KIKAN = "2000000"  # 長野県
+_NAGANO_CALS_CHOUTATSU = [("00", "工事"), ("01", "測量・コンサル")]
+_NAGANO_CALS_OPEN = ("公告掲載中", "入札書受付中", "開札執行前")
+_NAGANO_CALS_WINDOW_DAYS = 90
+_NAGANO_CALS_MAX_DETAIL = 200
+
+
+def _scrape_nagano_cals_sync() -> List[Dict]:
+    import hashlib
+    import html as _html
+    import time as _time
+    import urllib.request
+    import urllib.parse
+    import http.cookiejar
+    from datetime import date, timedelta
+
+    today = date.today()
+    lo = today - timedelta(days=_NAGANO_CALS_WINDOW_DAYS)
+    bs, be = lo.strftime("%Y/%m/%d"), today.strftime("%Y/%m/%d")
+    fy = today.year if today.month >= 4 else today.year - 1
+
+    jar = http.cookiejar.CookieJar()
+    op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+    op.addheaders = [("User-Agent", "Mozilla/5.0"), ("Referer", _NAGANO_CALS_EJ)]
+
+    def post(pairs):
+        body = urllib.parse.urlencode(pairs).encode()
+        return op.open(_NAGANO_CALS_EJ, data=body, timeout=60).read().decode("cp932", "replace")
+
+    def get(url):
+        return op.open(url, timeout=60).read().decode("cp932", "replace")
+
+    results: List[Dict] = []
+    detail_budget = _NAGANO_CALS_MAX_DETAIL
+    try:
+        get(f"{_NAGANO_CALS_EJ}?KikanNO={_NAGANO_CALS_KIKAN}")
+        post([("ejParameterID", "StartPage"), ("KikanNO", _NAGANO_CALS_KIKAN)])
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"長野県建設セッション確立失敗: {e}")
+        return results
+
+    for cd, cd_label in _NAGANO_CALS_CHOUTATSU:
+        try:
+            post([("ejParameterID", "EjPSJ01"), ("ejProcessName", "start")])
+            get(_NAGANO_CALS_EJ + "?ejParameterID=EjPSJ01&ejShousaiDispFlag=false&ejProcessName=getCondPage")
+            lst = post([
+                ("Nendo", str(fy)), ("KikanNO", _NAGANO_CALS_KIKAN), ("ChoutatsuCD", cd),
+                ("BukyokuNO", ""), ("KoujiSyubetu", ""), ("BidStDate", bs), ("BidEnDate", be),
+                ("kkselect", "AND"), ("mojisel1", ""), ("mojisel2", ""),
+                ("chiiki_dataList", ""), ("chiikisentaku", ""), ("getStpos", "0"), ("AllhitSize", "0"),
+                ("ejMaxDisplayRowCount", "700"), ("ejDisplaySort", "030006"), ("ejSortSequence", "desc"),
+                ("ejParameterID", "EjPSJ01"), ("ejProcessName", "findList"), ("ejShousaiDispFlag", "false"),
+            ])
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"長野県建設検索失敗（{cd_label}）: {e}")
+            continue
+
+        fv = re.search(r'ejFindVersion"\s*value="(\d+)"', lst)
+        find_version = fv.group(1) if fv else ""
+        if not find_version:
+            logger.info(f"長野県建設（{cd_label}）: 該当なしまたはejFindVersion取得失敗")
+            continue
+
+        for tr in re.findall(r"<TR[^>]*>(.*?)</TR>", lst, re.S | re.I):
+            if "openYotei" not in tr:
+                continue
+            idxm = re.search(r"openYotei\('?(\d+)'?\)", tr)
+            if not idxm:
+                continue
+            idx = idxm.group(1)
+            tds = re.findall(r"<TD[^>]*>(.*?)</TD>", tr, re.S)
+            cells = [re.sub(r"\s+", " ", _html.unescape(re.sub(r"<[^>]+>", "", c))).replace("\xa0", " ").strip() for c in tds]
+            status = cells[4] if len(cells) > 4 else ""
+            # 現在公告中（開札前）のみ対象。落札・開札済・中止・不調は除外
+            if not any(status.startswith(s) for s in _NAGANO_CALS_OPEN):
+                continue
+            list_title = cells[3] if len(cells) > 3 else ""
+
+            if detail_budget <= 0:
+                continue
+            try:
+                dv = post([
+                    ("ejParameterID", "EjPSJ01"), ("ejProcessName", "getDetailPage"),
+                    ("ejCategoryName", "display"), ("ejKeyNo", idx), ("ejFindVersion", find_version),
+                    ("ejStartPosition", "0"), ("ejMaxDisplayRowCount", "700"), ("ejShousaiDispFlag", "false"),
+                ])
+                detail_budget -= 1
+                info = _parse_chiba_cals_detail(dv)
+                _time.sleep(0.2)
+            except Exception as e:  # noqa: BLE001
+                logger.error(f"長野県建設詳細取得失敗（idx={idx}）: {e}")
+                continue
+
+            title = info["title"] or re.split(r"\s{2,}", list_title)[0].strip()
+            if not title:
+                continue
+            published = info["published_at"]
+            slug = hashlib.md5((title + (published or idx)).encode("utf-8")).hexdigest()[:12]
+            results.append({
+                "title":           title,
+                "category":        "入札",
+                "organization":    info["org"] or "長野県",
+                "prefecture":      "長野県",
+                "published_at":    published,
+                "deadline":        info["deadline"],
+                "result_date":     "",
+                "result_url":      "",
+                "project_code":    f"NAGANO-CALS-{slug}",
+                "awardee":         "",
+                "url":             f"{_NAGANO_CALS_EJ}?KikanNO={_NAGANO_CALS_KIKAN}#{slug}",
+                "source":          "NAGANO",
+                "amount":          info["amount"],
+                "source_category": info["gyoshu"] or cd_label,
+                "summary":         "",
+                "detail":          "",
+                "tags":            ",".join(generate_tags(title, info["org"] or "長野県")),
+            })
+    logger.info(f"長野県 建設工事・測量(電子入札): {len(results)}件取得")
+    return results
+
+
+async def scrape_nagano_cals() -> List[Dict]:
+    """長野県 建設工事・測量コンサル等（長野県市町村電子調達システム）の現在公告中を取得する。
+
+    一覧の状態列で現在公告中（公告掲載中/入札書受付中/開札執行前）に絞り、案件名・公告日・
+    入札書受付締切・業種・予定価格は詳細ページから確定させる（セッション依存）。
+    """
+    try:
+        return await asyncio.to_thread(_scrape_nagano_cals_sync)
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"長野県建設スクレイパー例外: {e}")
+        return []
+
+
 def fetch_nagano_detail(url: str) -> Optional[Dict]:
     """長野県 入札・公募 個別記事ページの本文を取得する。"""
     import urllib.request
     from urllib.parse import urljoin
+    # 電子入札システム(SuperCALS)の案件はセッション依存で詳細確定済み。スキップ。
+    if "ebidPPIPublish" in url:
+        return None
     try:
         op = urllib.request.build_opener()
         op.addheaders = [("User-Agent", "Mozilla/5.0")]
@@ -3413,16 +3558,19 @@ def _parse_chiba_cals_detail(html_text: str) -> Dict:
     #   締切: 千葉「入札締切予定日時」/ 福井「入札書受付終了予定日」
     #   発注: 千葉「入札担当部署」/ 福井「発注機関」等
     #   工種: 千葉「工種又は業種」/ 福井「工事種別」
-    info = {"org": "", "published_at": "", "deadline": "", "amount": "", "gyoshu": ""}
+    info = {"org": "", "published_at": "", "deadline": "", "amount": "", "gyoshu": "", "title": ""}
     for i, c in enumerate(cells):
         nxt = cells[i + 1] if i + 1 < len(cells) else ""
-        if c in ("入札担当部署", "発注機関", "発注部署") and not info["org"]:
+        # 案件名（詳細から取る県用。千葉/福井/石川は一覧から取るので上書きしない）
+        if (c in ("案件名称", "工事名称", "業務名称", "調達案件名称") or c.endswith("案件名称")) and not info["title"]:
+            info["title"] = re.sub(r"\s+", " ", nxt).strip()
+        elif c in ("入札担当部署", "発注機関", "発注部署", "発注課") and not info["org"]:
             info["org"] = re.sub(r"\s+", " ", nxt).strip()
         elif c == "公告日":
             info["published_at"] = _chiba_cals_wareki(nxt)
-        elif ("入札締切" in c or "入札書受付終了" in c or "入札受付締切" in c
+        elif ("入札締切" in c or "入札書受付" in c or "入札受付締切" in c
               or "開札予定日" in c) and not info["deadline"]:
-            # 締切優先。無ければ開札予定日時をフォールバック（石川等は締切ラベルが無い）
+            # 締切(入札書受付予定/終了)優先。無ければ開札予定日時をフォールバック。
             info["deadline"] = _chiba_cals_wareki(nxt)
         elif c.startswith("予定価格") and not info["amount"]:
             info["amount"] = nxt.strip()
@@ -4710,6 +4858,7 @@ async def run_all_scrapers(portal_date_from: str = "", jogmec_max_id: int = 0) -
         scrape_yamanashi(),
         scrape_toyama(),
         scrape_nagano(),
+        scrape_nagano_cals(),
         scrape_shizuoka(),
         scrape_fukui(),
         scrape_fukui_cals(),
