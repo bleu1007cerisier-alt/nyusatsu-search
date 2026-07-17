@@ -3562,11 +3562,11 @@ def _parse_chiba_cals_detail(html_text: str) -> Dict:
     for i, c in enumerate(cells):
         nxt = cells[i + 1] if i + 1 < len(cells) else ""
         # 案件名（詳細から取る県用。千葉/福井/石川は一覧から取るので上書きしない）
-        if (c in ("案件名称", "工事名称", "業務名称", "調達案件名称") or c.endswith("案件名称")) and not info["title"]:
+        if (c in ("案件名称", "工事名称", "業務名称", "調達案件名称", "案件名") or c.endswith("案件名称")) and not info["title"]:
             info["title"] = re.sub(r"\s+", " ", nxt).strip()
         elif c in ("入札担当部署", "発注機関", "発注部署", "発注課") and not info["org"]:
             info["org"] = re.sub(r"\s+", " ", nxt).strip()
-        elif c == "公告日":
+        elif "公告日" in c and not info["published_at"]:  # 公告日／公告日又は指名通知日 等
             info["published_at"] = _chiba_cals_wareki(nxt)
         elif ("入札締切" in c or "入札書受付" in c or "入札受付締切" in c
               or "開札予定日" in c) and not info["deadline"]:
@@ -3905,10 +3905,181 @@ async def scrape_shizuoka() -> List[Dict]:
         return []
 
 
+# ---------------------------------------------------------------------------
+# 汎用 SuperCALS「入札情報公開システム」スクレイパー（ebidPPIPublish / EjPSJ01）。
+# 千葉・福井・石川・長野で確立したPOST連鎖を1関数に集約し、新規のSuperCALS県は
+# 設定(dict)を渡すだけで追加できるようにする。既存4県は稼働実績尊重で当面据え置き、
+# 新規（静岡ほか）からこの汎用関数を使う。共通詳細パーサ _parse_chiba_cals_detail を利用。
+#
+# cfg キー:
+#   ej(str), kikan(str), pref(str), source(str),
+#   choutatsu: [(cd, label), ...]         調達区分（00工事/01測量等）
+#   window_days(int)                       公告日サーバ側ウィンドウ（BidStDate/BidEnDate）
+#   max_detail(int), sleep(float)          詳細取得の上限・間隔（gov負荷配慮）
+#   extra: [(k, v), ...]                   findListの追加必須フィールド（福井のEbidCD等）
+#   status_open: tuple|None, status_col: int   一覧状態列で現在公告中に絞る（長野型）
+#   title_from: 'list'|'detail', title_col: int
+# ---------------------------------------------------------------------------
+_SUPERCALS_TITLE_PREFIX = re.compile(r"^（入札番号[:：][^）]*）\s*")
+
+
+def _scrape_supercals_ppi(cfg: Dict) -> List[Dict]:
+    import hashlib
+    import html as _html
+    import time as _time
+    import urllib.request
+    import urllib.parse
+    import http.cookiejar
+    from datetime import date, timedelta
+
+    ej, kikan = cfg["ej"], cfg["kikan"]
+    pref, source = cfg["pref"], cfg["source"]
+    today = date.today()
+    lo = today - timedelta(days=cfg.get("window_days", 90))
+    bs, be = lo.strftime("%Y/%m/%d"), today.strftime("%Y/%m/%d")
+    fy = today.year if today.month >= 4 else today.year - 1
+    status_open = cfg.get("status_open")
+    status_col = cfg.get("status_col", 4)
+    title_from = cfg.get("title_from", "list")
+    title_col = cfg.get("title_col", 2)
+    sleep = cfg.get("sleep", 0.25)
+    budget = cfg.get("max_detail", 250)
+
+    jar = http.cookiejar.CookieJar()
+    op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+    op.addheaders = [("User-Agent", "Mozilla/5.0"), ("Referer", ej)]
+
+    def post(pairs):
+        return op.open(ej, data=urllib.parse.urlencode(pairs).encode(), timeout=60).read().decode("cp932", "replace")
+
+    def get(url):
+        return op.open(url, timeout=60).read().decode("cp932", "replace")
+
+    results: List[Dict] = []
+    try:
+        get(f"{ej}?KikanNO={kikan}")
+        post([("ejParameterID", "StartPage"), ("KikanNO", kikan)])
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"{pref}(SuperCALS)セッション確立失敗: {e}")
+        return results
+
+    for cd, cd_label in cfg["choutatsu"]:
+        try:
+            post([("ejParameterID", "EjPSJ01"), ("ejProcessName", "start")])
+            get(ej + "?ejParameterID=EjPSJ01&ejShousaiDispFlag=false&ejProcessName=getCondPage")
+            base = [
+                ("Nendo", str(fy)), ("KikanNO", kikan), ("ChoutatsuCD", cd),
+                ("BukyokuNO", ""), ("KoujiSyubetu", ""), ("BidStDate", bs), ("BidEnDate", be),
+                ("kkselect", "AND"), ("mojisel1", ""), ("mojisel2", ""),
+                ("chiiki_dataList", ""), ("chiikisentaku", ""), ("getStpos", "0"), ("AllhitSize", "0"),
+                ("ejMaxDisplayRowCount", "700"), ("ejDisplaySort", "030006"), ("ejSortSequence", "desc"),
+                ("ejParameterID", "EjPSJ01"), ("ejProcessName", "findList"), ("ejShousaiDispFlag", "false"),
+            ] + cfg.get("extra", [])
+            lst = post(base)
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"{pref}(SuperCALS)検索失敗（{cd_label}）: {e}")
+            continue
+
+        fv = re.search(r'ejFindVersion"\s*value="(\d+)"', lst)
+        find_version = fv.group(1) if fv else ""
+        if not find_version:
+            continue
+
+        for tr in re.findall(r"<TR[^>]*>(.*?)</TR>", lst, re.S | re.I):
+            if "openYotei" not in tr:
+                continue
+            idxm = re.search(r"openYotei\('?(\d+)'?\)", tr)
+            if not idxm:
+                continue
+            idx = idxm.group(1)
+            tds = re.findall(r"<TD[^>]*>(.*?)</TD>", tr, re.S)
+            cells = [re.sub(r"\s+", " ", _html.unescape(re.sub(r"<[^>]+>", "", c))).replace("\xa0", " ").strip() for c in tds]
+            if status_open:
+                st = cells[status_col] if len(cells) > status_col else ""
+                if not any(st.startswith(s) for s in status_open):
+                    continue
+            list_title = cells[title_col] if len(cells) > title_col else ""
+
+            org, published, deadline, amount, gyoshu, dtitle = pref, "", "", "", cd_label, ""
+            if budget > 0:
+                try:
+                    dv = post([
+                        ("ejParameterID", "EjPSJ01"), ("ejProcessName", "getDetailPage"),
+                        ("ejCategoryName", "display"), ("ejKeyNo", idx), ("ejFindVersion", find_version),
+                        ("ejStartPosition", "0"), ("ejMaxDisplayRowCount", "700"), ("ejShousaiDispFlag", "false"),
+                    ])
+                    budget -= 1
+                    info = _parse_chiba_cals_detail(dv)
+                    org = info["org"] or pref
+                    published = info["published_at"]
+                    deadline = info["deadline"]
+                    amount = info["amount"]
+                    gyoshu = info["gyoshu"] or cd_label
+                    dtitle = info["title"]
+                    _time.sleep(sleep)
+                except Exception as e:  # noqa: BLE001
+                    logger.error(f"{pref}(SuperCALS)詳細取得失敗（idx={idx}）: {e}")
+            elif title_from == "detail":
+                continue  # 詳細必須なのに予算切れ→スキップ
+
+            raw_title = dtitle if (title_from == "detail" and dtitle) else list_title
+            title = _SUPERCALS_TITLE_PREFIX.sub("", re.sub(r"\s*※\s*添付有\s*$", "", raw_title)).strip()
+            if not title:
+                continue
+            slug = hashlib.md5((title + (published or idx)).encode("utf-8")).hexdigest()[:12]
+            results.append({
+                "title":           title,
+                "category":        "入札",
+                "organization":    org,
+                "prefecture":      pref,
+                "published_at":    published,
+                "deadline":        deadline,
+                "result_date":     "",
+                "result_url":      "",
+                "project_code":    f"{source}-CALS-{slug}",
+                "awardee":         "",
+                "url":             f"{ej}?KikanNO={kikan}#{slug}",
+                "source":          source,
+                "amount":          amount,
+                "source_category": gyoshu,
+                "summary":         "",
+                "detail":          "",
+                "tags":            ",".join(generate_tags(title, org)),
+            })
+    logger.info(f"{pref} 建設(SuperCALS): {len(results)}件取得")
+    return results
+
+
+_SHIZUOKA_CALS_CFG = {
+    "ej": "https://www.ppi.cals-shiz.jp/ebidPPIPublish/EjPPIj",
+    "kikan": "2200000",  # 静岡県（静岡市2210000・浜松市2220200等は別）
+    "pref": "静岡県", "source": "SHIZUOKA",
+    "choutatsu": [("00", "工事"), ("01", "測量・コンサル")],
+    "window_days": 90, "max_detail": 200, "sleep": 0.25,
+    "title_from": "list", "title_col": 2,
+}
+
+
+async def scrape_shizuoka_cals() -> List[Dict]:
+    """静岡県 建設工事・測量コンサル（静岡県共同利用入札情報システム SuperCALS）を取得する。
+
+    既存の静岡スクレイパーは部局ページ（委託・プロポ中心）で建設工事が欠落していたため補完。
+    汎用 _scrape_supercals_ppi を利用（新規SuperCALS県はこの方式で設定追加のみで対応可）。
+    """
+    try:
+        return await asyncio.to_thread(_scrape_supercals_ppi, _SHIZUOKA_CALS_CFG)
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"静岡県建設スクレイパー例外: {e}")
+        return []
+
+
 def fetch_shizuoka_detail(url: str) -> Optional[Dict]:
     """静岡県 入札・公募 個別記事ページの本文を取得する（更新日を公示日として抽出）。"""
     import urllib.request
     from urllib.parse import urljoin
+    # 電子入札システム(SuperCALS)の案件はセッション依存で詳細確定済み。スキップ。
+    if "ebidPPIPublish" in url:
+        return None
     try:
         op = urllib.request.build_opener()
         op.addheaders = [("User-Agent", "Mozilla/5.0")]
@@ -4860,6 +5031,7 @@ async def run_all_scrapers(portal_date_from: str = "", jogmec_max_id: int = 0) -
         scrape_nagano(),
         scrape_nagano_cals(),
         scrape_shizuoka(),
+        scrape_shizuoka_cals(),
         scrape_fukui(),
         scrape_fukui_cals(),
         scrape_niigata(),

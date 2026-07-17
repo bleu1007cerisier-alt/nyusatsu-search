@@ -469,7 +469,7 @@ DEV_SOURCES = [
      "desc": "長野県の公募型プロポーザル＋電子入札の建設工事・測量コンサル（現在公告中）"},
     {"code": "SHIZUOKA", "label": "静岡県",
      "url": "https://www.pref.shizuoka.jp/kensei/nyusatsukobai/index.html",
-     "desc": "静岡県の入札・業務委託・プロポーザル等"},
+     "desc": "静岡県の入札・業務委託・プロポーザル等＋電子入札の建設工事・測量コンサル"},
     {"code": "FUKUI", "label": "福井県",
      "url": "https://www.pref.fukui.lg.jp/gyosei/tetuduki/cat4502/index.html",
      "desc": "福井県の公募型プロポーザル＋電子入札の建設工事・業務委託等"},
