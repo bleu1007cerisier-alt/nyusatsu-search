@@ -403,8 +403,10 @@ def _interleave_by_priority(rows, priority_map):
 
 
 # 1回の実行で詳細/結果ページを取得する最大件数（負荷・実行時間対策。未取得分を順次埋める）
-MAX_DETAIL_PER_RUN = 200
-MAX_AI_SUMMARY_PER_RUN = 200  # 1実行あたりAI要約（増分）の上限（コスト分散）
+# 大阪の網羅性拡大(264→1979)や千葉・福井の建設工事追加で詳細取得バックログが
+# 増えたため引き上げ。ソース横断のラウンドロビンで按分され1サイト当たりは緩やか。
+MAX_DETAIL_PER_RUN = 400
+MAX_AI_SUMMARY_PER_RUN = 300  # 1実行あたりAI要約（増分）の上限（コスト分散）
 MAX_AI_REPAIR_PER_RUN = 30    # 1実行あたり英字混入要約の再生成上限
 DETAIL_SLEEP = 0.4
 
