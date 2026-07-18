@@ -5026,6 +5026,88 @@ def fetch_hokkaido_detail(url: str) -> Optional[Dict]:
     return {"detail": text[:6000], "budget": "", "schedule": [], "attachments": attachments, "published_at": ""}
 
 
+# ---------------------------------------------------------------------------
+# 徳島県（新規）。県公式「入札・調達・売却に関する新着情報」が全部局横断の集約
+# フィード（静的）。<time datetime><span class=title><a>案件名</a><span class=belong>(分類)。
+# ---------------------------------------------------------------------------
+_TOKUSHIMA_LIST = "https://www.pref.tokushima.lg.jp/mokuteki/nyusatsu/news/"
+_TOKUSHIMA_ROW = re.compile(
+    r'<time\s+datetime="(\d{4}-\d{2}-\d{2})[^"]*">[^<]*</time>\s*'
+    r'<span class="title">\s*<a href="([^"]+)">([^<]+)</a>\s*</span>\s*'
+    r'(?:<span class="belong">\(([^)]+)\)</span>)?', re.S)
+
+
+def _scrape_tokushima_sync() -> List[Dict]:
+    import urllib.request
+    from urllib.parse import urljoin
+    import html as _html
+    op = urllib.request.build_opener()
+    op.addheaders = [("User-Agent", "Mozilla/5.0")]
+    try:
+        html_doc = op.open(_TOKUSHIMA_LIST, timeout=40).read().decode("utf-8", "replace")
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"徳島県一覧取得失敗: {e}")
+        return []
+    results, seen = [], set()
+    for m in _TOKUSHIMA_ROW.finditer(html_doc):
+        pub, href, raw, belong = m.group(1), m.group(2), _html.unescape(m.group(3)).strip(), (m.group(4) or "").strip()
+        url = urljoin(_TOKUSHIMA_LIST, href)
+        if url in seen:
+            continue
+        seen.add(url)
+        title = re.sub(r"^(?:【[^】]*】)+", "", raw).strip()
+        if len(title) < 5:
+            continue
+        is_result = bool(re.search(r"落札|開札結果|入札結果|選定結果|結果について", raw))
+        cat = "プロポーザル" if re.search(r"プロポ|提案競技|企画競争|企画提案|公募型", raw + belong) else "入札"
+        slug = re.sub(r"[^A-Za-z0-9]+", "-", href.rstrip("/").rsplit("/", 1)[-1]).strip("-") or str(len(seen))
+        results.append({
+            "title": title, "category": cat, "organization": "徳島県", "prefecture": "徳島県",
+            "published_at": "" if is_result else pub, "deadline": "",
+            "result_date": pub if is_result else "", "result_url": url if is_result else "",
+            "project_code": f"TOKUSHIMA-{'R-' if is_result else ''}{slug}", "awardee": "",
+            "awardee_checked": "1" if is_result else "",
+            "amount": "", "url": url, "source": "TOKUSHIMA",
+            "source_category": (belong + " 結果") if is_result else belong,
+            "summary": "", "detail": "", "tags": ",".join(generate_tags(title)),
+        })
+    logger.info(f"徳島県: {len(results)}件取得")
+    return results
+
+
+async def scrape_tokushima() -> List[Dict]:
+    """徳島県公式サイトの入札・調達・売却の新着情報（全部局集約）を取得する。"""
+    try:
+        return await asyncio.to_thread(_scrape_tokushima_sync)
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"徳島県スクレイパー例外: {e}")
+        return []
+
+
+def fetch_tokushima_detail(url: str) -> Optional[Dict]:
+    """徳島県 入札・公募 個別ページの本文を取得する。"""
+    import urllib.request
+    from urllib.parse import urljoin
+    try:
+        op = urllib.request.build_opener()
+        op.addheaders = [("User-Agent", "Mozilla/5.0")]
+        html_doc = op.open(url, timeout=40).read().decode("utf-8", "replace")
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"徳島県詳細取得失敗 {url}: {e}")
+        return None
+    soup = BeautifulSoup(html_doc, "html.parser")
+    main = soup.find(id="page-content") or soup.find("main") or soup.find(class_="contents") or soup
+    for tag in main.find_all(["script", "style", "nav", "header", "footer"]):
+        tag.decompose()
+    text = re.sub(r"\n{3,}", "\n\n", main.get_text("\n", strip=True))
+    attachments = []
+    for a in main.find_all("a", href=True):
+        if re.search(r"\.(pdf|docx?|xlsx?)($|\?)", a["href"], re.I):
+            name = re.sub(r"[（(][^）)]*(?:KB|MB|バイト)[）)]\s*$", "", a.get_text(" ", strip=True)).strip() or "添付資料"
+            attachments.append({"name": name, "url": urljoin(url, a["href"]), "kind": "公告文"})
+    return {"detail": text[:6000], "budget": "", "schedule": [], "attachments": attachments, "published_at": ""}
+
+
 def fetch_kochi_detail(url: str) -> Optional[Dict]:
     """高知県 入札公告 個別ページの本文を取得する。"""
     import urllib.request
@@ -6770,6 +6852,7 @@ async def run_all_scrapers(portal_date_from: str = "", jogmec_max_id: int = 0) -
         scrape_shimane(),
         scrape_kumamoto(),
         scrape_hokkaido(),
+        scrape_tokushima(),
     ]
 
     scraped = await asyncio.gather(*tasks, return_exceptions=True)
