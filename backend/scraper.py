@@ -5185,6 +5185,15 @@ def _scrape_supercals_ppi(cfg: Dict) -> List[Dict]:
                 return cells[i] if (i is not None and len(cells) > i) else ""
             list_pub = _cals_list_date(_cell(cfg.get("list_pub_col")))
             list_deadline = _cals_list_date(_cell(cfg.get("list_deadline_col")))
+
+            # open_only: 詳細取得の「前」に一覧の締切列で絞り、開札済みは詳細を叩かない。
+            # open_deadline_col が締切相当（入札予定日）。値が過去なら現在公告中でないため除外。
+            # 空欄は「入札予定日が一覧に未掲載＝公告中」の可能性があり残す（詳細で日付補完）。
+            open_col = cfg.get("open_deadline_col", cfg.get("list_deadline_col"))
+            list_open = _cals_list_date(_cell(open_col))
+            if cfg.get("open_only") and list_open and list_open < today.isoformat():
+                continue
+
             # 一覧に日付列があれば詳細取得を省く（大量案件のホスト負荷・CI時間を抑制）
             has_list_dates = (cfg.get("list_pub_col") is not None) or (cfg.get("list_deadline_col") is not None)
             need_detail = (title_from == "detail") or (not has_list_dates)
@@ -5210,11 +5219,6 @@ def _scrape_supercals_ppi(cfg: Dict) -> List[Dict]:
                     logger.error(f"{pref}(SuperCALS)詳細取得失敗（idx={idx}）: {e}")
             elif title_from == "detail":
                 continue  # 詳細必須なのに予算切れ→スキップ
-
-            # open_only: 入札予定日(=締切相当)が過ぎた案件を除外し現在公告中のみ採用。
-            # 一覧に締切列がある高volume県で、過去分の大量流入を防ぐ。
-            if cfg.get("open_only") and deadline and deadline < today.isoformat():
-                continue
 
             raw_title = dtitle if (title_from == "detail" and dtitle) else list_title
             title = _SUPERCALS_TITLE_PREFIX.sub("", re.sub(r"\s*※\s*添付有\s*$", "", raw_title)).strip()
@@ -5289,6 +5293,30 @@ async def scrape_miyazaki() -> List[Dict]:
         return await asyncio.to_thread(_scrape_supercals_ppi, _MIYAZAKI_CALS_CFG)
     except Exception as e:  # noqa: BLE001
         logger.error(f"宮崎県スクレイパー例外: {e}")
+        return []
+
+
+# 新潟県 建設工事（既存の新潟スクレイパーは委託・公募中心で建設工事が欠落）。
+# ep-bis.pref.niigata.jp SuperCALS。県本体 KikanNO=1500000。案件名=列2。
+# 一覧の入札予定日(列7)が過去の開札済みは open_only で除外。開札前(列7空=公告中)は
+# 一覧に日付が無いため詳細を取得して公告日・締切を補完（開札前のみなので件数は少ない）。
+_NIIGATA_CALS_CFG = {
+    "ej": "https://www.ep-bis.pref.niigata.jp/ebidPPIPublish/EjPPIj",
+    "kikan": "1500000",
+    "pref": "新潟県", "source": "NIIGATA",
+    "choutatsu": [("00", "工事"), ("01", "測量・コンサル")],
+    "window_days": 30, "max_detail": 150, "sleep": 0.25,
+    "title_from": "list", "title_col": 2,
+    "open_deadline_col": 7, "open_only": True,
+}
+
+
+async def scrape_niigata_cals() -> List[Dict]:
+    """新潟県 建設工事・測量コンサル（新潟県共同利用電子入札 SuperCALS）を取得する。"""
+    try:
+        return await asyncio.to_thread(_scrape_supercals_ppi, _NIIGATA_CALS_CFG)
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"新潟県建設スクレイパー例外: {e}")
         return []
 
 
@@ -6271,6 +6299,7 @@ async def run_all_scrapers(portal_date_from: str = "", jogmec_max_id: int = 0) -
         scrape_kochi(),
         scrape_saga(),
         scrape_miyazaki(),
+        scrape_niigata_cals(),
     ]
 
     scraped = await asyncio.gather(*tasks, return_exceptions=True)
