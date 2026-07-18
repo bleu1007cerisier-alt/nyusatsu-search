@@ -3999,6 +3999,7 @@ def fetch_kyoto_detail(url: str) -> Optional[Dict]:
 # ---------------------------------------------------------------------------
 _HYOGO_BASE = "https://web.pref.hyogo.lg.jp"
 _HYOGO_CATEGORIES = [
+    ("/bid/bid_opn_01.html", "物品"),
     ("/bid/bid_opn_02.html", "委託・役務"),
     ("/bid/bid_opn_03.html", "工事・設計"),
     ("/bid/bid_opn_04.html", "その他"),
@@ -4093,7 +4094,23 @@ async def scrape_hyogo() -> List[Dict]:
 # <li class="display_date"><time datetime="YYYY-MM-DD">…<a href="XX.html">○○の公告（案件名）</a>。
 # 日付(公告日)が一覧に入っている。締切は詳細ページ側。琵琶湖・生物多様性等が多く海洋系に好適。
 # ---------------------------------------------------------------------------
-_SHIGA_LIST = "https://www.pref.shiga.lg.jp/zigyousya/nyusatsubaikyaku/itaku/"
+_SHIGA_BASE = "https://www.pref.shiga.lg.jp/zigyousya/nyusatsubaikyaku/"
+# (カテゴリ, 表示名, strict)。itakuは委託の実案件一覧なので全件。他カテゴリは
+# 常設ページ(発注見通し/参加停止/制度/資格/様式等)が大半なので、実案件の公告のみ厳選。
+_SHIGA_CATEGORIES = [
+    ("itaku", "委託・役務", False),
+    ("kouzi", "工事", True),
+    ("nyusatsu", "物品・入札", True),
+    ("keiyaku", "契約", True),
+    ("baikyaku", "売却・貸付", True),
+    ("shinrin", "森林", True),
+]
+# strictカテゴリで採用する語（実案件の公告・公募）と、除外する常設ページ語。
+_SHIGA_INCLUDE = re.compile(r"公告|公募|プロポーザル|企画提案|企画競争|参加者募集|告示第\d+号")
+_SHIGA_EXCLUDE = re.compile(
+    r"発注見通し|見通し|参加停止|について$|について（|制度|要綱|様式|マニュアル|ガイド|"
+    r"規程|規則|ＦＡＱ|FAQ|回答|参加資格|変更届|ポータル|システム|基準|条例|委員会|"
+    r"よくある|申請書|苦情|措置|融資|情報$|一覧$")
 _SHIGA_ROW = re.compile(
     r'<time[^>]*datetime="(\d{4}-\d{2}-\d{2})[^"]*"[^>]*>.*?'
     r'<a href="([^"]+)">([^<]+)</a>', re.S)
@@ -4104,46 +4121,52 @@ def _scrape_shiga_sync() -> List[Dict]:
     from urllib.parse import urljoin
     op = urllib.request.build_opener()
     op.addheaders = [("User-Agent", "Mozilla/5.0")]
-    try:
-        html_doc = op.open(_SHIGA_LIST, timeout=40).read().decode("utf-8", "replace")
-    except Exception as e:  # noqa: BLE001
-        logger.error(f"滋賀県一覧取得失敗: {e}")
-        return []
     results, seen = [], set()
-    for m in _SHIGA_ROW.finditer(html_doc):
-        date_iso, href, raw_title = m.group(1), m.group(2), m.group(3).strip()
-        if ".htm" not in href:
+    for cat_key, cat_label, strict in _SHIGA_CATEGORIES:
+        list_url = _SHIGA_BASE + cat_key + "/"
+        try:
+            html_doc = op.open(list_url, timeout=40).read().decode("utf-8", "replace")
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"滋賀県一覧取得失敗（{cat_label}）: {e}")
             continue
-        url = urljoin(_SHIGA_LIST, href)
-        if url in seen:
-            continue
-        seen.add(url)
-        # 「公募型プロポーザルの公告（案件名）」→ 案件名を取り出す
-        mt = re.search(r"公告(?:（|\()(.+?)(?:）|\))\s*$", raw_title)
-        title = (mt.group(1) if mt else raw_title).strip()
-        if len(title) < 4:
-            continue
-        cat = "プロポーザル" if "プロポーザル" in raw_title or "企画提案" in raw_title else "入札"
-        slug = re.sub(r"[^A-Za-z0-9]+", "-", href.rsplit("/", 1)[-1]).strip("-") or str(len(seen))
-        results.append({
-            "title":           title,
-            "category":        cat,
-            "organization":    "滋賀県",
-            "prefecture":      "滋賀県",
-            "published_at":    date_iso,
-            "deadline":        "",
-            "result_date":     "",
-            "result_url":      "",
-            "project_code":    f"SHIGA-{slug}",
-            "awardee":         "",
-            "url":             url,
-            "source":          "SHIGA",
-            "amount":          "",
-            "source_category": "",
-            "summary":         "",
-            "detail":          "",
-            "tags":            ",".join(generate_tags(title)),
-        })
+        for m in _SHIGA_ROW.finditer(html_doc):
+            date_iso, href, raw_title = m.group(1), m.group(2), m.group(3).strip()
+            if ".htm" not in href:
+                continue
+            if strict and (not _SHIGA_INCLUDE.search(raw_title) or _SHIGA_EXCLUDE.search(raw_title)):
+                continue
+            url = urljoin(list_url, href)
+            if url in seen:
+                continue
+            seen.add(url)
+            # 「公募型プロポーザルの公告（案件名）」→ 案件名を取り出す
+            mt = re.search(r"公告(?:（|\()(.+?)(?:）|\))\s*$", raw_title)
+            title = (mt.group(1) if mt else raw_title).strip()
+            if len(title) < 4:
+                continue
+            is_result = bool(re.search(r"結果について|落札|選定結果", raw_title))
+            cat = "プロポーザル" if "プロポーザル" in raw_title or "企画提案" in raw_title else "入札"
+            slug = re.sub(r"[^A-Za-z0-9]+", "-", href.rsplit("/", 1)[-1]).strip("-") or str(len(seen))
+            results.append({
+                "title":           title,
+                "category":        cat,
+                "organization":    "滋賀県",
+                "prefecture":      "滋賀県",
+                "published_at":    "" if is_result else date_iso,
+                "deadline":        "",
+                "result_date":     date_iso if is_result else "",
+                "result_url":      url if is_result else "",
+                "project_code":    f"SHIGA-{'R-' if is_result else ''}{slug}",
+                "awardee":         "",
+                "awardee_checked": "1" if is_result else "",
+                "url":             url,
+                "source":          "SHIGA",
+                "amount":          "",
+                "source_category": cat_label,
+                "summary":         "",
+                "detail":          "",
+                "tags":            ",".join(generate_tags(title)),
+            })
     logger.info(f"滋賀県: {len(results)}件取得")
     return results
 
@@ -4243,11 +4266,17 @@ async def scrape_wakayama() -> List[Dict]:
 # 物品／その他委託役務／電子入札案件公告 の3カテゴリを巡回。日付は西暦。
 # ---------------------------------------------------------------------------
 _HIROSHIMA_BASE = "https://www.pref.hiroshima.lg.jp"
+# (path, 表示名, is_result)。ハブ(nyusatsukeiyaku)配下の list945-XXXX が各カテゴリ一覧。
+# 4046=企画提案(プロポーザル)を取っていなかった＝広島のプロポ完全欠落を修正。
 _HIROSHIMA_CATEGORIES = [
-    ("/site/nyusatsukeiyaku/list945-4044.html", "物品"),
-    ("/site/nyusatsukeiyaku/list945-4041.html", "委託・役務"),
-    ("/site/nyusatsukeiyaku/list945-5244.html", "電子入札公告"),
+    ("/site/nyusatsukeiyaku/list945-4044.html", "物品", False),
+    ("/site/nyusatsukeiyaku/list945-4041.html", "委託・役務", False),
+    ("/site/nyusatsukeiyaku/list945-4042.html", "庁舎・設備管理", False),
+    ("/site/nyusatsukeiyaku/list945-4046.html", "企画提案（プロポーザル）", False),
+    ("/site/nyusatsukeiyaku/list945-5244.html", "電子入札公告", False),
+    ("/site/nyusatsukeiyaku/list945-13098.html", "企画提案 選定結果", True),
 ]
+_HIROSHIMA_RESULT_WINDOW_DAYS = 365  # 選定結果は直近1年分のみ（全297件の古い履歴を抑制）
 _HIROSHIMA_ROW = re.compile(
     r'<span class=article_title><a href="([^"]+)">([^<]+)</a></span>'
     r'\s*<span class=article_date>([^<]+)</span>', re.S)
@@ -4256,10 +4285,12 @@ _HIROSHIMA_ROW = re.compile(
 def _scrape_hiroshima_sync() -> List[Dict]:
     import urllib.request
     from urllib.parse import urljoin
+    from datetime import date, timedelta
     op = urllib.request.build_opener()
     op.addheaders = [("User-Agent", "Mozilla/5.0")]
+    result_cutoff = (date.today() - timedelta(days=_HIROSHIMA_RESULT_WINDOW_DAYS)).isoformat()
     results, seen = [], set()
-    for path, cat_label in _HIROSHIMA_CATEGORIES:
+    for path, cat_label, is_result in _HIROSHIMA_CATEGORIES:
         try:
             html_doc = op.open(_HIROSHIMA_BASE + path, timeout=40).read().decode("utf-8", "replace")
         except Exception as e:  # noqa: BLE001
@@ -4272,25 +4303,30 @@ def _scrape_hiroshima_sync() -> List[Dict]:
             url = urljoin(_HIROSHIMA_BASE, href)
             if url in seen:
                 continue
-            seen.add(url)
             title = re.sub(r"^【[^】]*】\s*", "", title).strip()
-            if len(title) < 4:
+            # 広島の案件名は「〜の公募型プロポーザルを実施します」等で正規。
+            # ハブ見出し（〜情報一覧）だけ除外し、過剰除外はしない。
+            if len(title) < 4 or "情報一覧" in title:
                 continue
             dm = re.search(r"(\d{4})年(\d{1,2})月(\d{1,2})日", date_raw)
             pub = f"{int(dm.group(1)):04d}-{int(dm.group(2)):02d}-{int(dm.group(3)):02d}" if dm else ""
-            cat = "プロポーザル" if re.search(r"プロポーザル|企画提案|公募型", title) else "入札"
+            if is_result and pub and pub < result_cutoff:
+                continue
+            seen.add(url)
+            cat = "プロポーザル" if re.search(r"プロポーザル|企画提案|公募型|企画競争", title + cat_label) else "入札"
             slug = re.sub(r"[^A-Za-z0-9]+", "-", href.rsplit("/", 1)[-1]).strip("-") or str(len(seen))
             results.append({
                 "title":           title,
                 "category":        cat,
                 "organization":    "広島県",
                 "prefecture":      "広島県",
-                "published_at":    pub,
+                "published_at":    "" if is_result else pub,
                 "deadline":        "",
-                "result_date":     "",
-                "result_url":      "",
-                "project_code":    f"HIROSHIMA-{slug}",
+                "result_date":     pub if is_result else "",
+                "result_url":      url if is_result else "",
+                "project_code":    f"HIROSHIMA-{'R-' if is_result else ''}{slug}",
                 "awardee":         "",
+                "awardee_checked": "1" if is_result else "",
                 "amount":          "",
                 "url":             url,
                 "source":          "HIROSHIMA",
