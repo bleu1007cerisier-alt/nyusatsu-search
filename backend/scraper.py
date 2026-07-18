@@ -5314,6 +5314,105 @@ def fetch_okinawa_detail(url: str) -> Optional[Dict]:
     return {"detail": text[:6000], "budget": "", "schedule": [], "attachments": attachments, "published_at": ""}
 
 
+# ---------------------------------------------------------------------------
+# 大分県（新規）。県公式「入札・公募情報」/site/nyusatu-koubo/ のカテゴリ別一覧
+# （広島と同じ article_date/article_title CMS）。企画提案(プロポ)が中心。
+# ※大分のサーバー証明書チェーンが不完全でTLS検証が失敗するため未検証контекストを使用。
+# ---------------------------------------------------------------------------
+_OITA_BASE = "https://www.pref.oita.jp"
+_OITA_CATEGORIES = [
+    ("/site/nyusatu-koubo/list22380-29038.html", "企画提案", False),
+    ("/site/nyusatu-koubo/list22377-29036.html", "調査・委託", False),
+    ("/site/nyusatu-koubo/list22377-29035.html", "土木・建築・設備", False),
+    ("/site/nyusatu-koubo/list22377-29227.html", "その他", False),
+    ("/site/nyusatu-koubo/list22381-29228.html", "入札結果", True),
+]
+_OITA_ROW = re.compile(
+    r'<span class="article_date">(\d{4})年(\d{1,2})月(\d{1,2})日更新</span>\s*'
+    r'<span class="article_title">\s*<a href="([^"]+)">([^<]+)</a>', re.S)
+
+
+def _scrape_oita_sync() -> List[Dict]:
+    import urllib.request
+    import ssl as _ssl
+    from urllib.parse import urljoin
+    import html as _html
+    ctx = _ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = _ssl.CERT_NONE  # 大分は証明書チェーン不完全のため検証無効
+    op = urllib.request.build_opener(urllib.request.HTTPSHandler(context=ctx))
+    op.addheaders = [("User-Agent", "Mozilla/5.0")]
+    results, seen = [], set()
+    for path, cat_label, force_result in _OITA_CATEGORIES:
+        try:
+            html_doc = op.open(_OITA_BASE + path, timeout=40).read().decode("utf-8", "replace")
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"大分県一覧取得失敗（{cat_label}）: {e}")
+            continue
+        for m in _OITA_ROW.finditer(html_doc):
+            y, mo, d, href, raw = m.group(1), m.group(2), m.group(3), m.group(4), _html.unescape(m.group(5)).strip()
+            url = urljoin(_OITA_BASE, href)
+            if url in seen:
+                continue
+            seen.add(url)
+            title = re.sub(r"^(?:【[^】]*】)+", "", raw).strip()
+            if len(title) < 5:
+                continue
+            pub = f"{int(y):04d}-{int(mo):02d}-{int(d):02d}"
+            is_result = force_result or bool(re.search(r"結果|候補者の決定|落札者|開札結果|選定しました", raw))
+            cat = "プロポーザル" if re.search(r"プロポ|提案競技|企画競争|企画提案|公募型", raw + cat_label) else "入札"
+            slug = re.sub(r"[^A-Za-z0-9]+", "-", href.rsplit("/", 1)[-1]).strip("-") or str(len(seen))
+            results.append({
+                "title": title, "category": cat, "organization": "大分県", "prefecture": "大分県",
+                "published_at": "" if is_result else pub, "deadline": "",
+                "result_date": pub if is_result else "", "result_url": url if is_result else "",
+                "project_code": f"OITA-{'R-' if is_result else ''}{slug}", "awardee": "",
+                "awardee_checked": "1" if is_result else "",
+                "amount": "", "url": url, "source": "OITA",
+                "source_category": (cat_label + " 結果") if (is_result and cat_label != "入札結果") else cat_label,
+                "summary": "", "detail": "", "tags": ",".join(generate_tags(title)),
+            })
+    logger.info(f"大分県: {len(results)}件取得")
+    return results
+
+
+async def scrape_oita() -> List[Dict]:
+    """大分県公式サイトの入札・公募情報（企画提案・委託等）を取得する。"""
+    try:
+        return await asyncio.to_thread(_scrape_oita_sync)
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"大分県スクレイパー例外: {e}")
+        return []
+
+
+def fetch_oita_detail(url: str) -> Optional[Dict]:
+    """大分県 入札・公募 個別ページの本文を取得する。"""
+    import urllib.request
+    import ssl as _ssl
+    from urllib.parse import urljoin
+    try:
+        ctx = _ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = _ssl.CERT_NONE
+        op = urllib.request.build_opener(urllib.request.HTTPSHandler(context=ctx))
+        op.addheaders = [("User-Agent", "Mozilla/5.0")]
+        html_doc = op.open(url, timeout=40).read().decode("utf-8", "replace")
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"大分県詳細取得失敗 {url}: {e}")
+        return None
+    soup = BeautifulSoup(html_doc, "html.parser")
+    main = soup.find(id="tmp_contents") or soup.find(id="page-content") or soup.find("main") or soup
+    for tag in main.find_all(["script", "style", "nav", "header", "footer"]):
+        tag.decompose()
+    text = re.sub(r"\n{3,}", "\n\n", main.get_text("\n", strip=True))
+    attachments = []
+    for a in main.find_all("a", href=True):
+        if re.search(r"\.(pdf|docx?|xlsx?)($|\?)", a["href"], re.I):
+            name = re.sub(r"[（(][^）)]*(?:KB|MB|バイト)[）)]\s*$", "", a.get_text(" ", strip=True)).strip() or "添付資料"
+            attachments.append({"name": name, "url": urljoin(url, a["href"]), "kind": "公告文"})
+    return {"detail": text[:6000], "budget": "", "schedule": [], "attachments": attachments, "published_at": ""}
+
+
 def fetch_kochi_detail(url: str) -> Optional[Dict]:
     """高知県 入札公告 個別ページの本文を取得する。"""
     import urllib.request
@@ -7061,6 +7160,7 @@ async def run_all_scrapers(portal_date_from: str = "", jogmec_max_id: int = 0) -
         scrape_tokushima(),
         scrape_nagasaki(),
         scrape_okinawa(),
+        scrape_oita(),
     ]
 
     scraped = await asyncio.gather(*tasks, return_exceptions=True)
