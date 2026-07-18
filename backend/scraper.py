@@ -4845,6 +4845,92 @@ def fetch_shimane_detail(url: str) -> Optional[Dict]:
     return {"detail": text[:6000], "budget": "", "schedule": [], "attachments": attachments, "published_at": ""}
 
 
+# ---------------------------------------------------------------------------
+# 熊本県（新規）。県公式 入札情報の一覧 /life/sub/5/index-2.html が全部局の
+# 入札・公募を集約した静的リスト（広島と同じCMS：article_date/article_title）。
+# 個別案件は /soshiki/<部局>/<記事id>.html。
+# ---------------------------------------------------------------------------
+_KUMAMOTO_BASE = "https://www.pref.kumamoto.jp"
+_KUMAMOTO_LIST = _KUMAMOTO_BASE + "/life/sub/5/index-2.html"
+_KUMAMOTO_ROW = re.compile(
+    r'<span class="article_date">(\d{4})年(\d{1,2})月(\d{1,2})日更新</span>\s*'
+    r'<span class="article_title">\s*<a href="([^"]+)">([^<]+)</a>', re.S)
+
+
+def _scrape_kumamoto_sync() -> List[Dict]:
+    import urllib.request
+    from urllib.parse import urljoin
+    import html as _html
+    op = urllib.request.build_opener()
+    op.addheaders = [("User-Agent", "Mozilla/5.0")]
+    try:
+        html_doc = op.open(_KUMAMOTO_LIST, timeout=40).read().decode("utf-8", "replace")
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"熊本県一覧取得失敗: {e}")
+        return []
+    results, seen = [], set()
+    for m in _KUMAMOTO_ROW.finditer(html_doc):
+        y, mo, d, href, raw = m.group(1), m.group(2), m.group(3), m.group(4), _html.unescape(m.group(5)).strip()
+        url = urljoin(_KUMAMOTO_BASE, href)
+        if url in seen:
+            continue
+        seen.add(url)
+        # 先頭の【…】注記（更新日・募集終了等）を除去して案件名を出す
+        title = re.sub(r"^(?:【[^】]*】)+", "", raw).strip()
+        title = re.sub(r"について$", "", title).strip()
+        if len(title) < 5:
+            continue
+        pub = f"{int(y):04d}-{int(mo):02d}-{int(d):02d}"
+        is_result = bool(re.search(r"結果|募集終了|選定しました|落札者|開札結果", raw))
+        cat = "プロポーザル" if re.search(r"プロポ|提案競技|企画競争|企画提案|公募型", raw) else "入札"
+        slug = re.sub(r"[^A-Za-z0-9]+", "-", href.rsplit("/", 2)[-1]).strip("-") or str(len(seen))
+        results.append({
+            "title": title, "category": cat, "organization": "熊本県", "prefecture": "熊本県",
+            "published_at": "" if is_result else pub, "deadline": "",
+            "result_date": pub if is_result else "", "result_url": url if is_result else "",
+            "project_code": f"KUMAMOTO-{'R-' if is_result else ''}{slug}", "awardee": "",
+            "awardee_checked": "1" if is_result else "",
+            "amount": "", "url": url, "source": "KUMAMOTO",
+            "source_category": "入札結果" if is_result else "",
+            "summary": "", "detail": "", "tags": ",".join(generate_tags(title)),
+        })
+    logger.info(f"熊本県: {len(results)}件取得")
+    return results
+
+
+async def scrape_kumamoto() -> List[Dict]:
+    """熊本県公式サイトの入札情報一覧（全部局集約）を取得する。"""
+    try:
+        return await asyncio.to_thread(_scrape_kumamoto_sync)
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"熊本県スクレイパー例外: {e}")
+        return []
+
+
+def fetch_kumamoto_detail(url: str) -> Optional[Dict]:
+    """熊本県 入札・公募 個別ページの本文を取得する。"""
+    import urllib.request
+    from urllib.parse import urljoin
+    try:
+        op = urllib.request.build_opener()
+        op.addheaders = [("User-Agent", "Mozilla/5.0")]
+        html_doc = op.open(url, timeout=40).read().decode("utf-8", "replace")
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"熊本県詳細取得失敗 {url}: {e}")
+        return None
+    soup = BeautifulSoup(html_doc, "html.parser")
+    main = soup.find(id="page-content") or soup.find("main") or soup.find(id="honbun") or soup
+    for tag in main.find_all(["script", "style", "nav", "header", "footer"]):
+        tag.decompose()
+    text = re.sub(r"\n{3,}", "\n\n", main.get_text("\n", strip=True))
+    attachments = []
+    for a in main.find_all("a", href=True):
+        if re.search(r"\.(pdf|docx?|xlsx?)($|\?)", a["href"], re.I):
+            name = re.sub(r"[（(][^）)]*(?:KB|MB|バイト)[）)]\s*$", "", a.get_text(" ", strip=True)).strip() or "添付資料"
+            attachments.append({"name": name, "url": urljoin(url, a["href"]), "kind": "公告文"})
+    return {"detail": text[:6000], "budget": "", "schedule": [], "attachments": attachments, "published_at": ""}
+
+
 def fetch_kochi_detail(url: str) -> Optional[Dict]:
     """高知県 入札公告 個別ページの本文を取得する。"""
     import urllib.request
@@ -6587,6 +6673,7 @@ async def run_all_scrapers(portal_date_from: str = "", jogmec_max_id: int = 0) -
         scrape_niigata_cals(),
         scrape_toyama_cals(),
         scrape_shimane(),
+        scrape_kumamoto(),
     ]
 
     scraped = await asyncio.gather(*tasks, return_exceptions=True)
