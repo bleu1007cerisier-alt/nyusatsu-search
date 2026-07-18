@@ -4851,7 +4851,14 @@ def fetch_shimane_detail(url: str) -> Optional[Dict]:
 # 個別案件は /soshiki/<部局>/<記事id>.html。
 # ---------------------------------------------------------------------------
 _KUMAMOTO_BASE = "https://www.pref.kumamoto.jp"
-_KUMAMOTO_LIST = _KUMAMOTO_BASE + "/life/sub/5/index-2.html"
+# (URL, strict)。index-2=入札情報課の集約(全件)。list1-8=全庁新着で部局横断の
+# 公募・プロポを拾う（strict=入札/公募系キーワードのみ採用しニュースを除外）。
+_KUMAMOTO_LISTS = [
+    ("/life/sub/5/index-2.html", False),
+    ("/soshiki/list1-8.html", True),
+]
+_KUMAMOTO_STRICT = re.compile(
+    r"入札|公告|公募|プロポ|提案競技|企画競争|企画提案|委託|調達|見積|売却|落札|開札")
 _KUMAMOTO_ROW = re.compile(
     r'<span class="article_date">(\d{4})年(\d{1,2})月(\d{1,2})日更新</span>\s*'
     r'<span class="article_title">\s*<a href="([^"]+)">([^<]+)</a>', re.S)
@@ -4863,37 +4870,40 @@ def _scrape_kumamoto_sync() -> List[Dict]:
     import html as _html
     op = urllib.request.build_opener()
     op.addheaders = [("User-Agent", "Mozilla/5.0")]
-    try:
-        html_doc = op.open(_KUMAMOTO_LIST, timeout=40).read().decode("utf-8", "replace")
-    except Exception as e:  # noqa: BLE001
-        logger.error(f"熊本県一覧取得失敗: {e}")
-        return []
     results, seen = [], set()
-    for m in _KUMAMOTO_ROW.finditer(html_doc):
-        y, mo, d, href, raw = m.group(1), m.group(2), m.group(3), m.group(4), _html.unescape(m.group(5)).strip()
-        url = urljoin(_KUMAMOTO_BASE, href)
-        if url in seen:
+    for path, strict in _KUMAMOTO_LISTS:
+        try:
+            html_doc = op.open(_KUMAMOTO_BASE + path, timeout=40).read().decode("utf-8", "replace")
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"熊本県一覧取得失敗（{path}）: {e}")
             continue
-        seen.add(url)
-        # 先頭の【…】注記（更新日・募集終了等）を除去して案件名を出す
-        title = re.sub(r"^(?:【[^】]*】)+", "", raw).strip()
-        title = re.sub(r"について$", "", title).strip()
-        if len(title) < 5:
-            continue
-        pub = f"{int(y):04d}-{int(mo):02d}-{int(d):02d}"
-        is_result = bool(re.search(r"結果|募集終了|選定しました|落札者|開札結果", raw))
-        cat = "プロポーザル" if re.search(r"プロポ|提案競技|企画競争|企画提案|公募型", raw) else "入札"
-        slug = re.sub(r"[^A-Za-z0-9]+", "-", href.rsplit("/", 2)[-1]).strip("-") or str(len(seen))
-        results.append({
-            "title": title, "category": cat, "organization": "熊本県", "prefecture": "熊本県",
-            "published_at": "" if is_result else pub, "deadline": "",
-            "result_date": pub if is_result else "", "result_url": url if is_result else "",
-            "project_code": f"KUMAMOTO-{'R-' if is_result else ''}{slug}", "awardee": "",
-            "awardee_checked": "1" if is_result else "",
-            "amount": "", "url": url, "source": "KUMAMOTO",
-            "source_category": "入札結果" if is_result else "",
-            "summary": "", "detail": "", "tags": ",".join(generate_tags(title)),
-        })
+        for m in _KUMAMOTO_ROW.finditer(html_doc):
+            y, mo, d, href, raw = m.group(1), m.group(2), m.group(3), m.group(4), _html.unescape(m.group(5)).strip()
+            if strict and not _KUMAMOTO_STRICT.search(raw):
+                continue
+            url = urljoin(_KUMAMOTO_BASE, href)
+            if url in seen:
+                continue
+            seen.add(url)
+            # 先頭の【…】注記（更新日・募集終了等）を除去して案件名を出す
+            title = re.sub(r"^(?:【[^】]*】)+", "", raw).strip()
+            title = re.sub(r"について$", "", title).strip()
+            if len(title) < 5:
+                continue
+            pub = f"{int(y):04d}-{int(mo):02d}-{int(d):02d}"
+            is_result = bool(re.search(r"結果|募集終了|選定しました|落札者|開札結果", raw))
+            cat = "プロポーザル" if re.search(r"プロポ|提案競技|企画競争|企画提案|公募型", raw) else "入札"
+            slug = re.sub(r"[^A-Za-z0-9]+", "-", href.rsplit("/", 2)[-1]).strip("-") or str(len(seen))
+            results.append({
+                "title": title, "category": cat, "organization": "熊本県", "prefecture": "熊本県",
+                "published_at": "" if is_result else pub, "deadline": "",
+                "result_date": pub if is_result else "", "result_url": url if is_result else "",
+                "project_code": f"KUMAMOTO-{'R-' if is_result else ''}{slug}", "awardee": "",
+                "awardee_checked": "1" if is_result else "",
+                "amount": "", "url": url, "source": "KUMAMOTO",
+                "source_category": "入札結果" if is_result else "",
+                "summary": "", "detail": "", "tags": ",".join(generate_tags(title)),
+            })
     logger.info(f"熊本県: {len(results)}件取得")
     return results
 
