@@ -4744,6 +4744,107 @@ def fetch_saga_detail(url: str) -> Optional[Dict]:
     return {"detail": text[:6000], "budget": "", "schedule": [], "attachments": attachments, "published_at": ""}
 
 
+# ---------------------------------------------------------------------------
+# 島根県（新規）。県公式 入札情報の「過去の入札情報一覧」(rireki_list.html)が
+# 全部局の公告を集約した静的リスト（週末に更新・履歴保持）。1行=
+# <li><a href="/bid_info/bid_XXX/YYY.html">【機関名】案件名について掲載しました</a>（M月D日）</li>
+# ---------------------------------------------------------------------------
+_SHIMANE_BASE = "https://www.pref.shimane.lg.jp"
+_SHIMANE_LIST = _SHIMANE_BASE + "/bid_info/rireki_list.html"
+_SHIMANE_ROW = re.compile(
+    r'<a href="(/bid_info/[^"]+\.html)"[^>]*>([^<]+)</a>\s*（\s*(\d{1,2})月(\d{1,2})日）')
+
+
+def _scrape_shimane_sync() -> List[Dict]:
+    import urllib.request
+    from urllib.parse import urljoin
+    from datetime import date, timedelta
+    import html as _html
+    op = urllib.request.build_opener()
+    op.addheaders = [("User-Agent", "Mozilla/5.0")]
+    try:
+        html_doc = op.open(_SHIMANE_LIST, timeout=40).read().decode("utf-8", "replace")
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"島根県一覧取得失敗: {e}")
+        return []
+    ul = re.search(r'<ul class="genre-news">(.*?)</ul>', html_doc, re.S)
+    body = ul.group(1) if ul else html_doc
+    today = date.today()
+    results, seen = [], set()
+    for m in _SHIMANE_ROW.finditer(body):
+        href, raw, mo, d = m.group(1), _html.unescape(m.group(2)).strip(), int(m.group(3)), int(m.group(4))
+        url = urljoin(_SHIMANE_BASE, href)
+        if url in seen:
+            continue
+        seen.add(url)
+        org_m = re.match(r"【([^】]+)】", raw)
+        org = org_m.group(1) if org_m else "島根県"
+        title = re.sub(r"^【[^】]*】", "", raw)
+        title = re.sub(r"(について|に係る情報|を)?(掲載|公表|更新|公告)し(ました|ます)。?$", "", title).strip()
+        title = re.sub(r"について$", "", title).strip()
+        if len(title) < 4:
+            continue
+        # 年の推定：月が未来なら前年（12月案件が翌年前半の一覧に残るケース）
+        y = today.year
+        try:
+            cand = date(y, mo, d)
+            if (cand - today).days > 30:
+                cand = date(y - 1, mo, d)
+        except ValueError:
+            continue
+        pub = cand.isoformat()
+        is_result = bool(re.search(r"入札結果|落札者|開札結果|結果について|選定結果|選定しました", raw))
+        cat = "プロポーザル" if re.search(r"プロポ|提案競技|企画競争|企画提案|公募型", raw) else "入札"
+        slug = re.sub(r"[^A-Za-z0-9]+", "-", href.rsplit("/", 2)[-1]).strip("-") or str(len(seen))
+        results.append({
+            "title": title, "category": cat,
+            "organization": f"島根県（{org}）" if org != "島根県" else "島根県",
+            "prefecture": "島根県",
+            "published_at": "" if is_result else pub, "deadline": "",
+            "result_date": pub if is_result else "", "result_url": url if is_result else "",
+            "project_code": f"SHIMANE-{'R-' if is_result else ''}{slug}", "awardee": "",
+            "awardee_checked": "1" if is_result else "",
+            "amount": "", "url": url, "source": "SHIMANE",
+            "source_category": "入札結果" if is_result else "",
+            "summary": "", "detail": "", "tags": ",".join(generate_tags(title, org)),
+        })
+    logger.info(f"島根県: {len(results)}件取得")
+    return results
+
+
+async def scrape_shimane() -> List[Dict]:
+    """島根県公式サイトの入札情報（過去の入札情報一覧）を取得する。"""
+    try:
+        return await asyncio.to_thread(_scrape_shimane_sync)
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"島根県スクレイパー例外: {e}")
+        return []
+
+
+def fetch_shimane_detail(url: str) -> Optional[Dict]:
+    """島根県 入札公告 個別ページの本文を取得する。"""
+    import urllib.request
+    from urllib.parse import urljoin
+    try:
+        op = urllib.request.build_opener()
+        op.addheaders = [("User-Agent", "Mozilla/5.0")]
+        html_doc = op.open(url, timeout=40).read().decode("utf-8", "replace")
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"島根県詳細取得失敗 {url}: {e}")
+        return None
+    soup = BeautifulSoup(html_doc, "html.parser")
+    main = soup.find(id="page-content") or soup.find("main") or soup.find(id="honbun") or soup
+    for tag in main.find_all(["script", "style", "nav", "header", "footer"]):
+        tag.decompose()
+    text = re.sub(r"\n{3,}", "\n\n", main.get_text("\n", strip=True))
+    attachments = []
+    for a in main.find_all("a", href=True):
+        if re.search(r"\.(pdf|docx?|xlsx?)($|\?)", a["href"], re.I):
+            name = re.sub(r"[（(][^）)]*(?:KB|MB|バイト)[）)]\s*$", "", a.get_text(" ", strip=True)).strip() or "添付資料"
+            attachments.append({"name": name, "url": urljoin(url, a["href"]), "kind": "公告文"})
+    return {"detail": text[:6000], "budget": "", "schedule": [], "attachments": attachments, "published_at": ""}
+
+
 def fetch_kochi_detail(url: str) -> Optional[Dict]:
     """高知県 入札公告 個別ページの本文を取得する。"""
     import urllib.request
@@ -6485,6 +6586,7 @@ async def run_all_scrapers(portal_date_from: str = "", jogmec_max_id: int = 0) -
         scrape_miyazaki(),
         scrape_niigata_cals(),
         scrape_toyama_cals(),
+        scrape_shimane(),
     ]
 
     scraped = await asyncio.gather(*tasks, return_exceptions=True)
