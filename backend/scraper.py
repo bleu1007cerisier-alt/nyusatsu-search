@@ -5190,6 +5190,130 @@ def fetch_nagasaki_detail(url: str) -> Optional[Dict]:
     return {"detail": text[:6000], "budget": "", "schedule": [], "attachments": attachments, "published_at": ""}
 
 
+# ---------------------------------------------------------------------------
+# 沖縄県（新規）。公募・入札発注情報ハブ(1015342)配下の13カテゴリ索引に、現年度
+# (令和8年度)の個別案件が直接並ぶ(末尾 NNN.html)。一覧に日付が無いため案件ページの
+# 「更新日」を取得。工事(電子入札ポータル 1015344)は静的外なので除外。
+# ---------------------------------------------------------------------------
+_OKINAWA_HUB = "https://www.pref.okinawa.jp/shigoto/nyusatsukeiyaku/1015342/index.html"
+_OKINAWA_CUR_FY = ["令和8年度", "令和８年度"]  # 現年度（毎年度更新が必要）
+_OKINAWA_MAX_DETAIL = 400
+
+
+def _scrape_okinawa_sync() -> List[Dict]:
+    import urllib.request
+    from urllib.parse import urljoin
+    import html as _html
+    import time as _time
+    op = urllib.request.build_opener()
+    op.addheaders = [("User-Agent", "Mozilla/5.0")]
+
+    def get(u):
+        try:
+            return op.open(u, timeout=30).read().decode("utf-8", "replace")
+        except Exception:  # noqa: BLE001
+            return ""
+
+    hub = get(_OKINAWA_HUB)
+    if not hub:
+        logger.error("沖縄県ハブ取得失敗")
+        return []
+    cats = sorted(set(re.findall(r"/shigoto/nyusatsukeiyaku/1015342/(\d+)/index\.html", hub)))
+    cats = [c for c in cats if c != "1015344"]  # 建設工事(電子入札)は除外
+
+    # 各カテゴリ索引から現年度の個別案件(末尾NNN.html)を収集。
+    # 併せて「令和8年度実施業務（…）」サマリ索引ページも辿り、その中の案件も収集。
+    cases = {}
+    year_pages = set()
+    for cid in cats:
+        ci = f"https://www.pref.okinawa.jp/shigoto/nyusatsukeiyaku/1015342/{cid}/index.html"
+        ch = get(ci)
+        for href, title in re.findall(r'<a href="([^"]+?/(?:\d+\.html|index\.html))">([^<]+)</a>', ch):
+            t = _html.unescape(title).strip()
+            if not any(fy in t for fy in _OKINAWA_CUR_FY):
+                continue
+            url = urljoin(ci, href)
+            if url.endswith("/index.html"):
+                year_pages.add(url)  # 令和8年度サマリ索引 → 後で中の案件を収集
+            elif url not in cases:
+                cases[url] = t
+    for yu in year_pages:
+        yh = get(yu)
+        ul = re.search(r'<ul class="listlink[^"]*">(.*?)</ul>', yh, re.S)
+        block = ul.group(1) if ul else yh
+        for href, title in re.findall(r'<a href="([^"]+?/\d+\.html)">([^<]{6,})</a>', block):
+            t = _html.unescape(title).strip()
+            if re.search(r"公告|入札|プロポ|委託|募集|提案|見積|調達|業務|購入|賃貸借|売払", t):
+                url = urljoin(yu, href)
+                if url not in cases:
+                    cases[url] = t
+
+    results = []
+    budget = _OKINAWA_MAX_DETAIL
+    for url, raw in cases.items():
+        pub = ""
+        if budget > 0:
+            page = get(url)
+            budget -= 1
+            dm = re.search(r"(?:更新日|公開日)[：:\s]*(20\d\d)年(\d{1,2})月(\d{1,2})", page)
+            if dm:
+                pub = f"{int(dm.group(1)):04d}-{int(dm.group(2)):02d}-{int(dm.group(3)):02d}"
+            _time.sleep(0.12)
+        if not pub:
+            continue  # 日付が取れない案件は品質確保のため採用しない
+        title = re.sub(r"^(?:【[^】]*】)+", "", raw).strip()
+        if len(title) < 5:
+            continue
+        is_result = bool(re.search(r"落札|開札結果|入札結果|選定結果|結果について|結果公表", raw))
+        cat = "プロポーザル" if re.search(r"プロポ|提案競技|企画競争|企画提案|公募型|企画公募", raw) else "入札"
+        slug = re.sub(r"[^0-9]", "", url.rsplit("/", 1)[-1]) or str(len(results))
+        results.append({
+            "title": title, "category": cat, "organization": "沖縄県", "prefecture": "沖縄県",
+            "published_at": "" if is_result else pub, "deadline": "",
+            "result_date": pub if is_result else "", "result_url": url if is_result else "",
+            "project_code": f"OKINAWA-{'R-' if is_result else ''}{slug}", "awardee": "",
+            "awardee_checked": "1" if is_result else "",
+            "amount": "", "url": url, "source": "OKINAWA",
+            "source_category": "",
+            "summary": "", "detail": "", "tags": ",".join(generate_tags(title)),
+        })
+    logger.info(f"沖縄県: {len(results)}件取得")
+    return results
+
+
+async def scrape_okinawa() -> List[Dict]:
+    """沖縄県公式サイトの公募・入札発注情報（現年度の委託・プロポ等）を取得する。"""
+    try:
+        return await asyncio.to_thread(_scrape_okinawa_sync)
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"沖縄県スクレイパー例外: {e}")
+        return []
+
+
+def fetch_okinawa_detail(url: str) -> Optional[Dict]:
+    """沖縄県 公募・入札 個別ページの本文を取得する。"""
+    import urllib.request
+    from urllib.parse import urljoin
+    try:
+        op = urllib.request.build_opener()
+        op.addheaders = [("User-Agent", "Mozilla/5.0")]
+        html_doc = op.open(url, timeout=40).read().decode("utf-8", "replace")
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"沖縄県詳細取得失敗 {url}: {e}")
+        return None
+    soup = BeautifulSoup(html_doc, "html.parser")
+    main = soup.find(id="page-content") or soup.find("main") or soup.find(class_="contents") or soup
+    for tag in main.find_all(["script", "style", "nav", "header", "footer"]):
+        tag.decompose()
+    text = re.sub(r"\n{3,}", "\n\n", main.get_text("\n", strip=True))
+    attachments = []
+    for a in main.find_all("a", href=True):
+        if re.search(r"\.(pdf|docx?|xlsx?)($|\?)", a["href"], re.I):
+            name = re.sub(r"[（(][^）)]*(?:KB|MB|バイト)[）)]\s*$", "", a.get_text(" ", strip=True)).strip() or "添付資料"
+            attachments.append({"name": name, "url": urljoin(url, a["href"]), "kind": "公告文"})
+    return {"detail": text[:6000], "budget": "", "schedule": [], "attachments": attachments, "published_at": ""}
+
+
 def fetch_kochi_detail(url: str) -> Optional[Dict]:
     """高知県 入札公告 個別ページの本文を取得する。"""
     import urllib.request
@@ -6936,6 +7060,7 @@ async def run_all_scrapers(portal_date_from: str = "", jogmec_max_id: int = 0) -
         scrape_hokkaido(),
         scrape_tokushima(),
         scrape_nagasaki(),
+        scrape_okinawa(),
     ]
 
     scraped = await asyncio.gather(*tasks, return_exceptions=True)
