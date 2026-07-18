@@ -5091,6 +5091,19 @@ async def scrape_shizuoka() -> List[Dict]:
 _SUPERCALS_TITLE_PREFIX = re.compile(r"^（入札番号[:：][^）]*）\s*")
 
 
+def _cals_list_date(s: str) -> str:
+    """SuperCALS一覧セルの日付を ISO(YYYY-MM-DD) へ。令和08/07/02・R08-07-14 両対応。"""
+    if not s:
+        return ""
+    m = re.search(r"(?:令和|Ｒ|R)\s*0?(\d{1,2})[/\-年.]\s*0?(\d{1,2})[/\-月.]\s*0?(\d{1,2})", s)
+    if m:
+        return f"{2018 + int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+    m = re.search(r"(\d{4})[/\-.](\d{1,2})[/\-.](\d{1,2})", s)
+    if m:
+        return f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+    return ""
+
+
 def _scrape_supercals_ppi(cfg: Dict) -> List[Dict]:
     import hashlib
     import html as _html
@@ -5168,8 +5181,16 @@ def _scrape_supercals_ppi(cfg: Dict) -> List[Dict]:
                     continue
             list_title = cells[title_col] if len(cells) > title_col else ""
 
-            org, published, deadline, amount, gyoshu, dtitle = pref, "", "", "", cd_label, ""
-            if budget > 0:
+            def _cell(i):
+                return cells[i] if (i is not None and len(cells) > i) else ""
+            list_pub = _cals_list_date(_cell(cfg.get("list_pub_col")))
+            list_deadline = _cals_list_date(_cell(cfg.get("list_deadline_col")))
+            # 一覧に日付列があれば詳細取得を省く（大量案件のホスト負荷・CI時間を抑制）
+            has_list_dates = (cfg.get("list_pub_col") is not None) or (cfg.get("list_deadline_col") is not None)
+            need_detail = (title_from == "detail") or (not has_list_dates)
+
+            org, published, deadline, amount, gyoshu, dtitle = pref, list_pub, list_deadline, "", cd_label, ""
+            if need_detail and budget > 0:
                 try:
                     dv = post([
                         ("ejParameterID", "EjPSJ01"), ("ejProcessName", "getDetailPage"),
@@ -5179,8 +5200,8 @@ def _scrape_supercals_ppi(cfg: Dict) -> List[Dict]:
                     budget -= 1
                     info = _parse_chiba_cals_detail(dv)
                     org = info["org"] or pref
-                    published = info["published_at"]
-                    deadline = info["deadline"]
+                    published = info["published_at"] or list_pub
+                    deadline = info["deadline"] or list_deadline
                     amount = info["amount"]
                     gyoshu = info["gyoshu"] or cd_label
                     dtitle = info["title"]
@@ -5189,6 +5210,11 @@ def _scrape_supercals_ppi(cfg: Dict) -> List[Dict]:
                     logger.error(f"{pref}(SuperCALS)詳細取得失敗（idx={idx}）: {e}")
             elif title_from == "detail":
                 continue  # 詳細必須なのに予算切れ→スキップ
+
+            # open_only: 入札予定日(=締切相当)が過ぎた案件を除外し現在公告中のみ採用。
+            # 一覧に締切列がある高volume県で、過去分の大量流入を防ぐ。
+            if cfg.get("open_only") and deadline and deadline < today.isoformat():
+                continue
 
             raw_title = dtitle if (title_from == "detail" and dtitle) else list_title
             title = _SUPERCALS_TITLE_PREFIX.sub("", re.sub(r"\s*※\s*添付有\s*$", "", raw_title)).strip()
@@ -5238,6 +5264,31 @@ async def scrape_shizuoka_cals() -> List[Dict]:
         return await asyncio.to_thread(_scrape_supercals_ppi, _SHIZUOKA_CALS_CFG)
     except Exception as e:  # noqa: BLE001
         logger.error(f"静岡県建設スクレイパー例外: {e}")
+        return []
+
+
+# 宮崎県（新規）。宮崎県電子入札情報公開システム（SuperCALS）。県本体 KikanNO=4500000。
+# 一覧に案件名(列1)・公告日(列5)・入札予定日(列7)が揃うため詳細取得不要。
+# EjPSJ01(入札予定/公告)は現在システム掲載中の案件を大量に返すので、open_onlyで
+# 入札予定日が未到来の現在公告中のみ採用（土日は0件になり得る＝正常。平日CIで収集）。
+_MIYAZAKI_CALS_CFG = {
+    "ej": "https://www.e-nyusatsu-joho.pref.miyazaki.lg.jp/ebidPPIPublish/EjPPIj",
+    "kikan": "4500000",
+    "pref": "宮崎県", "source": "MIYAZAKI",
+    "choutatsu": [("00", "工事"), ("01", "測量・コンサル")],
+    "window_days": 30, "max_detail": 0,
+    "title_from": "list", "title_col": 1,
+    "list_pub_col": 5, "list_deadline_col": 7,
+    "open_only": True,
+}
+
+
+async def scrape_miyazaki() -> List[Dict]:
+    """宮崎県 電子入札情報公開システム（SuperCALS）の現在公告中の入札を取得する。"""
+    try:
+        return await asyncio.to_thread(_scrape_supercals_ppi, _MIYAZAKI_CALS_CFG)
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"宮崎県スクレイパー例外: {e}")
         return []
 
 
@@ -6219,6 +6270,7 @@ async def run_all_scrapers(portal_date_from: str = "", jogmec_max_id: int = 0) -
         scrape_ehime(),
         scrape_kochi(),
         scrape_saga(),
+        scrape_miyazaki(),
     ]
 
     scraped = await asyncio.gather(*tasks, return_exceptions=True)
