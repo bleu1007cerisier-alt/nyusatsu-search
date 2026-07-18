@@ -5127,7 +5127,17 @@ def _scrape_supercals_ppi(cfg: Dict) -> List[Dict]:
     budget = cfg.get("max_detail", 250)
 
     jar = http.cookiejar.CookieJar()
-    op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+    handlers = [urllib.request.HTTPCookieProcessor(jar)]
+    if cfg.get("ssl_seclevel1"):
+        # 一部SuperCALS(鹿児島等)は弱いDH鍵で標準TLSが弾かれるためcipherを緩める
+        import ssl as _ssl
+        _ctx = _ssl.create_default_context()
+        try:
+            _ctx.set_ciphers("DEFAULT@SECLEVEL=1")
+        except _ssl.SSLError:
+            pass
+        handlers.append(urllib.request.HTTPSHandler(context=_ctx))
+    op = urllib.request.build_opener(*handlers)
     op.addheaders = [("User-Agent", "Mozilla/5.0"), ("Referer", ej)]
 
     def post(pairs):
