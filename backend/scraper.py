@@ -5108,6 +5108,88 @@ def fetch_tokushima_detail(url: str) -> Optional[Dict]:
     return {"detail": text[:6000], "budget": "", "schedule": [], "attachments": attachments, "published_at": ""}
 
 
+# ---------------------------------------------------------------------------
+# 長崎県（新規）。県公式「入札情報」/nyusatsu-docs/ が業務委託・売却の公告/結果を
+# 集約した静的フィード（<li><time datetime><a>案件名</a><span class=category>分類）。
+# category末尾が「公告」=入札公告、「結果」=応札結果。業務委託・プロポが充実。
+# ---------------------------------------------------------------------------
+_NAGASAKI_LIST = "https://www.pref.nagasaki.jp/nyusatsu-docs/"
+_NAGASAKI_ROW = re.compile(
+    r'<li>\s*<time datetime="(\d{4}-\d{2}-\d{2})[^"]*">[^<]*</time>\s*'
+    r'<a href="([^"]+)">([^<]+)</a>\s*<span class="category">([^<]*)</span>', re.S)
+
+
+def _scrape_nagasaki_sync() -> List[Dict]:
+    import urllib.request
+    from urllib.parse import urljoin
+    import html as _html
+    op = urllib.request.build_opener()
+    op.addheaders = [("User-Agent", "Mozilla/5.0")]
+    try:
+        html_doc = op.open(_NAGASAKI_LIST, timeout=40).read().decode("utf-8", "replace")
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"長崎県一覧取得失敗: {e}")
+        return []
+    results, seen = [], set()
+    for m in _NAGASAKI_ROW.finditer(html_doc):
+        pub, href, raw, cat_label = m.group(1), m.group(2), _html.unescape(m.group(3)).strip(), m.group(4).strip()
+        url = urljoin(_NAGASAKI_LIST, href)
+        if url in seen:
+            continue
+        seen.add(url)
+        title = re.sub(r"^(?:【[^】]*】)+", "", raw).strip()
+        if len(title) < 5:
+            continue
+        is_result = "結果" in cat_label or bool(re.search(r"落札|開札結果|入札結果", raw))
+        cat = "プロポーザル" if re.search(r"プロポ|提案競技|企画競争|企画提案|公募型", raw + cat_label) else "入札"
+        slug = re.sub(r"[^A-Za-z0-9]+", "-", href.rsplit("/", 1)[-1]).strip("-") or str(len(seen))
+        results.append({
+            "title": title, "category": cat, "organization": "長崎県", "prefecture": "長崎県",
+            "published_at": "" if is_result else pub, "deadline": "",
+            "result_date": pub if is_result else "", "result_url": url if is_result else "",
+            "project_code": f"NAGASAKI-{'R-' if is_result else ''}{slug}", "awardee": "",
+            "awardee_checked": "1" if is_result else "",
+            "amount": "", "url": url, "source": "NAGASAKI",
+            "source_category": cat_label,
+            "summary": "", "detail": "", "tags": ",".join(generate_tags(title)),
+        })
+    logger.info(f"長崎県: {len(results)}件取得")
+    return results
+
+
+async def scrape_nagasaki() -> List[Dict]:
+    """長崎県公式サイトの入札情報（業務委託・売却の公告/結果）を取得する。"""
+    try:
+        return await asyncio.to_thread(_scrape_nagasaki_sync)
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"長崎県スクレイパー例外: {e}")
+        return []
+
+
+def fetch_nagasaki_detail(url: str) -> Optional[Dict]:
+    """長崎県 入札・公募 個別ページの本文を取得する。"""
+    import urllib.request
+    from urllib.parse import urljoin
+    try:
+        op = urllib.request.build_opener()
+        op.addheaders = [("User-Agent", "Mozilla/5.0")]
+        html_doc = op.open(url, timeout=40).read().decode("utf-8", "replace")
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"長崎県詳細取得失敗 {url}: {e}")
+        return None
+    soup = BeautifulSoup(html_doc, "html.parser")
+    main = soup.find(id="page-content") or soup.find("main") or soup.find(class_="contents") or soup
+    for tag in main.find_all(["script", "style", "nav", "header", "footer"]):
+        tag.decompose()
+    text = re.sub(r"\n{3,}", "\n\n", main.get_text("\n", strip=True))
+    attachments = []
+    for a in main.find_all("a", href=True):
+        if re.search(r"\.(pdf|docx?|xlsx?)($|\?)", a["href"], re.I):
+            name = re.sub(r"[（(][^）)]*(?:KB|MB|バイト)[）)]\s*$", "", a.get_text(" ", strip=True)).strip() or "添付資料"
+            attachments.append({"name": name, "url": urljoin(url, a["href"]), "kind": "公告文"})
+    return {"detail": text[:6000], "budget": "", "schedule": [], "attachments": attachments, "published_at": ""}
+
+
 def fetch_kochi_detail(url: str) -> Optional[Dict]:
     """高知県 入札公告 個別ページの本文を取得する。"""
     import urllib.request
@@ -6853,6 +6935,7 @@ async def run_all_scrapers(portal_date_from: str = "", jogmec_max_id: int = 0) -
         scrape_kumamoto(),
         scrape_hokkaido(),
         scrape_tokushima(),
+        scrape_nagasaki(),
     ]
 
     scraped = await asyncio.gather(*tasks, return_exceptions=True)
