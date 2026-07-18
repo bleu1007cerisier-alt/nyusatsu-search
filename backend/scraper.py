@@ -5320,6 +5320,180 @@ async def scrape_niigata_cals() -> List[Dict]:
         return []
 
 
+# ---------------------------------------------------------------------------
+# efftis（Struts型 PPUBC）汎用ソルバー。富山・奈良・秋田・宮城等の入札情報サービス。
+# フロー: GET PPUBC00100?kikanno=（セッション）→ GET PPUBC00100!link?screenId=
+#   PPUBC00400&chotatsu_kbn=00&organizationNumber=（発注情報の検索フォーム）→
+#   POST PPUBC00400（kensakuJoken.*＋method:search）でステータス別サマリ →
+#   POST PPUBC00400!link（seniKbn=1入札参加申請受付/2入札待ち）で実案件一覧。
+# 1案件=3TR: row1[契約番号,発注機関,件名(link),業種,方式,提出開始日,開く] /
+#   row2[提出締切日単独] / row3[場所,入札手段(電子/紙),公告日,開札予定日]。
+# 弱いDH鍵のため set_ciphers('DEFAULT@SECLEVEL=1') が必須。
+# ---------------------------------------------------------------------------
+def _efftis_wareki(s: str) -> str:
+    m = re.search(r"令和(\d+)年(\d{1,2})月(\d{1,2})日", s or "")
+    if m:
+        return f"{2018 + int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+    return ""
+
+
+def _scrape_efftis_struts(cfg: Dict) -> List[Dict]:
+    import hashlib
+    import ssl as _ssl
+    import urllib.request
+    import urllib.parse
+    import http.cookiejar
+    import html as _html
+    from datetime import date, timedelta
+
+    base = cfg["base"]
+    org = cfg["org"]
+    kikanno = cfg.get("kikanno", org)
+    pref, source = cfg["pref"], cfg["source"]
+    today = date.today()
+    lo = today - timedelta(days=cfg.get("window_days", 60))
+    fy = str(today.year if today.month >= 4 else today.year - 1)
+    seni_open = cfg.get("seni_open", ["1", "2"])
+    open_only = cfg.get("open_only", True)
+
+    ctx = _ssl.create_default_context()
+    try:
+        ctx.set_ciphers("DEFAULT@SECLEVEL=1")  # efftisは弱いDH鍵→SECLEVEL下げ必須
+    except _ssl.SSLError:
+        pass
+    jar = http.cookiejar.CookieJar()
+    op = urllib.request.build_opener(
+        urllib.request.HTTPCookieProcessor(jar), urllib.request.HTTPSHandler(context=ctx))
+    op.addheaders = [("User-Agent", "Mozilla/5.0"), ("Referer", base)]
+
+    def get(u):
+        return op.open(u, timeout=45).read().decode("utf-8", "replace")
+
+    def post(u, pairs):
+        data = urllib.parse.urlencode(pairs, encoding="utf-8").encode()
+        req = urllib.request.Request(u, data=data, headers={"Referer": base})
+        return op.open(req, timeout=60).read().decode("utf-8", "replace")
+
+    def harvest(html_doc, action):
+        fm = re.search(r'<form[^>]*action="\./' + action + r'"[^>]*>(.*?)</form>', html_doc, re.S)
+        fm = fm.group(1) if fm else html_doc
+        p = {}
+        for m in re.findall(r"<input[^>]+>", fm):
+            nm = re.search(r'name="([^"]*)"', m)
+            tym = re.search(r'type="([^"]*)"', m)
+            ty = tym.group(1) if tym else "text"
+            vl = re.search(r'value="([^"]*)"', m)
+            if nm and ty in ("text", "hidden"):
+                p[nm.group(1)] = vl.group(1) if vl else ""
+        for nm, blk in re.findall(r'<select[^>]*name="([^"]*)"[^>]*>(.*?)</select>', fm, re.S):
+            sel = re.search(r'<option[^>]*value="([^"]*)"[^>]*selected', blk) or re.search(r'<option[^>]*value="([^"]*)"', blk)
+            p[nm] = sel.group(1) if sel else ""
+        return p, fm
+
+    def cells(tr):
+        return [re.sub(r"\s+", " ", _html.unescape(re.sub(r"<[^>]+>", " ", t))).strip()
+                for t in re.findall(r"<td[^>]*>(.*?)</td>", tr, re.S)]
+
+    results: List[Dict] = []
+    try:
+        get(f"{base}PPUBC00100?kikanno={kikanno}")
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"{pref}(efftis)セッション確立失敗: {e}")
+        return results
+
+    for kbn, screen, label in cfg["choutatsu"]:
+        try:
+            h = get(f"{base}PPUBC00100!link?screenId={screen}&chotatsu_kbn={kbn}&organizationNumber={org}")
+            params, fm = harvest(h, screen)
+            params["kensakuJoken.selNendo"] = fy
+            params.update({
+                "kensakuJoken.textKoukokuFromYear": str(lo.year),
+                "kensakuJoken.textKoukokuFromMonth": str(lo.month),
+                "kensakuJoken.textKoukokuFromDay": str(lo.day),
+                "kensakuJoken.textKoukokuToYear": str(today.year),
+                "kensakuJoken.textKoukokuToMonth": str(today.month),
+                "kensakuJoken.textKoukokuToDay": str(today.day),
+            })
+            shudan = re.findall(r'name="kensakuJoken.nyusatsuShudanList"[^>]*value="([^"]*)"', fm)
+            search_pairs = [(k, v) for k, v in params.items()] + \
+                [("kensakuJoken.nyusatsuShudanList", s) for s in shudan] + [("method:search", "検索")]
+            summary = post(f"{base}{screen}", search_pairs)
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"{pref}(efftis)検索失敗（{label}）: {e}")
+            continue
+
+        p2, _ = harvest(summary, screen)
+        for seni in seni_open:
+            try:
+                p2b = dict(p2)
+                p2b["seniKbn"] = seni
+                lst = post(f"{base}{screen}!link", [(k, v) for k, v in p2b.items()])
+            except Exception as e:  # noqa: BLE001
+                logger.error(f"{pref}(efftis)一覧取得失敗（{label}/seni{seni}）: {e}")
+                continue
+
+            pend = None
+            for tr in re.findall(r"<tr[^>]*>(.*?)</tr>", lst, re.S | re.I):
+                anc = re.search(r"link\('(\d+)',\s*'(\d+)',\s*'([^']+)'\)[^>]*>\s*([^<]+?)\s*</a>", tr)
+                c = cells(tr)
+                if anc:
+                    # 直前案件がrow3未取得のまま次案件に来たら破棄（不完全）
+                    pend = {
+                        "keiyakuNo": anc.group(3),
+                        "title": re.sub(r"\s+", " ", _html.unescape(anc.group(4))).strip(),
+                        "org": c[1] if len(c) > 1 else pref,
+                        "gyoshu": c[3] if len(c) > 3 else label,
+                        "published": "", "deadline": "", "_done": False,
+                    }
+                elif pend is not None and not pend["_done"] and len(c) >= 4 and re.search(r"電子|郵便|紙", c[1]):
+                    # row3: [場所, 入札手段, 公告日, 開札予定日]
+                    pend["published"] = _efftis_wareki(c[2])
+                    pend["deadline"] = _efftis_wareki(c[3])
+                    pend["_done"] = True
+                    if open_only and pend["deadline"] and pend["deadline"] < today.isoformat():
+                        pend = None
+                        continue
+                    title = pend["title"]
+                    if not title:
+                        pend = None
+                        continue
+                    slug = hashlib.md5((source + pend["keiyakuNo"]).encode("utf-8")).hexdigest()[:12]
+                    results.append({
+                        "title": title, "category": "入札",
+                        "organization": pend["org"] or pref, "prefecture": pref,
+                        "published_at": pend["published"], "deadline": pend["deadline"],
+                        "result_date": "", "result_url": "",
+                        "project_code": f"{source}-EFF-{pend['keiyakuNo']}", "awardee": "",
+                        "amount": "",
+                        "url": f"{base}PPUBC00100?kikanno={kikanno}#{slug}",
+                        "source": source, "source_category": pend["gyoshu"] or label,
+                        "summary": "", "detail": "",
+                        "tags": ",".join(generate_tags(title, pend["org"] or pref)),
+                    })
+                    pend = None
+    logger.info(f"{pref} 建設(efftis): {len(results)}件取得")
+    return results
+
+
+_TOYAMA_EFF_CFG = {
+    "base": "https://toyama.efftis.jp/ebid01/PPI/Public/",
+    "org": "160008", "kikanno": "160008",
+    "pref": "富山県", "source": "TOYAMA",
+    "choutatsu": [("00", "PPUBC00400", "工事"), ("01", "PPUBC00400", "測量・コンサル"),
+                  ("11", "PPUBC00410", "物品・役務")],
+    "seni_open": ["1", "2"], "window_days": 90, "open_only": True,
+}
+
+
+async def scrape_toyama_cals() -> List[Dict]:
+    """富山県 建設工事等（とやま電子入札共同システム efftis Struts型）の現在公告中を取得する。"""
+    try:
+        return await asyncio.to_thread(_scrape_efftis_struts, _TOYAMA_EFF_CFG)
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"富山県建設スクレイパー例外: {e}")
+        return []
+
+
 def fetch_shizuoka_detail(url: str) -> Optional[Dict]:
     """静岡県 入札・公募 個別記事ページの本文を取得する（更新日を公示日として抽出）。"""
     import urllib.request
@@ -6300,6 +6474,7 @@ async def run_all_scrapers(portal_date_from: str = "", jogmec_max_id: int = 0) -
         scrape_saga(),
         scrape_miyazaki(),
         scrape_niigata_cals(),
+        scrape_toyama_cals(),
     ]
 
     scraped = await asyncio.gather(*tasks, return_exceptions=True)
