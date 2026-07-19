@@ -5496,6 +5496,98 @@ def fetch_akita_detail(url: str) -> Optional[Dict]:
     return {"detail": text[:6000], "budget": "", "schedule": [], "attachments": attachments, "published_at": ""}
 
 
+# ---------------------------------------------------------------------------
+# 福島県（新規）。県公式「入札・契約情報」/sec/list10-N.html が全部局横断の集約
+# フィード（<span class=span_a>日付</span><span class=span_b><a>案件名</a>（<a>部局</a>））。
+# 発注見通し・契約結果ハブ等の常設ページは除外。
+# ---------------------------------------------------------------------------
+_FUKUSHIMA_BASE = "https://www.pref.fukushima.lg.jp/sec/"
+_FUKUSHIMA_MAX_PAGES = 10
+_FUKUSHIMA_ROW = re.compile(
+    r'<span class="span_a">(\d{4})年(\d{1,2})月(\d{1,2})日更新</span>\s*'
+    r'<span class="span_b">\s*<a href="([^"]+)">([^<]+)</a>'
+    r'(?:（<a href="[^"]*">([^<]+)</a>）)?', re.S)
+_FUKUSHIMA_HUB = re.compile(
+    r"発注見通し|見通しを(?:掲載|公表)|契約結果|^入札結果|結果を公表|入札情報一覧|"
+    r"入札情報（|^入札・?契約情報|お知らせ一覧|一覧を(?:掲載|更新)|情報を更新")
+
+
+def _scrape_fukushima_sync() -> List[Dict]:
+    import urllib.request
+    from urllib.parse import urljoin
+    import html as _html
+    op = urllib.request.build_opener()
+    op.addheaders = [("User-Agent", "Mozilla/5.0")]
+    results, seen = [], set()
+    for p in range(1, _FUKUSHIMA_MAX_PAGES + 1):
+        try:
+            html_doc = op.open(f"{_FUKUSHIMA_BASE}list10-{p}.html", timeout=40).read().decode("utf-8", "replace")
+        except Exception:  # noqa: BLE001
+            break
+        rows = list(_FUKUSHIMA_ROW.finditer(html_doc))
+        if not rows:
+            break
+        for m in rows:
+            y, mo, d, href, raw, org = m.group(1), m.group(2), m.group(3), m.group(4), _html.unescape(m.group(5)).strip(), (m.group(6) or "").strip()
+            title = re.sub(r"^(?:【[^】]*】)+", "", raw).strip()
+            if _FUKUSHIMA_HUB.search(raw) or len(title) < 5:
+                continue
+            url = urljoin(_FUKUSHIMA_BASE, href)
+            if url in seen:
+                continue
+            seen.add(url)
+            pub = f"{int(y):04d}-{int(mo):02d}-{int(d):02d}"
+            is_result = bool(re.search(r"審査結果|選定結果|結果について|落札者|開札結果|選定しました|決定しました", raw))
+            cat = "プロポーザル" if re.search(r"プロポ|提案競技|企画競争|企画提案|公募型", raw) else "入札"
+            slug = re.sub(r"[^A-Za-z0-9]+", "-", href.rsplit("/", 1)[-1].replace(".html", "")).strip("-") or str(len(seen))
+            results.append({
+                "title": title, "category": cat,
+                "organization": f"福島県（{org}）" if org else "福島県", "prefecture": "福島県",
+                "published_at": "" if is_result else pub, "deadline": "",
+                "result_date": pub if is_result else "", "result_url": url if is_result else "",
+                "project_code": f"FUKUSHIMA-{'R-' if is_result else ''}{slug}", "awardee": "",
+                "awardee_checked": "1" if is_result else "",
+                "amount": "", "url": url, "source": "FUKUSHIMA",
+                "source_category": "入札結果" if is_result else "",
+                "summary": "", "detail": "", "tags": ",".join(generate_tags(title, org)),
+            })
+    logger.info(f"福島県: {len(results)}件取得")
+    return results
+
+
+async def scrape_fukushima() -> List[Dict]:
+    """福島県公式サイトの入札・契約情報（全部局集約）を取得する。"""
+    try:
+        return await asyncio.to_thread(_scrape_fukushima_sync)
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"福島県スクレイパー例外: {e}")
+        return []
+
+
+def fetch_fukushima_detail(url: str) -> Optional[Dict]:
+    """福島県 入札・公募 個別ページの本文を取得する。"""
+    import urllib.request
+    from urllib.parse import urljoin
+    try:
+        op = urllib.request.build_opener()
+        op.addheaders = [("User-Agent", "Mozilla/5.0")]
+        html_doc = op.open(url, timeout=40).read().decode("utf-8", "replace")
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"福島県詳細取得失敗 {url}: {e}")
+        return None
+    soup = BeautifulSoup(html_doc, "html.parser")
+    main = soup.find(id="tmp_contents") or soup.find(id="page-content") or soup.find("main") or soup
+    for tag in main.find_all(["script", "style", "nav", "header", "footer"]):
+        tag.decompose()
+    text = re.sub(r"\n{3,}", "\n\n", main.get_text("\n", strip=True))
+    attachments = []
+    for a in main.find_all("a", href=True):
+        if re.search(r"\.(pdf|docx?|xlsx?)($|\?)", a["href"], re.I):
+            name = re.sub(r"[（(][^）)]*(?:KB|MB|バイト)[）)]\s*$", "", a.get_text(" ", strip=True)).strip() or "添付資料"
+            attachments.append({"name": name, "url": urljoin(url, a["href"]), "kind": "公告文"})
+    return {"detail": text[:6000], "budget": "", "schedule": [], "attachments": attachments, "published_at": ""}
+
+
 def fetch_kochi_detail(url: str) -> Optional[Dict]:
     """高知県 入札公告 個別ページの本文を取得する。"""
     import urllib.request
@@ -7245,6 +7337,7 @@ async def run_all_scrapers(portal_date_from: str = "", jogmec_max_id: int = 0) -
         scrape_okinawa(),
         scrape_oita(),
         scrape_akita(),
+        scrape_fukushima(),
     ]
 
     scraped = await asyncio.gather(*tasks, return_exceptions=True)
