@@ -5771,6 +5771,95 @@ def fetch_gunma_detail(url: str) -> Optional[Dict]:
     return {"detail": text[:6000], "budget": "", "schedule": [], "attachments": attachments, "published_at": ""}
 
 
+# ---------------------------------------------------------------------------
+# 埼玉県（新規）。県公式「新着情報一覧 - 各種手続・入札」が全部局横断の集約フィード。
+# <li>M月D日<a href="/path.html">案件名</a>。年は無いので現在年から推定。企画提案競技中心。
+# ---------------------------------------------------------------------------
+_SAITAMA_BASE = "https://www.pref.saitama.lg.jp"
+_SAITAMA_LIST = _SAITAMA_BASE + "/kense/tetsuzuki/shinchaku/index.html"
+_SAITAMA_ROW = re.compile(r'<li>\s*(\d{1,2})月(\d{1,2})日\s*<a href="([^"]+)">([^<]+)</a>', re.S)
+
+
+def _scrape_saitama_sync() -> List[Dict]:
+    import urllib.request
+    from urllib.parse import urljoin
+    from datetime import date
+    import html as _html
+    op = urllib.request.build_opener()
+    op.addheaders = [("User-Agent", "Mozilla/5.0")]
+    try:
+        html_doc = op.open(_SAITAMA_LIST, timeout=40).read().decode("utf-8", "replace")
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"埼玉県一覧取得失敗: {e}")
+        return []
+    today = date.today()
+    results, seen = [], set()
+    for m in _SAITAMA_ROW.finditer(html_doc):
+        mo, d, href, raw = int(m.group(1)), int(m.group(2)), m.group(3), _html.unescape(m.group(4)).strip()
+        url = urljoin(_SAITAMA_BASE, href)
+        if url in seen:
+            continue
+        seen.add(url)
+        title = re.sub(r"^(?:【[^】]*】)+", "", raw).strip()
+        if len(title) < 5:
+            continue
+        try:
+            cand = date(today.year, mo, d)
+            if (cand - today).days > 30:
+                cand = date(today.year - 1, mo, d)
+        except ValueError:
+            continue
+        pub = cand.isoformat()
+        is_result = bool(re.search(r"結果|候補者の決定|落札者|開札結果|選定しました|決定しました", raw))
+        cat = "プロポーザル" if re.search(r"プロポ|提案競技|企画競争|企画提案|公募型", raw) else "入札"
+        slug = re.sub(r"[^A-Za-z0-9]+", "-", href.rsplit("/", 1)[-1].replace(".html", "")).strip("-") or str(len(seen))
+        results.append({
+            "title": title, "category": cat, "organization": "埼玉県", "prefecture": "埼玉県",
+            "published_at": "" if is_result else pub, "deadline": "",
+            "result_date": pub if is_result else "", "result_url": url if is_result else "",
+            "project_code": f"SAITAMA-{'R-' if is_result else ''}{slug}", "awardee": "",
+            "awardee_checked": "1" if is_result else "",
+            "amount": "", "url": url, "source": "SAITAMA",
+            "source_category": "入札結果" if is_result else "",
+            "summary": "", "detail": "", "tags": ",".join(generate_tags(title)),
+        })
+    logger.info(f"埼玉県: {len(results)}件取得")
+    return results
+
+
+async def scrape_saitama() -> List[Dict]:
+    """埼玉県公式サイトの新着情報一覧（各種手続・入札）を取得する。"""
+    try:
+        return await asyncio.to_thread(_scrape_saitama_sync)
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"埼玉県スクレイパー例外: {e}")
+        return []
+
+
+def fetch_saitama_detail(url: str) -> Optional[Dict]:
+    """埼玉県 入札・公募 個別ページの本文を取得する。"""
+    import urllib.request
+    from urllib.parse import urljoin
+    try:
+        op = urllib.request.build_opener()
+        op.addheaders = [("User-Agent", "Mozilla/5.0")]
+        html_doc = op.open(url, timeout=40).read().decode("utf-8", "replace")
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"埼玉県詳細取得失敗 {url}: {e}")
+        return None
+    soup = BeautifulSoup(html_doc, "html.parser")
+    main = soup.find(id="tmp_contents") or soup.find(id="page-content") or soup.find("main") or soup
+    for tag in main.find_all(["script", "style", "nav", "header", "footer"]):
+        tag.decompose()
+    text = re.sub(r"\n{3,}", "\n\n", main.get_text("\n", strip=True))
+    attachments = []
+    for a in main.find_all("a", href=True):
+        if re.search(r"\.(pdf|docx?|xlsx?)($|\?)", a["href"], re.I):
+            name = re.sub(r"[（(][^）)]*(?:KB|MB|バイト)[）)]\s*$", "", a.get_text(" ", strip=True)).strip() or "添付資料"
+            attachments.append({"name": name, "url": urljoin(url, a["href"]), "kind": "公告文"})
+    return {"detail": text[:6000], "budget": "", "schedule": [], "attachments": attachments, "published_at": ""}
+
+
 def fetch_kochi_detail(url: str) -> Optional[Dict]:
     """高知県 入札公告 個別ページの本文を取得する。"""
     import urllib.request
@@ -7523,6 +7612,7 @@ async def run_all_scrapers(portal_date_from: str = "", jogmec_max_id: int = 0) -
         scrape_fukushima(),
         scrape_tottori(),
         scrape_gunma(),
+        scrape_saitama(),
     ]
 
     scraped = await asyncio.gather(*tasks, return_exceptions=True)
