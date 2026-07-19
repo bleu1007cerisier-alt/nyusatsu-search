@@ -5680,6 +5680,97 @@ def fetch_tottori_detail(url: str) -> Optional[Dict]:
     return {"detail": text[:6000], "budget": "", "schedule": [], "attachments": attachments, "published_at": ""}
 
 
+# ---------------------------------------------------------------------------
+# 群馬県（新規）。県公式「入札／公売／公募」/site/nyuusatsu/ のカテゴリ別一覧
+# （大分・広島と同じ article_date/article_title CMS）。プロポ・委託・物品・落札情報。
+# ---------------------------------------------------------------------------
+_GUNMA_BASE = "https://www.pref.gunma.jp"
+_GUNMA_CATEGORIES = [
+    ("/site/nyuusatsu/list135-769.html", "土木・建築・設備", False),
+    ("/site/nyuusatsu/list135-770.html", "調査・委託", False),
+    ("/site/nyuusatsu/list135-771.html", "物品等", False),
+    ("/site/nyuusatsu/list135-773.html", "プロポーザル等", False),
+    ("/site/nyuusatsu/list135-772.html", "県有地等売払い・貸付", False),
+    ("/site/nyuusatsu/list135-774.html", "落札情報等", True),
+]
+_GUNMA_ROW = re.compile(
+    r'<span class="article_date">(\d{4})年(\d{1,2})月(\d{1,2})日</span>\s*'
+    r'<span class="article_title">\s*<a href="([^"]+)">([^<]+)</a>', re.S)
+
+
+def _scrape_gunma_sync() -> List[Dict]:
+    import urllib.request
+    from urllib.parse import urljoin
+    import html as _html
+    op = urllib.request.build_opener()
+    op.addheaders = [("User-Agent", "Mozilla/5.0")]
+    results, seen = [], set()
+    for path, cat_label, force_result in _GUNMA_CATEGORIES:
+        try:
+            html_doc = op.open(_GUNMA_BASE + path, timeout=40).read().decode("utf-8", "replace")
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"群馬県一覧取得失敗（{cat_label}）: {e}")
+            continue
+        for m in _GUNMA_ROW.finditer(html_doc):
+            y, mo, d, href, raw = m.group(1), m.group(2), m.group(3), m.group(4), _html.unescape(m.group(5)).strip()
+            url = urljoin(_GUNMA_BASE, href)
+            if url in seen:
+                continue
+            seen.add(url)
+            title = re.sub(r"^(?:【[^】]*】)+", "", raw).strip()
+            if len(title) < 5:
+                continue
+            pub = f"{int(y):04d}-{int(mo):02d}-{int(d):02d}"
+            is_result = force_result or bool(re.search(r"結果|落札者|開札結果|選定しました|決定しました", raw))
+            cat = "プロポーザル" if re.search(r"プロポ|提案競技|企画競争|企画提案|公募型", raw + cat_label) else "入札"
+            slug = re.sub(r"[^A-Za-z0-9]+", "-", href.rsplit("/", 1)[-1].replace(".html", "")).strip("-") or str(len(seen))
+            results.append({
+                "title": title, "category": cat, "organization": "群馬県", "prefecture": "群馬県",
+                "published_at": "" if is_result else pub, "deadline": "",
+                "result_date": pub if is_result else "", "result_url": url if is_result else "",
+                "project_code": f"GUNMA-{'R-' if is_result else ''}{slug}", "awardee": "",
+                "awardee_checked": "1" if is_result else "",
+                "amount": "", "url": url, "source": "GUNMA",
+                "source_category": (cat_label + " 結果") if (is_result and cat_label != "落札情報等") else cat_label,
+                "summary": "", "detail": "", "tags": ",".join(generate_tags(title)),
+            })
+    logger.info(f"群馬県: {len(results)}件取得")
+    return results
+
+
+async def scrape_gunma() -> List[Dict]:
+    """群馬県公式サイトの入札・公募情報（プロポ・委託・物品等）を取得する。"""
+    try:
+        return await asyncio.to_thread(_scrape_gunma_sync)
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"群馬県スクレイパー例外: {e}")
+        return []
+
+
+def fetch_gunma_detail(url: str) -> Optional[Dict]:
+    """群馬県 入札・公募 個別ページの本文を取得する。"""
+    import urllib.request
+    from urllib.parse import urljoin
+    try:
+        op = urllib.request.build_opener()
+        op.addheaders = [("User-Agent", "Mozilla/5.0")]
+        html_doc = op.open(url, timeout=40).read().decode("utf-8", "replace")
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"群馬県詳細取得失敗 {url}: {e}")
+        return None
+    soup = BeautifulSoup(html_doc, "html.parser")
+    main = soup.find(id="tmp_contents") or soup.find(id="page-content") or soup.find("main") or soup
+    for tag in main.find_all(["script", "style", "nav", "header", "footer"]):
+        tag.decompose()
+    text = re.sub(r"\n{3,}", "\n\n", main.get_text("\n", strip=True))
+    attachments = []
+    for a in main.find_all("a", href=True):
+        if re.search(r"\.(pdf|docx?|xlsx?)($|\?)", a["href"], re.I):
+            name = re.sub(r"[（(][^）)]*(?:KB|MB|バイト)[）)]\s*$", "", a.get_text(" ", strip=True)).strip() or "添付資料"
+            attachments.append({"name": name, "url": urljoin(url, a["href"]), "kind": "公告文"})
+    return {"detail": text[:6000], "budget": "", "schedule": [], "attachments": attachments, "published_at": ""}
+
+
 def fetch_kochi_detail(url: str) -> Optional[Dict]:
     """高知県 入札公告 個別ページの本文を取得する。"""
     import urllib.request
@@ -7431,6 +7522,7 @@ async def run_all_scrapers(portal_date_from: str = "", jogmec_max_id: int = 0) -
         scrape_akita(),
         scrape_fukushima(),
         scrape_tottori(),
+        scrape_gunma(),
     ]
 
     scraped = await asyncio.gather(*tasks, return_exceptions=True)
