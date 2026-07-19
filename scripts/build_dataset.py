@@ -249,7 +249,7 @@ from scraper import (  # noqa: E402
     fetch_osaka_detail, fetch_osaka_proposal_detail, fetch_fukuoka_detail,
     fetch_mie_detail, fetch_gifu_detail, fetch_yamanashi_detail, fetch_toyama_detail,
     fetch_nagano_detail, fetch_shizuoka_detail, fetch_fukui_detail, fetch_niigata_detail,
-    fetch_tochigi_detail, fetch_chiba_detail, fetch_kyoto_detail, fetch_hyogo_detail, fetch_shiga_detail, fetch_wakayama_detail, fetch_hiroshima_detail, fetch_okayama_detail, fetch_ehime_detail, fetch_kochi_detail, fetch_saga_detail, fetch_shimane_detail, fetch_kumamoto_detail, fetch_hokkaido_detail, fetch_tokushima_detail, fetch_nagasaki_detail, fetch_okinawa_detail, fetch_oita_detail, fetch_akita_detail, fetch_fukushima_detail,
+    fetch_tochigi_detail, fetch_chiba_detail, fetch_kyoto_detail, fetch_hyogo_detail, fetch_shiga_detail, fetch_wakayama_detail, fetch_hiroshima_detail, fetch_okayama_detail, fetch_ehime_detail, fetch_kochi_detail, fetch_saga_detail, fetch_shimane_detail, fetch_kumamoto_detail, fetch_hokkaido_detail, fetch_tokushima_detail, fetch_nagasaki_detail, fetch_okinawa_detail, fetch_oita_detail, fetch_akita_detail, fetch_fukushima_detail, fetch_tottori_detail,
 )
 from datetime import date, timedelta
 import storage  # noqa: E402
@@ -679,7 +679,7 @@ def main():
     # 本文に予算が無ければ公募要領PDFから補完。一度確認した案件は再取得しない。
     _FETCH_SOURCES = {"NEDO", "JST", "PORTAL", "JOGMEC", "AICHI", "TOKYO", "OSAKA", "FUKUOKA",
                        "MIE", "GIFU", "YAMANASHI", "TOYAMA", "NAGANO", "SHIZUOKA", "FUKUI", "NIIGATA",
-                       "TOCHIGI", "CHIBA", "KYOTO", "HYOGO", "SHIGA", "WAKAYAMA", "HIROSHIMA", "OKAYAMA", "EHIME", "KOCHI", "SAGA", "SHIMANE", "KUMAMOTO", "HOKKAIDO", "TOKUSHIMA", "NAGASAKI", "OKINAWA", "OITA", "AKITA", "FUKUSHIMA"}
+                       "TOCHIGI", "CHIBA", "KYOTO", "HYOGO", "SHIGA", "WAKAYAMA", "HIROSHIMA", "OKAYAMA", "EHIME", "KOCHI", "SAGA", "SHIMANE", "KUMAMOTO", "HOKKAIDO", "TOKUSHIMA", "NAGASAKI", "OKINAWA", "OITA", "AKITA", "FUKUSHIMA", "TOTTORI"}
 
     # PORTAL: ゴミ記号・ヘッダーのみの detail をリセット（→ 再取得 & AI要約の対象に）。
     # 空の detail は「取得済みだが portal 側に情報がない」ため再取得しない（無限ループ防止）。
@@ -716,7 +716,7 @@ def main():
     # PORTAL(数千件)が1回200件の枠を食い尽くし、県公募の本文・要約が埋まらない問題への対策。
     _FETCH_PRIORITY = {"AICHI": 0, "TOKYO": 0, "OSAKA": 0, "FUKUOKA": 0, "MIE": 0, "GIFU": 0,
                        "YAMANASHI": 0, "TOYAMA": 0, "NAGANO": 0, "SHIZUOKA": 0, "FUKUI": 0,
-                       "NIIGATA": 0, "TOCHIGI": 0, "CHIBA": 0, "KYOTO": 0, "HYOGO": 0, "SHIGA": 0, "WAKAYAMA": 0, "HIROSHIMA": 0, "OKAYAMA": 0, "EHIME": 0, "KOCHI": 0, "SAGA": 0, "SHIMANE": 0, "KUMAMOTO": 0, "HOKKAIDO": 0, "TOKUSHIMA": 0, "NAGASAKI": 0, "OKINAWA": 0, "OITA": 0, "AKITA": 0, "FUKUSHIMA": 0,
+                       "NIIGATA": 0, "TOCHIGI": 0, "CHIBA": 0, "KYOTO": 0, "HYOGO": 0, "SHIGA": 0, "WAKAYAMA": 0, "HIROSHIMA": 0, "OKAYAMA": 0, "EHIME": 0, "KOCHI": 0, "SAGA": 0, "SHIMANE": 0, "KUMAMOTO": 0, "HOKKAIDO": 0, "TOKUSHIMA": 0, "NAGASAKI": 0, "OKINAWA": 0, "OITA": 0, "AKITA": 0, "FUKUSHIMA": 0, "TOTTORI": 0,
                        "NEDO": 1, "JST": 1, "JOGMEC": 1, "PORTAL": 2}
     targets = _interleave_by_priority(targets, _FETCH_PRIORITY)
     print(f"概要/予算を取得（増分）: {min(len(targets), MAX_DETAIL_PER_RUN)}件")
@@ -794,6 +794,8 @@ def main():
             info = fetch_akita_detail(r["url"])
         elif src == "FUKUSHIMA":
             info = fetch_fukushima_detail(r["url"])
+        elif src == "TOTTORI":
+            info = fetch_tottori_detail(r["url"])
         else:
             info = fetch_nedo_detail(r["url"])  # 概要＋予算（本文→無ければPDF）＋予定
         if info:  # ページ取得成功
