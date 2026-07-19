@@ -5413,6 +5413,89 @@ def fetch_oita_detail(url: str) -> Optional[Dict]:
     return {"detail": text[:6000], "budget": "", "schedule": [], "attachments": attachments, "published_at": ""}
 
 
+# ---------------------------------------------------------------------------
+# 秋田県（新規）。美の国あきたネットの「コンペ情報」「その他の入札」ジャンル一覧。
+# <a href="/pages/archive/N">案件名</a> [<time datetime="YYYY-MM-DD">]。企画提案競技中心。
+# ---------------------------------------------------------------------------
+_AKITA_BASE = "https://www.pref.akita.lg.jp"
+_AKITA_GENRES = [("12231", "コンペ"), ("12229", "その他入札")]
+_AKITA_ROW = re.compile(
+    r'<a href="([^"]*?/pages/archive/\d+)"[^>]*>([^<]+)</a>\s*(?:&nbsp;)?\s*'
+    r'\[<time datetime="(\d{4}-\d{2}-\d{2})"', re.S)
+
+
+def _scrape_akita_sync() -> List[Dict]:
+    import urllib.request
+    from urllib.parse import urljoin
+    import html as _html
+    op = urllib.request.build_opener()
+    op.addheaders = [("User-Agent", "Mozilla/5.0")]
+    results, seen = [], set()
+    for genre, cat_label in _AKITA_GENRES:
+        try:
+            html_doc = op.open(f"{_AKITA_BASE}/pages/genre/{genre}", timeout=40).read().decode("utf-8", "replace")
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"秋田県一覧取得失敗（{cat_label}）: {e}")
+            continue
+        for m in _AKITA_ROW.finditer(html_doc):
+            href, raw, pub = m.group(1), _html.unescape(m.group(2)).strip(), m.group(3)
+            url = urljoin(_AKITA_BASE, href)
+            if url in seen:
+                continue
+            seen.add(url)
+            title = re.sub(r"^(?:【[^】]*】)+", "", raw).strip()
+            if len(title) < 5:
+                continue
+            is_result = bool(re.search(r"審査結果|選定結果|結果について|落札者|開札結果|選定しました|決定しました", raw))
+            cat = "プロポーザル" if re.search(r"プロポ|企画提案|提案競技|企画競争|コンペ|公募型", raw + cat_label) else "入札"
+            slug = re.sub(r"[^0-9]", "", href.rsplit("/", 1)[-1]) or str(len(seen))
+            results.append({
+                "title": title, "category": cat, "organization": "秋田県", "prefecture": "秋田県",
+                "published_at": "" if is_result else pub, "deadline": "",
+                "result_date": pub if is_result else "", "result_url": url if is_result else "",
+                "project_code": f"AKITA-{'R-' if is_result else ''}{slug}", "awardee": "",
+                "awardee_checked": "1" if is_result else "",
+                "amount": "", "url": url, "source": "AKITA",
+                "source_category": (cat_label + " 結果") if is_result else cat_label,
+                "summary": "", "detail": "", "tags": ",".join(generate_tags(title)),
+            })
+    logger.info(f"秋田県: {len(results)}件取得")
+    return results
+
+
+async def scrape_akita() -> List[Dict]:
+    """秋田県公式サイト（美の国あきたネット）のコンペ・入札情報を取得する。"""
+    try:
+        return await asyncio.to_thread(_scrape_akita_sync)
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"秋田県スクレイパー例外: {e}")
+        return []
+
+
+def fetch_akita_detail(url: str) -> Optional[Dict]:
+    """秋田県 コンペ・入札 個別ページの本文を取得する。"""
+    import urllib.request
+    from urllib.parse import urljoin
+    try:
+        op = urllib.request.build_opener()
+        op.addheaders = [("User-Agent", "Mozilla/5.0")]
+        html_doc = op.open(url, timeout=40).read().decode("utf-8", "replace")
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"秋田県詳細取得失敗 {url}: {e}")
+        return None
+    soup = BeautifulSoup(html_doc, "html.parser")
+    main = soup.find(id="tmp_contents") or soup.find(id="page-content") or soup.find("main") or soup
+    for tag in main.find_all(["script", "style", "nav", "header", "footer"]):
+        tag.decompose()
+    text = re.sub(r"\n{3,}", "\n\n", main.get_text("\n", strip=True))
+    attachments = []
+    for a in main.find_all("a", href=True):
+        if re.search(r"\.(pdf|docx?|xlsx?)($|\?)", a["href"], re.I):
+            name = re.sub(r"[（(][^）)]*(?:KB|MB|バイト)[）)]\s*$", "", a.get_text(" ", strip=True)).strip() or "添付資料"
+            attachments.append({"name": name, "url": urljoin(url, a["href"]), "kind": "公告文"})
+    return {"detail": text[:6000], "budget": "", "schedule": [], "attachments": attachments, "published_at": ""}
+
+
 def fetch_kochi_detail(url: str) -> Optional[Dict]:
     """高知県 入札公告 個別ページの本文を取得する。"""
     import urllib.request
@@ -7161,6 +7244,7 @@ async def run_all_scrapers(portal_date_from: str = "", jogmec_max_id: int = 0) -
         scrape_nagasaki(),
         scrape_okinawa(),
         scrape_oita(),
+        scrape_akita(),
     ]
 
     scraped = await asyncio.gather(*tasks, return_exceptions=True)
