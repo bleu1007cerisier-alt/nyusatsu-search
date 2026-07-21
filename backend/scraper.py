@@ -6317,7 +6317,9 @@ def _scrape_supercals_ppi(cfg: Dict) -> List[Dict]:
     pref, source = cfg["pref"], cfg["source"]
     today = date.today()
     lo = today - timedelta(days=cfg.get("window_days", 90))
-    bs, be = lo.strftime("%Y/%m/%d"), today.strftime("%Y/%m/%d")
+    # 一部県(鹿児島)は検索日付範囲が「入札予定日」を絞るため、BidEnDateを未来へ延ばす必要がある
+    hi = today + timedelta(days=cfg.get("bid_end_days_ahead", 0))
+    bs, be = lo.strftime("%Y/%m/%d"), hi.strftime("%Y/%m/%d")
     fy = today.year if today.month >= 4 else today.year - 1
     status_open = cfg.get("status_open")
     status_col = cfg.get("status_col", 4)
@@ -6503,6 +6505,29 @@ async def scrape_miyazaki() -> List[Dict]:
         return await asyncio.to_thread(_scrape_supercals_ppi, _MIYAZAKI_CALS_CFG)
     except Exception as e:  # noqa: BLE001
         logger.error(f"宮崎県スクレイパー例外: {e}")
+        return []
+
+
+# 鹿児島県（新規）。かごしま県市町村共同 電子入札(SuperCALS)。県本体 KikanNO=46000。
+# ★弱DH鍵のため ssl_seclevel1 必須。運用8:30-20:00(平日)。列: 案件名=col2 / 入札予定日=col1。
+# 公告日窓が効かない(公告は年度初で入札予定は数ヶ月後)ため広い窓＋open_only(入札予定日≥今日)。
+_KAGOSHIMA_CALS_CFG = {
+    "ej": "https://www.kagoshima-nyusatsu.jp/ebidPPIPublish/EjPPIj",
+    "kikan": "46000",
+    "pref": "鹿児島県", "source": "KAGOSHIMA",
+    "choutatsu": [("00", "工事"), ("01", "測量・コンサル")],
+    "window_days": 30, "bid_end_days_ahead": 210, "max_detail": 0,
+    "title_col": 2, "list_deadline_col": 1, "open_deadline_col": 1,
+    "open_only": True, "ssl_seclevel1": True,
+}
+
+
+async def scrape_kagoshima() -> List[Dict]:
+    """鹿児島県 電子入札システム（SuperCALS）の現在公告中の入札を取得する。"""
+    try:
+        return await asyncio.to_thread(_scrape_supercals_ppi, _KAGOSHIMA_CALS_CFG)
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"鹿児島県スクレイパー例外: {e}")
         return []
 
 
@@ -7698,6 +7723,7 @@ async def run_all_scrapers(portal_date_from: str = "", jogmec_max_id: int = 0) -
         scrape_gunma(),
         scrape_saitama(),
         scrape_iwate(),
+        scrape_kagoshima(),
     ]
 
     scraped = await asyncio.gather(*tasks, return_exceptions=True)
