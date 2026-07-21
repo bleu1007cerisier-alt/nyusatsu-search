@@ -5944,6 +5944,90 @@ def fetch_iwate_detail(url: str) -> Optional[Dict]:
     return {"detail": text[:6000], "budget": "", "schedule": [], "attachments": attachments, "published_at": ""}
 
 
+# ---------------------------------------------------------------------------
+# 香川県（新規）。県公式「ページ 一覧（入札）」cgi。テーブル形式で全部局横断。
+# <td>N.</td><td>YYYY年M月D日</td><td><a href>案件名</a></td><td>部局</td>。
+# ---------------------------------------------------------------------------
+_KAGAWA_BASE = "https://www.pref.kagawa.lg.jp"
+_KAGAWA_LIST = _KAGAWA_BASE + "/cgi-bin/page/list.php?tpl_type=2&page_type=5"
+_KAGAWA_ROW = re.compile(
+    r'<td>\s*\d+\.?\s*</td>\s*<td>\s*(\d{4})年(\d{1,2})月(\d{1,2})日\s*</td>\s*'
+    r'<td>\s*<a href\s*=\s*"([^"]+)"\s*>([^<]+)</a>\s*</td>\s*<td>([^<]*)</td>', re.S)
+
+
+def _scrape_kagawa_sync() -> List[Dict]:
+    import urllib.request
+    from urllib.parse import urljoin
+    import html as _html
+    op = urllib.request.build_opener()
+    op.addheaders = [("User-Agent", "Mozilla/5.0")]
+    try:
+        html_doc = op.open(_KAGAWA_LIST, timeout=40).read().decode("utf-8", "replace")
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"香川県一覧取得失敗: {e}")
+        return []
+    results, seen = [], set()
+    for m in _KAGAWA_ROW.finditer(html_doc):
+        y, mo, d, href, raw, org = m.group(1), m.group(2), m.group(3), m.group(4), _html.unescape(m.group(5)).strip(), _html.unescape(m.group(6)).strip()
+        url = urljoin(_KAGAWA_BASE, href)
+        if url in seen:
+            continue
+        seen.add(url)
+        title = re.sub(r"^(?:【[^】]*】)+", "", raw).strip()
+        if len(title) < 5:
+            continue
+        pub = f"{int(y):04d}-{int(mo):02d}-{int(d):02d}"
+        is_result = bool(re.search(r"結果|落札者|開札結果|選定しました|決定しました|候補者", raw))
+        cat = "プロポーザル" if re.search(r"プロポ|企画提案|企画競争|提案競技|公募型", raw) else "入札"
+        slug = re.sub(r"[^A-Za-z0-9]+", "-", href.rsplit("/", 1)[-1].replace(".html", "")).strip("-") or str(len(seen))
+        results.append({
+            "title": title, "category": cat,
+            "organization": f"香川県（{org}）" if org else "香川県", "prefecture": "香川県",
+            "published_at": "" if is_result else pub, "deadline": "",
+            "result_date": pub if is_result else "", "result_url": url if is_result else "",
+            "project_code": f"KAGAWA-{'R-' if is_result else ''}{slug}", "awardee": "",
+            "awardee_checked": "1" if is_result else "",
+            "amount": "", "url": url, "source": "KAGAWA",
+            "source_category": "入札結果" if is_result else "",
+            "summary": "", "detail": "", "tags": ",".join(generate_tags(title, org)),
+        })
+    logger.info(f"香川県: {len(results)}件取得")
+    return results
+
+
+async def scrape_kagawa() -> List[Dict]:
+    """香川県公式サイトの入札一覧（全部局横断）を取得する。"""
+    try:
+        return await asyncio.to_thread(_scrape_kagawa_sync)
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"香川県スクレイパー例外: {e}")
+        return []
+
+
+def fetch_kagawa_detail(url: str) -> Optional[Dict]:
+    """香川県 入札・公募 個別ページの本文を取得する。"""
+    import urllib.request
+    from urllib.parse import urljoin
+    try:
+        op = urllib.request.build_opener()
+        op.addheaders = [("User-Agent", "Mozilla/5.0")]
+        html_doc = op.open(url, timeout=40).read().decode("utf-8", "replace")
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"香川県詳細取得失敗 {url}: {e}")
+        return None
+    soup = BeautifulSoup(html_doc, "html.parser")
+    main = soup.find(id="tmp_contents") or soup.find(id="main") or soup.find("main") or soup
+    for tag in main.find_all(["script", "style", "nav", "header", "footer"]):
+        tag.decompose()
+    text = re.sub(r"\n{3,}", "\n\n", main.get_text("\n", strip=True))
+    attachments = []
+    for a in main.find_all("a", href=True):
+        if re.search(r"\.(pdf|docx?|xlsx?)($|\?)", a["href"], re.I):
+            name = re.sub(r"[（(][^）)]*(?:KB|MB|バイト)[）)]\s*$", "", a.get_text(" ", strip=True)).strip() or "添付資料"
+            attachments.append({"name": name, "url": urljoin(url, a["href"]), "kind": "公告文"})
+    return {"detail": text[:6000], "budget": "", "schedule": [], "attachments": attachments, "published_at": ""}
+
+
 def fetch_kochi_detail(url: str) -> Optional[Dict]:
     """高知県 入札公告 個別ページの本文を取得する。"""
     import urllib.request
@@ -7724,6 +7808,7 @@ async def run_all_scrapers(portal_date_from: str = "", jogmec_max_id: int = 0) -
         scrape_saitama(),
         scrape_iwate(),
         scrape_kagoshima(),
+        scrape_kagawa(),
     ]
 
     scraped = await asyncio.gather(*tasks, return_exceptions=True)
