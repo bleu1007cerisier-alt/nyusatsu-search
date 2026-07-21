@@ -6028,6 +6028,105 @@ def fetch_kagawa_detail(url: str) -> Optional[Dict]:
     return {"detail": text[:6000], "budget": "", "schedule": [], "attachments": attachments, "published_at": ""}
 
 
+# ---------------------------------------------------------------------------
+# 青森県（新規）。青森県建設業ポータル配下の Oracle mod_plsql 入札情報検索。
+# koji_nyus_sel2(工事)/con_nyus_sel2(委託) に POST。発注者=*******(全)/場所=***/方式=*/
+# 評価=* ＋ 公告日は空・入札日を年月指定(なし選択肢が無く年月必須。日=d全部)で結果取得。
+# 一覧: 発注者/入札方式/総合評価/実施公告日/入札執行日(全角M月D日)/工事番号/工事名(A link)。
+# ★一覧に「年」が無いため会計年度で推定＋入札執行日が今日〜+120日の開札前のみ採用、
+#   中止/不調/取止は除外して品質を確保。詳細=NYUS_RESULT1?p_ktuban=。
+# ---------------------------------------------------------------------------
+_AOMORI_BASE = "http://pub.pref.aomori.lg.jp/pls/doboku/"
+_AOMORI_ZEN = str.maketrans("０１２３４５６７８９", "0123456789")
+_AOMORI_CANCEL = re.compile(r"中止|不調|取止|取り止|取りやめ|中断|延期")
+_AOMORI_ENDPOINTS = [("koji_nyus_sel2", "工事"), ("con_nyus_sel2", "委託")]
+_AOMORI_FORWARD_DAYS = 120
+
+
+def _scrape_aomori_sync() -> List[Dict]:
+    import urllib.request
+    import ssl as _ssl
+    import urllib.parse
+    from urllib.parse import urljoin
+    from datetime import date, timedelta
+    import html as _html
+    ctx = _ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = _ssl.CERT_NONE
+    op = urllib.request.build_opener(urllib.request.HTTPSHandler(context=ctx))
+    op.addheaders = [("User-Agent", "Mozilla/5.0")]
+    today = date.today()
+    hi = today + timedelta(days=_AOMORI_FORWARD_DAYS)
+    cur_fy = today.year if today.month >= 4 else today.year - 1
+
+    def fy_year(mo):  # 令和年度(4月始まり)で年を推定
+        return cur_fy if mo >= 4 else cur_fy + 1
+
+    def post(ep, ny, nm):
+        p = {"p_hattyu": "*******", "p_koji_basyo": "***", "p_nyus_hoshiki": "*", "p_hyoka": "*",
+             "p_koukoku_year": "", "p_koukoku_month": "", "p_koukoku_day": "d",
+             "p_nyus_year": ny, "p_nyus_month": nm, "p_nyus_day": "d"}
+        data = urllib.parse.urlencode(p, encoding="cp932").encode()
+        req = urllib.request.Request(_AOMORI_BASE + ep, data=data, headers={"User-Agent": "Mozilla/5.0"})
+        return op.open(req, timeout=60).read().decode("cp932", "replace")
+
+    results, seen = [], set()
+    for ep, cd_label in _AOMORI_ENDPOINTS:
+        try:
+            # 入札日フィルタは実質効かず全件返る。年月指定でデータを引き出し、client側で絞る。
+            html_doc = post(ep, str(cur_fy), f"{today.month:02d}")
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"青森県取得失敗（{cd_label}）: {e}")
+            continue
+        for tr in re.findall(r"<tr[^>]*>(.*?)</tr>", html_doc, re.S | re.I):
+            tds = re.findall(r"<td[^>]*>(.*?)</td>", tr, re.S | re.I)
+            if len(tds) < 7:
+                continue
+            c = [re.sub(r"\s+", " ", _html.unescape(re.sub(r"<[^>]+>", " ", t))).translate(_AOMORI_ZEN).strip() for t in tds]
+            dm = re.search(r"(\d{1,2})月(\d{1,2})日", c[4])  # 入札執行日
+            kno = re.search(r"p_ktuban=(\d+)", tds[6]) or re.search(r"p_ktuban=(\d+)", tds[5])
+            if not dm or not kno:
+                continue
+            title = c[6].strip()
+            if len(title) < 4 or _AOMORI_CANCEL.search(title):
+                continue
+            mo, d = int(dm.group(1)), int(dm.group(2))
+            try:
+                bid = date(fy_year(mo), mo, d)
+            except ValueError:
+                continue
+            if not (today <= bid <= hi):  # 開札前かつ近未来のみ（年推定の誤りを抑制）
+                continue
+            key = kno.group(1)
+            if key in seen:
+                continue
+            seen.add(key)
+            org = {"東青": "東青地域", "中南": "中南地域", "三八": "三八地域", "西北": "西北地域",
+                   "上北": "上北地域", "下北": "下北地域"}.get(c[0], c[0])
+            cat = "プロポーザル" if re.search(r"プロポ|企画提案|企画競争|公募型", title) else "入札"
+            results.append({
+                "title": title, "category": cat,
+                "organization": f"青森県（{org}）" if org else "青森県", "prefecture": "青森県",
+                "published_at": "", "deadline": bid.isoformat(),
+                "result_date": "", "result_url": "",
+                "project_code": f"AOMORI-{key}", "awardee": "", "awardee_checked": "",
+                "amount": "", "url": urljoin(_AOMORI_BASE, f"NYUS_RESULT1?p_ktuban={key}"),
+                "source": "AOMORI", "source_category": cd_label,
+                "summary": "", "detail": "", "tags": ",".join(generate_tags(title)),
+            })
+    logger.info(f"青森県: {len(results)}件取得")
+    return results
+
+
+async def scrape_aomori() -> List[Dict]:
+    """青森県 建設工事・委託の入札情報（現在開札前）を取得する。"""
+    try:
+        return await asyncio.to_thread(_scrape_aomori_sync)
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"青森県スクレイパー例外: {e}")
+        return []
+
+
 def fetch_kochi_detail(url: str) -> Optional[Dict]:
     """高知県 入札公告 個別ページの本文を取得する。"""
     import urllib.request
@@ -7809,6 +7908,7 @@ async def run_all_scrapers(portal_date_from: str = "", jogmec_max_id: int = 0) -
         scrape_iwate(),
         scrape_kagoshima(),
         scrape_kagawa(),
+        scrape_aomori(),
     ]
 
     scraped = await asyncio.gather(*tasks, return_exceptions=True)
