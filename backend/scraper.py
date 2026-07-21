@@ -5860,6 +5860,90 @@ def fetch_saitama_detail(url: str) -> Optional[Dict]:
     return {"detail": text[:6000], "budget": "", "schedule": [], "attachments": attachments, "published_at": ""}
 
 
+# ---------------------------------------------------------------------------
+# 岩手県（新規）。県公式「入札・公募 新着更新情報一覧」/news/1016275.html が全部局横断
+# の集約フィード。<li class="box"><span class="date">令和X年Y月Z日</span>…<span class="newsli">
+# <a href>案件名</a>。※日付は令和表記（20\d\d正規表現では拾えない点に注意）。
+# ---------------------------------------------------------------------------
+_IWATE_BASE = "https://www.pref.iwate.jp"
+_IWATE_LIST = _IWATE_BASE + "/news/1016275.html"
+_IWATE_ROW = re.compile(
+    r'<li class="box">\s*<span class="date">令和(\d+)年(\d{1,2})月(\d{1,2})日</span>'
+    r'.*?<span class="newsli">\s*<a href="([^"]+)">([^<]+)</a>', re.S)
+
+
+def _scrape_iwate_sync() -> List[Dict]:
+    import urllib.request
+    from urllib.parse import urljoin
+    import html as _html
+    op = urllib.request.build_opener()
+    op.addheaders = [("User-Agent", "Mozilla/5.0")]
+    try:
+        html_doc = op.open(_IWATE_LIST, timeout=40).read().decode("utf-8", "replace")
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"岩手県一覧取得失敗: {e}")
+        return []
+    results, seen = [], set()
+    for m in _IWATE_ROW.finditer(html_doc):
+        y, mo, d, href, raw = int(m.group(1)), int(m.group(2)), int(m.group(3)), m.group(4), _html.unescape(m.group(5)).strip()
+        url = urljoin(_IWATE_LIST, href)
+        if url in seen:
+            continue
+        seen.add(url)
+        title = re.sub(r"^(?:【[^】]*】)+", "", raw).strip()
+        if len(title) < 5:
+            continue
+        pub = f"{2018 + y:04d}-{mo:02d}-{d:02d}"
+        is_result = bool(re.search(r"審査|選考|結果|落札者|開札結果|決定しました|選定しました", raw))
+        cat = "プロポーザル" if re.search(r"プロポ|企画提案|企画競争|提案競技|公募型|コンペ", raw) else "入札"
+        slug = re.sub(r"[^0-9]", "", href.rsplit("/", 1)[-1]) or str(len(seen))
+        results.append({
+            "title": title, "category": cat, "organization": "岩手県", "prefecture": "岩手県",
+            "published_at": "" if is_result else pub, "deadline": "",
+            "result_date": pub if is_result else "", "result_url": url if is_result else "",
+            "project_code": f"IWATE-{'R-' if is_result else ''}{slug}", "awardee": "",
+            "awardee_checked": "1" if is_result else "",
+            "amount": "", "url": url, "source": "IWATE",
+            "source_category": "入札結果" if is_result else "",
+            "summary": "", "detail": "", "tags": ",".join(generate_tags(title)),
+        })
+    logger.info(f"岩手県: {len(results)}件取得")
+    return results
+
+
+async def scrape_iwate() -> List[Dict]:
+    """岩手県公式サイトの入札・公募 新着更新情報一覧（全部局集約）を取得する。"""
+    try:
+        return await asyncio.to_thread(_scrape_iwate_sync)
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"岩手県スクレイパー例外: {e}")
+        return []
+
+
+def fetch_iwate_detail(url: str) -> Optional[Dict]:
+    """岩手県 入札・公募 個別ページの本文を取得する。"""
+    import urllib.request
+    from urllib.parse import urljoin
+    try:
+        op = urllib.request.build_opener()
+        op.addheaders = [("User-Agent", "Mozilla/5.0")]
+        html_doc = op.open(url, timeout=40).read().decode("utf-8", "replace")
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"岩手県詳細取得失敗 {url}: {e}")
+        return None
+    soup = BeautifulSoup(html_doc, "html.parser")
+    main = soup.find(id="voice") or soup.find("main") or soup.find(id="pagebody") or soup
+    for tag in main.find_all(["script", "style", "nav", "header", "footer"]):
+        tag.decompose()
+    text = re.sub(r"\n{3,}", "\n\n", main.get_text("\n", strip=True))
+    attachments = []
+    for a in main.find_all("a", href=True):
+        if re.search(r"\.(pdf|docx?|xlsx?)($|\?)", a["href"], re.I):
+            name = re.sub(r"[（(][^）)]*(?:KB|MB|バイト)[）)]\s*$", "", a.get_text(" ", strip=True)).strip() or "添付資料"
+            attachments.append({"name": name, "url": urljoin(url, a["href"]), "kind": "公告文"})
+    return {"detail": text[:6000], "budget": "", "schedule": [], "attachments": attachments, "published_at": ""}
+
+
 def fetch_kochi_detail(url: str) -> Optional[Dict]:
     """高知県 入札公告 個別ページの本文を取得する。"""
     import urllib.request
@@ -7613,6 +7697,7 @@ async def run_all_scrapers(portal_date_from: str = "", jogmec_max_id: int = 0) -
         scrape_tottori(),
         scrape_gunma(),
         scrape_saitama(),
+        scrape_iwate(),
     ]
 
     scraped = await asyncio.gather(*tasks, return_exceptions=True)
