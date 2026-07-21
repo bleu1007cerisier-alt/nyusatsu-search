@@ -6824,14 +6824,17 @@ def _scrape_efftis_struts(cfg: Dict) -> List[Dict]:
             h = get(f"{base}PPUBC00100!link?screenId={screen}&chotatsu_kbn={kbn}&organizationNumber={org}")
             params, fm = harvest(h, screen)
             params["kensakuJoken.selNendo"] = fy
-            params.update({
-                "kensakuJoken.textKoukokuFromYear": str(lo.year),
-                "kensakuJoken.textKoukokuFromMonth": str(lo.month),
-                "kensakuJoken.textKoukokuFromDay": str(lo.day),
-                "kensakuJoken.textKoukokuToYear": str(today.year),
-                "kensakuJoken.textKoukokuToMonth": str(today.month),
-                "kensakuJoken.textKoukokuToDay": str(today.day),
-            })
+            # 富山型は公告日range(textフィールド)で絞る。奈良型(direct_list)はこのtextフィールドが
+            # 検索を破壊する(0件化)ため設定しない。年度selectのみで現年度を出す。
+            if not cfg.get("direct_list"):
+                params.update({
+                    "kensakuJoken.textKoukokuFromYear": str(lo.year),
+                    "kensakuJoken.textKoukokuFromMonth": str(lo.month),
+                    "kensakuJoken.textKoukokuFromDay": str(lo.day),
+                    "kensakuJoken.textKoukokuToYear": str(today.year),
+                    "kensakuJoken.textKoukokuToMonth": str(today.month),
+                    "kensakuJoken.textKoukokuToDay": str(today.day),
+                })
             shudan = re.findall(r'name="kensakuJoken.nyusatsuShudanList"[^>]*value="([^"]*)"', fm)
             search_pairs = [(k, v) for k, v in params.items()] + \
                 [("kensakuJoken.nyusatsuShudanList", s) for s in shudan] + [("method:search", "検索")]
@@ -6840,22 +6843,12 @@ def _scrape_efftis_struts(cfg: Dict) -> List[Dict]:
             logger.error(f"{pref}(efftis)検索失敗（{label}）: {e}")
             continue
 
-        p2, _ = harvest(summary, screen)
-        for seni in seni_open:
-            try:
-                p2b = dict(p2)
-                p2b["seniKbn"] = seni
-                lst = post(f"{base}{screen}!link", [(k, v) for k, v in p2b.items()])
-            except Exception as e:  # noqa: BLE001
-                logger.error(f"{pref}(efftis)一覧取得失敗（{label}/seni{seni}）: {e}")
-                continue
-
+        def parse_list(lst, label):
             pend = None
             for tr in re.findall(r"<tr[^>]*>(.*?)</tr>", lst, re.S | re.I):
                 anc = re.search(r"link\('(\d+)',\s*'(\d+)',\s*'([^']+)'\)[^>]*>\s*([^<]+?)\s*</a>", tr)
                 c = cells(tr)
                 if anc:
-                    # 直前案件がrow3未取得のまま次案件に来たら破棄（不完全）
                     pend = {
                         "keiyakuNo": anc.group(3),
                         "title": re.sub(r"\s+", " ", _html.unescape(anc.group(4))).strip(),
@@ -6863,10 +6856,12 @@ def _scrape_efftis_struts(cfg: Dict) -> List[Dict]:
                         "gyoshu": c[3] if len(c) > 3 else label,
                         "published": "", "deadline": "", "_done": False,
                     }
-                elif pend is not None and not pend["_done"] and len(c) >= 4 and re.search(r"電子|郵便|紙", c[1]):
-                    # row3: [場所, 入札手段, 公告日, 開札予定日]
-                    pend["published"] = _efftis_wareki(c[2])
-                    pend["deadline"] = _efftis_wareki(c[3])
+                elif pend is not None and not pend["_done"] and any(re.search(r"電子|郵便|紙", x) and len(x) <= 6 for x in c):
+                    # row3の入札手段セル(電子/紙/電子・紙)を探し、その後ろ2セル=公告日・開札予定日。
+                    # 富山型[場所,電子,公告日,開札日]と奈良型[電子,公告日,開札日]の両対応。
+                    hi = next(i for i, x in enumerate(c) if re.search(r"電子|郵便|紙", x) and len(x) <= 6)
+                    pend["published"] = _efftis_wareki(c[hi + 1]) if hi + 1 < len(c) else ""
+                    pend["deadline"] = _efftis_wareki(c[hi + 2]) if hi + 2 < len(c) else ""
                     pend["_done"] = True
                     if open_only and pend["deadline"] and pend["deadline"] < today.isoformat():
                         pend = None
@@ -6876,8 +6871,9 @@ def _scrape_efftis_struts(cfg: Dict) -> List[Dict]:
                         pend = None
                         continue
                     slug = hashlib.md5((source + pend["keiyakuNo"]).encode("utf-8")).hexdigest()[:12]
+                    cat = "プロポーザル" if re.search(r"プロポ|企画提案|企画競争|公募型", title) else "入札"
                     results.append({
-                        "title": title, "category": "入札",
+                        "title": title, "category": cat,
                         "organization": pend["org"] or pref, "prefecture": pref,
                         "published_at": pend["published"], "deadline": pend["deadline"],
                         "result_date": "", "result_url": "",
@@ -6889,6 +6885,22 @@ def _scrape_efftis_struts(cfg: Dict) -> List[Dict]:
                         "tags": ",".join(generate_tags(title, pend["org"] or pref)),
                     })
                     pend = None
+
+        if cfg.get("direct_list"):
+            # 奈良型: method:search の応答が案件一覧そのもの（seniKbnドリルダウン無し）
+            parse_list(summary, label)
+            continue
+        # 富山型: 検索応答はステータス別サマリ → seniKbnで実案件一覧へドリルダウン
+        p2, _ = harvest(summary, screen)
+        for seni in seni_open:
+            try:
+                p2b = dict(p2)
+                p2b["seniKbn"] = seni
+                lst = post(f"{base}{screen}!link", [(k, v) for k, v in p2b.items()])
+            except Exception as e:  # noqa: BLE001
+                logger.error(f"{pref}(efftis)一覧取得失敗（{label}/seni{seni}）: {e}")
+                continue
+            parse_list(lst, label)
     logger.info(f"{pref} 建設(efftis): {len(results)}件取得")
     return results
 
