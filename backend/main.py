@@ -569,6 +569,9 @@ DEV_SOURCES = [
     {"code": "KYOTO", "label": "京都府",
      "url": "https://www.pref.kyoto.jp/shinchaku/nyusatsu/index.html",
      "desc": "京都府の入札・プロポーザル情報"},
+    {"code": "NARA", "label": "奈良県",
+     "url": "https://ppi.ebid-kouji-gyoumu.pref.nara.jp/DENCHO/PPJ/PPJ0020_0010/",
+     "desc": "奈良県の入札公告（工事・コンサル／入札情報サービス）"},
 ]
 
 
