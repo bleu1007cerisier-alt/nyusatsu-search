@@ -3021,6 +3021,8 @@ def _scrape_yamanashi_sync() -> List[Dict]:
                 continue
             seen.add(full)
             title = title.strip()
+            if title in _COMMON_SITE_NAV:  # サイト共通ナビ（案件でない）を除外
+                continue
             cat = "プロポーザル" if re.search(r"プロポーザル|企画提案|企画競争", title) else "入札"
             slug = re.sub(r"[^A-Za-z0-9]+", "-", href.rsplit("/", 1)[-1]).strip("-")
             results.append({
@@ -3097,6 +3099,27 @@ _TOYAMA_SOURCES = [
 ]
 
 
+# ページ本文に混在する県公式サイトのグローバルナビ（案件ではない）を除外する。
+# 旧実装はページ内の <li><a> を無差別に取得し「リンク集」「庁舎案内」「入札公告（工事…）」等の
+# ナビ項目を偽の案件として登録していた（富山32・山梨2の日付皆無ゴミ）。文言ブロックリストで除去。
+_COMMON_SITE_NAV = {
+    "庁舎案内", "リンク集", "サイトマップ", "よくある質問", "個人情報について",
+    "ご意見・ご質問", "県ウェブサイトの考え方", "県ウェブサイトの使い方",
+    "お知らせ", "ダウンロード", "動作環境について",
+}
+_TOYAMA_NAV_EXACT = _COMMON_SITE_NAV | {
+    "募集", "結果", "その他", "電子入札について", "電子入札の流れ",
+    "物品等電子入札質問フォーム", "オープンカウンター縦覧情報", "富山県物品等電子入札Webサイト",
+}
+_TOYAMA_NAV_RE = re.compile(
+    r"^入札(発注見込み|結果|公告)（|電子入札.{0,4}(web|Web|ウェブ)?サイト|^富山県.{0,10}電子入札")
+
+
+def _toyama_is_nav(title: str) -> bool:
+    t = (title or "").strip()
+    return t in _TOYAMA_NAV_EXACT or bool(_TOYAMA_NAV_RE.search(t))
+
+
 def _toyama_pub_date_iso(title: str) -> str:
     """タイトル先頭の【令和X年M月D日公告】等から公告日を抽出する（複数付く場合は「公告」表記を優先）。"""
     matches = re.findall(r"令和\s*(\d+)\s*年\s*(\d+)\s*月\s*(\d+)\s*日\s*(公告)?", title)
@@ -3130,6 +3153,8 @@ def _scrape_toyama_sync() -> List[Dict]:
                 continue
             seen.add(full)
             title = title.strip()
+            if _toyama_is_nav(title):  # ページ内ナビ（案件でない）を除外
+                continue
             slug = re.sub(r"[^A-Za-z0-9]+", "-", href.rsplit("/", 1)[-1]).strip("-")
             results.append({
                 "title":           title,
