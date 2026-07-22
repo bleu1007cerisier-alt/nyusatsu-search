@@ -1710,6 +1710,20 @@ async def scrape_aichi_proposal() -> List[Dict]:
         return []
 
 
+def _labeled_date_iso(text: str, labels) -> str:
+    """本文から「<ラベル>[区切り] 令和X年M月D日 / YYYY年M月D日」のラベル付き日付をISOで返す。
+    複数ラベルを優先順に試し、区切り(コロン/空白/改行/全角)や1-2桁・令和/西暦の揺れを吸収する。
+    ラベル無しの裸の日付は拾わない（誤った日付＝履行期限等の混入を防ぐため）。"""
+    for lab in labels:
+        m = re.search(
+            lab + r"[：:\s　（(]{0,6}(?:令和\s*(\d+)|(\d{4}))\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日",
+            text)
+        if m:
+            year = 2018 + int(m.group(1)) if m.group(1) else int(m.group(2))
+            return f"{year}-{int(m.group(3)):02d}-{int(m.group(4)):02d}"
+    return ""
+
+
 def _fetch_pref_aichi_article(url: str) -> Optional[Dict]:
     """pref.aichi.jp の記事ページ本文を取得する（プロポーザル公募の事業内容材料）。"""
     import urllib.request
@@ -1721,6 +1735,8 @@ def _fetch_pref_aichi_article(url: str) -> Optional[Dict]:
         logger.error(f"愛知県プロポーザル詳細取得失敗 {url}: {e}")
         return None
     soup = BeautifulSoup(html, "html.parser")
+    # 掲載日はヘッダ/メタ領域（本文スコープ外）のことがあるため decompose 前の全文から抽出
+    published_at = _labeled_date_iso(soup.get_text(" ", strip=True), ["掲載日", "更新日"])
     main = (soup.find("main") or soup.find("article")
             or soup.find(id=re.compile(r"content|main", re.I))
             or soup.find(attrs={"class": re.compile(r"article|content|honbun|main", re.I)}))
@@ -1735,11 +1751,6 @@ def _fetch_pref_aichi_article(url: str) -> Optional[Dict]:
             name = a.get_text(" ", strip=True) or "添付資料"
             full = href if href.startswith("http") else _PREF_AICHI + href
             attachments.append({"name": name, "url": full, "kind": "公募要領"})
-    # 掲載日（一覧ページには日付が無いため、本文の「掲載日：YYYY年M月D日」から取る）
-    published_at = ""
-    m = re.search(r"掲載日[：:]\s*(\d{4})年\s*(\d{1,2})月\s*(\d{1,2})日", text)
-    if m:
-        published_at = f"{m.group(1)}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
     return {"detail": text[:6000], "budget": "", "schedule": [], "attachments": attachments,
             "published_at": published_at}
 
@@ -3068,14 +3079,12 @@ def fetch_yamanashi_detail(url: str) -> Optional[Dict]:
         logger.error(f"山梨県詳細取得失敗 {url}: {e}")
         return None
     soup = BeautifulSoup(html, "html.parser")
+    # 公示日/更新日はヘッダ/メタ領域（本文スコープ外）のことがあるため decompose 前の全文から抽出
+    published_at = _labeled_date_iso(soup.get_text(" ", strip=True), ["公示日", "更新日", "掲載日"])
     main = soup.find(id="tmp_contents") or soup
     for tag in main.find_all(["script", "style", "nav", "header", "footer"]):
         tag.decompose()
     text = re.sub(r"\n{3,}", "\n\n", main.get_text("\n", strip=True))
-    published_at = ""
-    m = re.search(r"公示日\s*\n?\s*(\d{4})年(\d{2})月(\d{2})日", text)
-    if m:
-        published_at = f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
     attachments = []
     for a in main.find_all("a", href=True):
         if re.search(r"\.pdf($|\?)", a["href"], re.I):
@@ -6236,6 +6245,9 @@ def fetch_yamagata_detail(url: str) -> Optional[Dict]:
         logger.error(f"山形県詳細取得失敗 {url}: {e}")
         return None
     soup = BeautifulSoup(html_doc, "html.parser")
+    # 更新日/掲載日はページのヘッダ/メタ領域にあり本文スコープ外のことがあるため、
+    # decompose前の全ページテキストから抽出する
+    published_at = _labeled_date_iso(soup.get_text(" ", strip=True), ["更新日", "掲載日", "公告日"])
     main = soup.find(id="tmp_contents") or soup.find(id="tmp_read_contents") or soup.find("main") or soup
     for tag in main.find_all(["script", "style", "nav", "header", "footer"]):
         tag.decompose()
@@ -6245,7 +6257,8 @@ def fetch_yamagata_detail(url: str) -> Optional[Dict]:
         if re.search(r"\.(pdf|docx?|xlsx?)($|\?)", a["href"], re.I):
             name = re.sub(r"[（(][^）)]*(?:KB|MB|バイト)[）)]\s*$", "", a.get_text(" ", strip=True)).strip() or "添付資料"
             attachments.append({"name": name, "url": urljoin(url, a["href"]), "kind": "公告文"})
-    return {"detail": text[:6000], "budget": "", "schedule": [], "attachments": attachments, "published_at": ""}
+    return {"detail": text[:6000], "budget": "", "schedule": [], "attachments": attachments,
+            "published_at": published_at}
 
 
 # ---------------------------------------------------------------------------
