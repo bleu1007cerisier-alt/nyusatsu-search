@@ -158,8 +158,10 @@ def parse_open(path, today):
             if tag not in tags and pat.search(org):
                 tags.append(tag)
         out.append({
+            # deadline は入札書提出締切だが奈良の一覧には無いため、実務上の主要日付である
+            # 開札予定日を deadline に入れる（カード表示「締切:未定」回避・宮城と統一）。
             "title": title, "category": "入札", "organization": org, "prefecture": "奈良県",
-            "published_at": pub, "deadline": "", "close_date": close, "result_date": "",
+            "published_at": pub, "deadline": close, "close_date": close, "result_date": "",
             "project_code": number, "awardee": "", "awardee_checked": "", "amount": "", "budget_checked": "",
             "url": url, "result_url": "", "source_category": gyoushu,
             "summary": summary, "detail": summary, "schedule": json.dumps(sched, ensure_ascii=False),
