@@ -6314,6 +6314,125 @@ def fetch_yamaguchi_detail(url: str) -> Optional[Dict]:
     return {"detail": text[:6000], "budget": "", "schedule": [], "attachments": attachments, "published_at": ""}
 
 
+# ---------------------------------------------------------------------------
+# 宮城県 物品等電子調達システム（efftis 公開案件検索）
+#   建設工事はOTeaフレームセット(JSメニュー)で別途Playwright要。物品・役務は
+#   /04900/public/pubOrderSearch.do がraw HTTPで検索可能（cp932・Struts型）。
+#   methodName=execSearch で年度(nend)・状況(eqvSts=10受付中)を指定→10件/頁。
+#   結果フォームを継承して methodName=execApplyListRowLength + inputListRowLength=100
+#   で全件を1頁に展開する。詳細はexecOrderDetail(POST)でURL化不可のため一覧完結。
+# ---------------------------------------------------------------------------
+_MIYAGI_HOST = "https://miyagi.efftis.jp"
+_MIYAGI_INIT = _MIYAGI_HOST + "/04900/public/pubOrderSearch.do?methodName=initDisplay"
+
+
+def _scrape_miyagi_sync() -> List[Dict]:
+    import urllib.request
+    import urllib.parse
+    import ssl as _ssl
+    import http.cookiejar
+    import html as _html
+    from datetime import date as _date
+
+    ctx = _ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = _ssl.CERT_NONE
+    try:
+        ctx.set_ciphers("DEFAULT@SECLEVEL=1")
+    except Exception:  # noqa: BLE001
+        pass
+    jar = http.cookiejar.CookieJar()
+    op = urllib.request.build_opener(
+        urllib.request.HTTPCookieProcessor(jar),
+        urllib.request.HTTPSHandler(context=ctx))
+    op.addheaders = [("User-Agent", "Mozilla/5.0")]
+
+    def _get(u):
+        return op.open(u, timeout=40).read().decode("cp932", "replace")
+
+    def _post(u, data):
+        enc = urllib.parse.urlencode(data, encoding="cp932").encode("ascii")
+        req = urllib.request.Request(u, data=enc)
+        req.add_header("User-Agent", "Mozilla/5.0")
+        req.add_header("Content-Type", "application/x-www-form-urlencoded")
+        return op.open(req, timeout=60).read().decode("cp932", "replace")
+
+    def _inputs(h):
+        d = {}
+        for m in re.finditer(r'<input[^>]*name="([^"]+)"[^>]*>', h, re.I):
+            v = re.search(r'value="([^"]*)"', m.group(0))
+            d[m.group(1)] = _html.unescape(v.group(1)) if v else ""
+        return d
+
+    def _action(h):
+        m = re.search(r'<form[^>]*action="([^"]+)"', h, re.I)
+        return _MIYAGI_HOST + m.group(1) if m else _MIYAGI_INIT
+
+    try:
+        init = _get(_MIYAGI_INIT)
+        data = _inputs(init)
+        # 現在＋翌年度の受付中を対象（年度替わりの取りこぼし防止）
+        nend = _date.today().year if _date.today().month >= 4 else _date.today().year - 1
+        data["methodName"] = "execSearch"
+        data["nend"] = str(nend)
+        data["eqvSts"] = "10"  # 受付中（開札前）
+        res = _post(_action(init), data)
+        # 表示件数100で全件を1頁に展開
+        d2 = _inputs(res)
+        d2["methodName"] = "execApplyListRowLength"
+        d2["inputListRowLength"] = "100"
+        res2 = _post(_action(res), d2)
+        if len(re.findall(r"execOrderDetail'", res2)) >= len(re.findall(r"execOrderDetail'", res)):
+            res = res2
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"宮城県一覧取得失敗: {e}")
+        return []
+
+    results, seen = [], set()
+    for tr in re.findall(r"<tr[^>]*>(.*?)</tr>", res, re.I | re.S):
+        if "execOrderDetail" not in tr:
+            continue
+        am = re.search(r"execOrderDetail'[^>]*>(.*?)</a>", tr, re.S)
+        title = re.sub(r"\s+", " ", _html.unescape(re.sub(r"<[^>]+>", "", am.group(1)))).strip() if am else ""
+        if len(title) < 3:
+            continue
+        plain = re.sub(r"\s+", " ", _html.unescape(re.sub(r"<[^>]+>", " ", tr)))
+        num_m = re.search(r"(\d{15})", plain)
+        num = num_m.group(1) if num_m else ""
+        dt = re.search(r"(\d{4})/(\d{2})/(\d{2})", plain)
+        opendate = f"{dt.group(1)}-{dt.group(2)}-{dt.group(3)}" if dt else ""
+        org_m = re.search(r"OpenBelongViewForPub\([^>]*>(.*?)</a>", tr, re.S)
+        org = re.sub(r"\s+", " ", _html.unescape(re.sub(r"<[^>]+>", "", org_m.group(1)))).strip() if org_m else ""
+        kind_m = re.search(r"([物役])/", plain)
+        kind = "物品" if (kind_m and kind_m.group(1) == "物") else ("役務" if kind_m else "")
+        key = num or re.sub(r"[^A-Za-z0-9]+", "", title)[:16]
+        if key in seen:
+            continue
+        seen.add(key)
+        url = _MIYAGI_HOST + "/04900/public/pubOrderSearch.do?c=" + key
+        results.append({
+            "title": title, "category": "入札",
+            "organization": f"宮城県（{org}）" if org else "宮城県", "prefecture": "宮城県",
+            "published_at": "", "deadline": opendate, "close_date": opendate,
+            "result_date": "", "result_url": "",
+            "project_code": num, "awardee": "", "awardee_checked": "",
+            "amount": "", "url": url, "source": "MIYAGI",
+            "source_category": kind,
+            "summary": "", "detail": "", "tags": ",".join(generate_tags(title, org)),
+        })
+    logger.info(f"宮城県: {len(results)}件取得")
+    return results
+
+
+async def scrape_miyagi() -> List[Dict]:
+    """宮城県 物品等電子調達システムの公開案件（受付中）を取得する。"""
+    try:
+        return await asyncio.to_thread(_scrape_miyagi_sync)
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"宮城県スクレイパー例外: {e}")
+        return []
+
+
 def fetch_kochi_detail(url: str) -> Optional[Dict]:
     """高知県 入札公告 個別ページの本文を取得する。"""
     import urllib.request
@@ -8110,6 +8229,7 @@ async def run_all_scrapers(portal_date_from: str = "", jogmec_max_id: int = 0) -
         scrape_aomori(),
         scrape_yamagata(),
         scrape_yamaguchi(),
+        scrape_miyagi(),
     ]
 
     scraped = await asyncio.gather(*tasks, return_exceptions=True)

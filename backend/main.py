@@ -572,6 +572,9 @@ DEV_SOURCES = [
     {"code": "NARA", "label": "奈良県",
      "url": "https://ppi.ebid-kouji-gyoumu.pref.nara.jp/DENCHO/PPJ/PPJ0020_0010/",
      "desc": "奈良県の入札公告（工事・コンサル／入札情報サービス）"},
+    {"code": "MIYAGI", "label": "宮城県",
+     "url": "https://miyagi.efftis.jp/04900/public/pubOrderSearch.do?methodName=initDisplay",
+     "desc": "宮城県 物品等電子調達システムの公開案件（物品・役務）"},
 ]
 
 
