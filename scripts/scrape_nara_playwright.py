@@ -108,15 +108,51 @@ def _col(d, *names):
     return ""
 
 
-def parse_open(path, today):
-    txt = open(path, "rb").read().decode("cp932")
-    rows = list(csv.reader(io.StringIO(txt)))
-    hdr = next((r for r in rows if r and r[0] == "基本情報"), None)
+def _yen(s):
+    s = (s or "").strip().replace(",", "")
+    return f"{int(s):,}円（税抜）" if s.isdigit() else ""
+
+
+def _sect(rows, name):
+    hdr = next((r for r in rows if r and r[0] == name), None)
     if not hdr:
         return []
-    recs = [dict(zip(hdr, r)) for r in rows if r and r[0] == "基本情報" and r != hdr]
+    return [dict(zip(hdr, r)) for r in rows if r and r[0] == name and r != hdr]
+
+
+def _mkrec(title, org, pub, close, number, chotatsu, gyoushu, summary, sched,
+           result_date="", awardee="", amount="", budget=""):
+    key = number or chotatsu or ("h" + hashlib.md5(
+        (title + "|" + (close or result_date) + "|" + org).encode("utf-8")).hexdigest()[:12])
+    tags = generate_tags(title, summary, summary)
+    for pat, tag in _ORG:
+        if tag not in tags and pat.search(org):
+            tags.append(tag)
+    return {
+        "title": title, "category": "入札", "organization": org, "prefecture": "奈良県",
+        # 開札前は開札予定日を deadline に入れて「締切:未定」を回避。落札結果は closed のため deadline 空。
+        "published_at": pub, "deadline": (close if not result_date else ""),
+        "close_date": close, "result_date": result_date,
+        "project_code": number, "awardee": awardee, "awardee_checked": ("1" if awardee else ""),
+        "amount": amount, "budget_checked": ("1" if budget else ""),
+        "url": BASE_URL + "?c=" + key, "result_url": "", "source_category": gyoushu,
+        "summary": summary, "detail": summary, "schedule": json.dumps(sched, ensure_ascii=False),
+        "attachments": "", "attachments_checked": "", "tags": ",".join(tags), "source": "NARA",
+    }
+
+
+def parse_records(path, today):
+    """基本情報から開札前(公告)を、入札結果情報から落札結果を生成する。"""
+    rows = list(csv.reader(io.StringIO(open(path, "rb").read().decode("cp932"))))
+    kihon = _sect(rows, "基本情報")
+    bmap = {}
+    for d in kihon:
+        num = _col(d, "工事番号", "業務番号")
+        if num:
+            bmap[num] = d
     out = []
-    for d in recs:
+    # 開札前(公告)
+    for d in kihon:
         name = _col(d, "工事名", "業務名")
         if not name or any(x in name for x in ("【中止】", "中止", "取止", "取りやめ", "取り止め")):
             continue
@@ -125,49 +161,56 @@ def parse_open(path, today):
         if not od or od < today:  # 開札前のみ
             continue
         number = _col(d, "工事番号", "業務番号")
-        chotatsu = _col(d, "調達案件番号")
-        place = _col(d, "工事場所", "履行場所")
         gyoushu = _col(d, "工種名", "業種名")
-        houshiki = _col(d, "入札方式名")
-        koki = _col(d, "工期", "履行期間")
-        bukyoku = _col(d, "部局名")
-        shozoku = _col(d, "所属名")
-        org = "奈良県" + ((" " + bukyoku) if bukyoku else "") + ((" " + shozoku) if shozoku else "")
+        org = "奈良県" + ((" " + _col(d, "部局名")) if _col(d, "部局名") else "") + \
+              ((" " + _col(d, "所属名")) if _col(d, "所属名") else "")
         pub = _iso(_col(d, "公告日時／指名通知日時"))
         close = _iso(opendt)
         title = re.sub(r"[　\s]+", " ", name).strip()
-        parts = []
-        if place:
-            parts.append("場所: " + place)
-        if houshiki:
-            parts.append("入札方式: " + houshiki)
-        if gyoushu:
-            parts.append("工種/業種: " + gyoushu)
-        if koki:
-            parts.append("工期/履行期間: " + koki)
-        summary = " ／ ".join(parts)
+        parts = [x for x in [
+            ("場所: " + _col(d, "工事場所", "履行場所")) if _col(d, "工事場所", "履行場所") else "",
+            ("入札方式: " + _col(d, "入札方式名")) if _col(d, "入札方式名") else "",
+            ("工種/業種: " + gyoushu) if gyoushu else "",
+            ("工期/履行期間: " + _col(d, "工期", "履行期間")) if _col(d, "工期", "履行期間") else "",
+        ] if x]
         sched = []
         if pub:
             sched.append({"date": pub, "label": "公告日"})
         if close:
             sched.append({"date": close, "label": "開札予定日", "raw": opendt})
-        key = number or chotatsu or ("h" + hashlib.md5((title + "|" + close + "|" + org).encode("utf-8")).hexdigest()[:12])
-        url = BASE_URL + "?c=" + key
-        tags = generate_tags(title, summary, summary)
-        for pat, tag in _ORG:
-            if tag not in tags and pat.search(org):
-                tags.append(tag)
-        out.append({
-            # deadline は入札書提出締切だが奈良の一覧には無いため、実務上の主要日付である
-            # 開札予定日を deadline に入れる（カード表示「締切:未定」回避・宮城と統一）。
-            "title": title, "category": "入札", "organization": org, "prefecture": "奈良県",
-            "published_at": pub, "deadline": close, "close_date": close, "result_date": "",
-            "project_code": number, "awardee": "", "awardee_checked": "", "amount": "", "budget_checked": "",
-            "url": url, "result_url": "", "source_category": gyoushu,
-            "summary": summary, "detail": summary, "schedule": json.dumps(sched, ensure_ascii=False),
-            "attachments": "", "attachments_checked": "", "tags": ",".join(tags),
-            "source": "NARA",
-        })
+        out.append(_mkrec(title, org, pub, close, number, _col(d, "調達案件番号"),
+                          gyoushu, " ／ ".join(parts), sched))
+    # 落札結果
+    for d in _sect(rows, "入札結果情報"):
+        awardee = _col(d, "落札者")
+        if not awardee:
+            continue
+        number = _col(d, "工事番号", "業務番号")
+        b = bmap.get(number, {})
+        gyoushu = _col(b, "工種名", "業種名")
+        org = "奈良県" + ((" " + _col(d, "部局名")) if _col(d, "部局名") else "") + \
+              ((" " + _col(d, "所属名")) if _col(d, "所属名") else "")
+        pub = _iso(_col(b, "公告日時／指名通知日時"))
+        rdate = _iso(_col(b, "開札予定日時")) or _iso(_col(d, "公開期間開始日"))
+        title = re.sub(r"[　\s]+", " ", _col(d, "工事名", "業務名")).strip()
+        amount = _yen(_col(d, "落札金額（税抜）"))
+        yotei = _yen(_col(d, "予定価格（税抜き）", "予定価格（税抜）"))
+        parts = [x for x in [
+            "落札者: " + awardee,
+            ("落札金額: " + amount) if amount else "",
+            ("予定価格: " + yotei) if yotei else "",
+            ("入札方式: " + _col(b, "入札方式名")) if _col(b, "入札方式名") else "",
+            ("工種/業種: " + gyoushu) if gyoushu else "",
+            ("場所: " + _col(b, "工事場所", "履行場所")) if _col(b, "工事場所", "履行場所") else "",
+        ] if x]
+        sched = []
+        if pub:
+            sched.append({"date": pub, "label": "公告日"})
+        if rdate:
+            sched.append({"date": rdate, "label": "開札日"})
+        out.append(_mkrec(title, org, pub, "", number, _col(d, "調達案件番号"),
+                          gyoushu, " ／ ".join(parts), sched,
+                          result_date=rdate, awardee=awardee, amount=amount, budget=yotei))
     return out
 
 
@@ -225,8 +268,9 @@ def main():
     paths = [p for p in fetch_csvs() if p and os.path.exists(p)]
     recs = []
     for p in paths:
-        recs += parse_open(p, today)
-    print("開札前レコード:", len(recs))
+        recs += parse_records(p, today)
+    n_res = sum(1 for r in recs if r.get("awardee"))
+    print("レコード: %d件（公告 %d / 落札結果 %d）" % (len(recs), len(recs) - n_res, n_res))
     ingest(recs, write)
 
 
