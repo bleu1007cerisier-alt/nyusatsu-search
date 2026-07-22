@@ -1001,6 +1001,19 @@ def main():
     except Exception as e:  # noqa: BLE001
         print(f"タグ再付与失敗: {e}")
 
+    # CSV肥大化対策：AI要約(summary)がある行の detail は詳細ページで非表示（summaryを表示）、
+    # かつタグ付けは先頭3000字しか使わないため、3000字を超える分は保存不要。要約が無い行の
+    # detail は表示に使われるので触らない。これで detail 由来の肥大化（最大の要因）を抑える。
+    _DETAIL_CAP = 3000
+    _capped = 0
+    for r in merged.values():
+        d = r.get("detail") or ""
+        if (r.get("summary") or "").strip() and len(d) > _DETAIL_CAP:
+            r["detail"] = d[:_DETAIL_CAP].rstrip() + "…"
+            _capped += 1
+    if _capped:
+        print(f"detail短縮（要約あり・3000字超）: {_capped}件")
+
     # 書き出し前に、ID未設定の行へ必ずIDを採番する（空IDはDB投入をUNIQUE制約で壊すため）
     _id_max = max((int(r["id"]) for r in merged.values()
                    if (r.get("id") or "").strip().isdigit()), default=0)
