@@ -490,6 +490,40 @@ def load_existing() -> dict:
     return out
 
 
+_AMT_NG_SUMMARY = _re_summary.compile(r'事後|公開|未定|未公開|非公開|—|なし')
+
+
+def basic_summary(row):
+    """本文(detail)の無い電子入札系案件向けに、構造化フィールドから基本サマリーを組み立てる。
+    SuperCALS等は一覧に件名＋工種＋日付しか無くAI要約の材料が無いため、
+    発注機関/区分(工種)/公告日/締切/開札/予定価格を「事業内容」として提示する（AIコスト0）。"""
+    parts = []
+    org = (row.get("organization") or "").strip()
+    if org:
+        parts.append("発注機関: " + org)
+    cat = (row.get("category") or "").strip()
+    sc = (row.get("source_category") or "").strip()
+    if cat and sc:
+        parts.append(f"区分: {cat}（{sc}）")
+    elif cat:
+        parts.append("区分: " + cat)
+    elif sc:
+        parts.append("分類: " + sc)
+    pub = (row.get("published_at") or "").strip()
+    if pub:
+        parts.append("公告日: " + pub)
+    dl = (row.get("deadline") or "").strip()
+    cl = (row.get("close_date") or "").strip()
+    if dl:
+        parts.append("申請・入札締切: " + dl)
+    if cl and cl != dl:
+        parts.append("開札予定日: " + cl)
+    amt = (row.get("amount") or "").strip()
+    if amt and not _AMT_NG_SUMMARY.search(amt):
+        parts.append("予定価格: " + amt)
+    return " ／ ".join(parts)
+
+
 def retag_rows(rows):
     """全行のタグをタグマスター基準で再付与する。
 
@@ -1000,6 +1034,20 @@ def main():
         retag_rows(list(merged.values()))
     except Exception as e:  # noqa: BLE001
         print(f"タグ再付与失敗: {e}")
+
+    # 基本サマリー付与：本文が無くAI要約が付かない行（detail<100字かつsummary空）に、
+    # 構造化フィールドから「事業内容」を組み立てる。SuperCALS等の電子入札系はこれで
+    # 「詳しい内容は公式ページを…」プレースホルダを解消（AIコスト0）。AI要約対象
+    # （detail>=100字）は次回AI処理に委ねるため触らない。
+    _basic = 0
+    for r in merged.values():
+        if not (r.get("summary") or "").strip() and len((r.get("detail") or "").strip()) < 100:
+            s = basic_summary(r)
+            if len(s) >= 8:
+                r["summary"] = s
+                _basic += 1
+    if _basic:
+        print(f"基本サマリー付与（本文なし案件）: {_basic}件")
 
     # CSV肥大化対策：AI要約(summary)がある行の detail は詳細ページで非表示（summaryを表示）、
     # かつタグ付けは先頭3000字しか使わないため、3000字を超える分は保存不要。要約が無い行の
