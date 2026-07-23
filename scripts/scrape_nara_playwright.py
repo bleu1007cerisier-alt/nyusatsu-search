@@ -230,9 +230,11 @@ def ingest(recs, write):
         allrows = list(rd)
         cols = rd.fieldnames
     idcol = cols[0]
-    kept = [r for r in allrows if r.get("source") != "NARA"]
-    # 既存NARAの first_seen を url で引き継ぐ（初回取得日を保存）
-    prev_fs = {r["url"]: r.get("first_seen", "") for r in allrows if r.get("source") == "NARA"}
+    # 入札情報サービス(DENCHO/PPJ, url=ebid-kouji)分のみ入替。県CMSのプロポ(pref.nara.jp)は保持。
+    def is_nyusatsu(r):
+        return r.get("source") == "NARA" and "ebid-kouji" in (r.get("url") or "")
+    kept = [r for r in allrows if not is_nyusatsu(r)]
+    prev_fs = {r["url"]: r.get("first_seen", "") for r in allrows if is_nyusatsu(r)}
     maxid = max(int(r[idcol]) for r in kept)
     exurls = {r["url"] for r in kept}
     new = [r for r in recs if r["url"] not in exurls]
