@@ -447,12 +447,16 @@ def _normalize_url(url: str) -> str:
 
 
 def _row_key(row: dict) -> str:
-    """マージ用の一意キー。URLがあればURL（正規化済み）、無ければ主要項目の組み合わせ。"""
+    """マージ用の一意キー。通常URLはURL（正規化済み）で識別する。
+    ただしSuperCALS系(ebidPPIPublish等)は個別URLが無く `?KikanNO=...#<md5>` の
+    フラグメントで一意化しており、そのハッシュ元(予定価格や行位置)が再スクレイプで
+    変わると別URL扱い＝重複が蓄積する。そこで **# を含むURLは内容キーで識別** して
+    同一案件を確実に集約する。URL無しの行も内容キー。"""
     url = (row.get("url") or "").strip()
-    if url:
+    if url and "#" not in url:
         return "u:" + _normalize_url(url)
     return "k:" + "|".join([
-        row.get("title", ""), row.get("published_at", ""),
+        row.get("source", ""), row.get("title", ""), row.get("published_at", ""),
         row.get("deadline", ""), row.get("result_date", ""),
     ])
 
