@@ -2294,6 +2294,15 @@ def _fetch_pref_osaka_article(url: str) -> Optional[Dict]:
     for tag in node.find_all(["script", "style", "nav", "header", "footer"]):
         tag.decompose()
     text = re.sub(r"\n{3,}", "\n\n", node.get_text("\n", strip=True))
+    # 一覧で件名が壊れた場合の補正用に、記事の正式タイトル(h1優先、無ければtitleタグ)を返す
+    page_title = ""
+    h1 = soup.find("h1")
+    if h1:
+        page_title = h1.get_text(" ", strip=True)
+    if not page_title:
+        tt = soup.find("title")
+        if tt:
+            page_title = re.split(r"[／/｜|]", tt.get_text(" ", strip=True))[0].strip()
     attachments = []
     for a in (main or soup).find_all("a", href=True):
         href = a["href"]
@@ -2301,7 +2310,8 @@ def _fetch_pref_osaka_article(url: str) -> Optional[Dict]:
             name = a.get_text(" ", strip=True) or "添付資料"
             full = href if href.startswith("http") else _PREF_OSAKA + href
             attachments.append({"name": name, "url": full, "kind": "公募要領"})
-    return {"detail": text[:6000], "budget": "", "schedule": [], "attachments": attachments}
+    return {"detail": text[:6000], "budget": "", "schedule": [], "attachments": attachments,
+            "title": page_title}
 
 
 def fetch_osaka_proposal_detail(url: str) -> Optional[Dict]:

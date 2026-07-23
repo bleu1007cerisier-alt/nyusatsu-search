@@ -165,8 +165,7 @@ def build(data, today):
                 ("入札方式: " + houshiki) if houshiki else "",
                 ("工種/業種: " + gyoushu) if gyoushu else "",
                 ("概要: " + gaiyo) if gaiyo and len(gaiyo) > 1 else "",
-                ("予定価格: " + amt) if amt else "",
-            ] if x]
+            ] if x]  # 予定価格は amount フィールド(💴表示)にあるので事業内容には重複記載しない
             summary = " ／ ".join(parts)
             sched = []
             if koukoku:

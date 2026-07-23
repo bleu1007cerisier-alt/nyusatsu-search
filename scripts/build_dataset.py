@@ -854,9 +854,11 @@ def main():
             # PORTAL はゴミdetailをリセット済みなので常に上書き。他ソースは空のときのみ
             if new_detail and (not cur_detail or r.get("source") == "PORTAL"):
                 r["detail"] = _strip_detail_boilerplate(new_detail)  # 定型文除去して保持
-            # タイトルが一覧から取れなかった案件（PORTALで稀に発生）は
-            # 詳細ページの「調達案件名称」で補完する
-            if not (r.get("title") or "").strip() and info.get("title"):
+            # タイトルが一覧から取れなかった/壊れた案件（PORTALや大阪プロポで稀に発生。
+            # 例: 「デ」等3字以下に切れる）は詳細ページの正式タイトルで補完・補正する
+            _cur_title = (r.get("title") or "").strip()
+            if (not _cur_title or len(_cur_title) <= 3) and info.get("title") \
+               and len(info["title"]) > len(_cur_title):
                 r["title"] = info["title"]
             # 掲載日が一覧から取れないソース（愛知プロポ等）は詳細ページの値で補完
             if info.get("published_at") and not (r.get("published_at") or "").strip():
