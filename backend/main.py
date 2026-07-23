@@ -578,6 +578,9 @@ DEV_SOURCES = [
     {"code": "KANAGAWA", "label": "神奈川県",
      "url": "https://nyusatsu.e-kanagawa.lg.jp/",
      "desc": "神奈川県の入札公告（工事・コンサル・物品／かながわ電子入札）"},
+    {"code": "IBARAKI", "label": "茨城県",
+     "url": "http://ppi.cals-ibaraki.lg.jp/koukai/do/KF000ShowAction",
+     "desc": "茨城県の入札公告（建設工事・コンサル／いばらき電子入札）"},
 ]
 
 
