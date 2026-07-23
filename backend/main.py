@@ -239,8 +239,11 @@ def search_tenders(
         tokens = [t for t in re.split(r"[\s　]+", q.lower()) if t]
         if tokens:
             def _haystack(i):
+                # タグは検索対象に含めない。複合タグ(例「航空・ドローン」)が部分一致し、
+                # 「ドローン」検索で航空機案件が混入する等の誤ヒットを招くため。
+                # タグでの絞り込みは専用のタグ検索(tag/tagsパラメータ・🏷️UI)で行う。
                 return ((i["title"] or "") + " " + (i["organization"] or "") + " "
-                        + (i["summary"] or "") + " " + " ".join(i["tags"])).lower()
+                        + (i["summary"] or "")).lower()
             items = [i for i in items
                      if (lambda h: all(tok in h for tok in tokens))(_haystack(i))]
     if category:
