@@ -575,6 +575,9 @@ DEV_SOURCES = [
     {"code": "MIYAGI", "label": "宮城県",
      "url": "https://miyagi.efftis.jp/04900/public/pubOrderSearch.do?methodName=initDisplay",
      "desc": "宮城県 物品等電子調達システムの公開案件（物品・役務）"},
+    {"code": "KANAGAWA", "label": "神奈川県",
+     "url": "https://nyusatsu.e-kanagawa.lg.jp/",
+     "desc": "神奈川県の入札公告（工事・コンサル・物品／かながわ電子入札）"},
 ]
 
 
