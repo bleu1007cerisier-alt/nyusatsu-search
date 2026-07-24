@@ -497,35 +497,67 @@ def load_existing() -> dict:
 _AMT_NG_SUMMARY = _re_summary.compile(r'事後|公開|未定|未公開|非公開|—|なし')
 
 
+# ── 要約の統一フォーマット（全ソース共通の「・ラベル: 値」箇条書き）─────────────
+# カード・詳細ページで専用欄として表示済みのメタ情報（発注機関/公示日/締切/予算/
+# 落札者等）は要約に重複させない。要約は「専用欄に無い補足内容」だけを持つ。
+_SUM_DROP = {
+    "発注機関", "区分", "分類", "公告日", "申請・入札締切", "締切", "入札締切",
+    "落札者", "落札金額", "落札結果", "担当", "担当課", "問合せ", "問い合わせ",
+    # 以下もカード・詳細に専用欄あり（💴予算規模／⏰締切／📋公開終了日）
+    "予定価格", "予算規模", "予算", "提出期限", "提出場所", "公開終了日",
+}
+_SUM_LABEL_MAP = {
+    "工種/業種": "工種・業種", "工種": "工種・業種", "業種": "工種・業種",
+    "工期/履行期間": "履行期間", "工期": "履行期間", "履行期限": "履行期間",
+    "場所": "履行場所", "施行場所": "履行場所", "納入場所": "履行場所",
+    "開札予定日": "開札予定", "開札日時": "開札予定", "開札日": "開札予定",
+    "予算規模": "予定価格", "予算": "予定価格", "事業概要": "概要",
+}
+_SUM_ORDER = ["事業内容", "概要", "工種・業種", "入札方式", "履行場所",
+              "履行期間", "予定価格", "開札予定", "落札方式", "参加資格"]
+
+
+def _sum_split_parts(s):
+    if s.startswith("・") or "\n・" in s:
+        return [p.lstrip("・").strip() for p in s.split("\n") if p.strip()]
+    return [p.strip() for p in _re_summary.split(r"\s*／\s*", s) if p.strip()]
+
+
+def normalize_summary(s):
+    """全ソースの要約を「・ラベル: 値」箇条書きに統一し、専用欄と重複する項目を除く。
+    ラベルの無い内容文は事業内容として扱う。補足が何も残らなければ空文字を返す。"""
+    s = (s or "").strip()
+    if not s:
+        return ""
+    kept = {}
+    prose = []
+    for part in _sum_split_parts(s):
+        m = _re_summary.match(r"^([^:：]{1,14})[:：]\s*(.*)$", part, _re_summary.S)
+        if not m:
+            if len(part) >= 6:
+                prose.append(part)
+            continue
+        lab = _SUM_LABEL_MAP.get(m.group(1).strip(), m.group(1).strip())
+        val = m.group(2).strip()
+        if lab in _SUM_DROP or not val:
+            continue
+        if lab not in kept:
+            kept[lab] = val
+    if prose and "事業内容" not in kept:
+        kept["事業内容"] = " ".join(prose)
+    ordered = [l for l in _SUM_ORDER if l in kept] + [l for l in kept if l not in _SUM_ORDER]
+    return "\n".join(f"・{l}: {kept[l]}" for l in ordered)
+
+
 def basic_summary(row):
-    """本文(detail)の無い電子入札系案件向けに、構造化フィールドから基本サマリーを組み立てる。
-    SuperCALS等は一覧に件名＋工種＋日付しか無くAI要約の材料が無いため、
-    発注機関/区分(工種)/公告日/締切/開札/予定価格を「事業内容」として提示する（AIコスト0）。"""
-    parts = []
-    org = (row.get("organization") or "").strip()
-    if org:
-        parts.append("発注機関: " + org)
-    cat = (row.get("category") or "").strip()
+    """本文(detail)の無い電子入札系案件向けの補足要約。
+    発注機関/日付/予算等はカード・詳細に専用欄で表示されるため要約には入れず、
+    そこに出ない工種・業種（source_category）だけを箇条書きで提示する（AIコスト0）。"""
     sc = (row.get("source_category") or "").strip()
-    if cat and sc:
-        parts.append(f"区分: {cat}（{sc}）")
-    elif cat:
-        parts.append("区分: " + cat)
-    elif sc:
-        parts.append("分類: " + sc)
-    pub = (row.get("published_at") or "").strip()
-    if pub:
-        parts.append("公告日: " + pub)
-    dl = (row.get("deadline") or "").strip()
-    cl = (row.get("close_date") or "").strip()
-    if dl:
-        parts.append("申請・入札締切: " + dl)
-    if cl and cl != dl:
-        parts.append("開札予定日: " + cl)
-    amt = (row.get("amount") or "").strip()
-    if amt and not _AMT_NG_SUMMARY.search(amt):
-        parts.append("予定価格: " + amt)
-    return " ／ ".join(parts)
+    # カテゴリ名そのもの（工事/入札等）は情報量が無いので除く
+    if sc and sc not in ("入札", "プロポーザル", "公募", "一般競争入札", "工事", "委託", "物品"):
+        return f"・工種・業種: {sc}"
+    return ""
 
 
 def retag_rows(rows):
@@ -539,7 +571,7 @@ def retag_rows(rows):
     import re as _re
     from scraper import generate_tags
 
-    from tag_master import ORG_TAG_RULES
+    from tag_master import ORG_TAG_RULES, NARROW_NO_INHERIT, fallback_case_tag
     _org_rules = [(_re.compile(p), t) for p, t in ORG_TAG_RULES]
 
     # 「過去の採択事例一覧」等は、当該公募と無関係な分野の事業者名・テーマが
@@ -555,7 +587,14 @@ def retag_rows(rows):
 
     sparse = []
     for r in rows:
-        tags = generate_tags(r.get("title", ""), r.get("summary", ""),
+        # 工種・業種（source_category）を要約と同じ高信頼レベルでタグ照合に渡す。
+        # 電子入札系は本文が無くても「土木一式工事」「測量・コンサル」「除草業務」等の
+        # 分類を持つため、これをタグの材料に加えると本文なし案件のタグが充実する。
+        sc = (r.get("source_category") or "").strip()
+        primary = r.get("summary", "")
+        if sc:
+            primary = (primary + " " + sc).strip()
+        tags = generate_tags(r.get("title", ""), primary,
                              _for_tagging(r.get("detail")))
         # 発注機関名から発注元ファセットタグを付与（売り先でアンテナを張る実務者向け）
         org = r.get("organization") or ""
@@ -594,11 +633,19 @@ def retag_rows(rows):
         if best is not None and score >= _THRESH.get(own_n, 0.55):
             own = [t for t in (r.get("tags") or "").split(",") if t]
             inherited = [t for t in (best.get("tags") or "").split(",") if t]
-            merged = own + [t for t in inherited if t not in own]
+            # 狭義トピックタグは継承させない（キーワード一致でのみ付与＝誤伝播防止）
+            merged = own + [t for t in inherited
+                            if t not in own and t not in NARROW_NO_INHERIT]
             r["tags"] = ",".join(merged[:8])  # 継承しすぎ防止の上限
             borrowed += 1
+    # 最終フォールバック: それでもタグ0件の案件に案件形態タグを必ず付与（0件を無くす）
+    filled = 0
+    for r in rows:
+        if not (r.get("tags") or "").strip():
+            r["tags"] = fallback_case_tag(r.get("title", ""), r.get("category", ""))
+            filled += 1
     print(f"タグ再付与: 全{len(rows)}件 / タグ3件未満{len(sparse)}件中 "
-          f"類似案件から継承{borrowed}件")
+          f"類似案件から継承{borrowed}件 / フォールバック付与{filled}件")
 
 
 def main():
@@ -1049,11 +1096,24 @@ def main():
     for r in merged.values():
         if not (r.get("summary") or "").strip() and len((r.get("detail") or "").strip()) < 100:
             s = basic_summary(r)
-            if len(s) >= 8:
+            if s:
                 r["summary"] = s
                 _basic += 1
     if _basic:
         print(f"基本サマリー付与（本文なし案件）: {_basic}件")
+
+    # 全ソースの要約を統一フォーマット（・ラベル: 値）へ正規化し、専用欄と重複する
+    # メタ情報（発注機関/公示日/締切/落札者等）を除く。スクレイパーが独自形式で
+    # 入れた要約（例: 奈良の「入札方式: … ／ 工種/業種: …」）も毎回ここで揃う。
+    _normed = 0
+    for r in merged.values():
+        s0 = r.get("summary") or ""
+        s1 = normalize_summary(s0)
+        if s1 != s0.strip():
+            r["summary"] = s1
+            _normed += 1
+    if _normed:
+        print(f"要約フォーマット正規化: {_normed}件")
 
     # CSV肥大化対策：AI要約(summary)がある行の detail は詳細ページで非表示（summaryを表示）、
     # かつタグ付けは先頭3000字しか使わないため、3000字を超える分は保存不要。要約が無い行の

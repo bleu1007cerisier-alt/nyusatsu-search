@@ -608,25 +608,34 @@
       function renderSummary(summary) {
         if (!summary) return '';
         const isBullets = summary.startsWith('・') || summary.includes('\n・');
-        let text = '';
+        // 事業内容がある → 内容文を大きく表示。無ければ補足事実を「案件情報」として表示。
         if (isBullets) {
-          const lines = summary.split('\n').filter(l => l.trim());
-          // 「・事業内容: ○○」の行を探して値部分を取り出す
-          const jigyo = lines.find(l => /^・?\s*事業内容\s*[:：]/.test(l));
+          const lines = summary.split('\n').map(l => l.replace(/^・/, '').trim()).filter(Boolean);
+          const jigyo = lines.find(l => /^事業内容\s*[:：]/.test(l));
           if (jigyo) {
-            text = jigyo.replace(/^・?\s*事業内容\s*[:：]\s*/, '').trim();
-          } else {
-            // 事業内容が無ければ先頭項目の値（ラベルがあれば除く）
-            const first = lines[0].replace(/^・/, '').trim();
-            text = first.replace(/^[^:：]{1,12}[:：]\s*/, '').trim();
+            const text = jigyo.replace(/^事業内容\s*[:：]\s*/, '').trim();
+            if (!text) return '';
+            return `<div class="mt-3 summary-block rounded-lg px-3 py-2.5">
+              <p class="text-xs text-indigo-400 font-medium mb-1 tracking-wide">✦ 事業内容</p>
+              <p class="text-sm text-slate-700 leading-relaxed summary-text">${esc(text)}</p>
+            </div>`;
           }
-        } else {
-          text = summary;
+          // 事業内容が無い補足事実のみ → ラベル付きで最大3件表示
+          const facts = lines.slice(0, 3).map(l => {
+            const i = l.search(/[:：]/);
+            return i > 0
+              ? `<span class="text-slate-500">${esc(l.slice(0, i))}</span>${esc(l.slice(i))}`
+              : esc(l);
+          });
+          if (!facts.length) return '';
+          return `<div class="mt-3 summary-block rounded-lg px-3 py-2.5">
+            <p class="text-xs text-indigo-400 font-medium mb-1 tracking-wide">✦ 案件情報</p>
+            <p class="text-sm text-slate-700 leading-relaxed">${facts.join(' ／ ')}</p>
+          </div>`;
         }
-        if (!text) return '';
         return `<div class="mt-3 summary-block rounded-lg px-3 py-2.5">
           <p class="text-xs text-indigo-400 font-medium mb-1 tracking-wide">✦ 事業内容</p>
-          <p class="text-sm text-slate-700 leading-relaxed summary-text">${esc(text)}</p>
+          <p class="text-sm text-slate-700 leading-relaxed summary-text">${esc(summary)}</p>
         </div>`;
       }
       const summaryHtml = renderSummary(t.summary);

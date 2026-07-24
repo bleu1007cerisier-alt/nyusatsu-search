@@ -225,6 +225,11 @@ def ingest(recs, write):
         seen.add(r["url"])
         dedup.append(r)
     recs = dedup
+    # 安全ガード: スクレイプ0件のとき既存行を削除しない（サイト障害・SPAロード失敗で
+    # 全件消失する事故の防止。2026-07-24に奈良で入札+落札結果784件消失した実績あり）。
+    if not recs:
+        print("[SKIP] スクレイプ結果0件のため既存データを保持（削除・置換しない）")
+        return
     with open(TENDERS, encoding="utf-8-sig") as f:
         rd = csv.DictReader(f)
         allrows = list(rd)

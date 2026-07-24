@@ -131,6 +131,10 @@ def ingest(recs, write):
         seen.add(r["url"])
         dedup.append(r)
     recs = dedup
+    # 安全ガード: 取得0件のとき既存プロポを削除しない（サイト障害での全消し防止）
+    if not recs:
+        print("[SKIP] 取得0件のため既存プロポを保持（削除・置換しない）")
+        return
     with open(TENDERS, encoding="utf-8-sig") as f:
         rd = csv.DictReader(f)
         allrows = list(rd)

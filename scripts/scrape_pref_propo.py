@@ -166,7 +166,13 @@ def ingest(all_recs, targets, write):
         allrows = list(rd)
         cols = rd.fieldnames
     idcol = cols[0]
-    dom = {s: CONFIGS[s]["domain"] for s in targets}
+    # 安全ガード: データを取得できた県だけを置換対象にする（0件の県は既存を保持）。
+    # 全県一律に削除→挿入すると、1県でもサイト障害で0件だとその県の既存が消えるため。
+    got = {r.get("source") for r in recs}
+    skipped = [s for s in targets if s not in got]
+    if skipped:
+        print("[GUARD] 取得0件で置換をスキップ（既存保持）: %s" % ", ".join(skipped))
+    dom = {s: CONFIGS[s]["domain"] for s in targets if s in got}
 
     def is_target_propo(r):
         s = r.get("source")

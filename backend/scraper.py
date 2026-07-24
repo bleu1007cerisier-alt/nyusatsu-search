@@ -2241,6 +2241,9 @@ def _scrape_osaka_proposal_sync() -> List[Dict]:
             continue
         seen.add(full)
         title = re.sub(r"^【[^】]*】\s*", "", title).strip()
+        # 過去分アーカイブへのハブリンク（案件ではない）は除外
+        if "公示日以前" in title or "puropo_" in full:
+            continue
         dept = re.sub(r"\s+", "", dept or "").strip()
         pub = _osaka_iso(sy, sm, sd)          # _osaka_iso が令和→西暦変換する
         deadline = _osaka_iso(ey, em, ed)
@@ -3043,6 +3046,9 @@ def _scrape_yamanashi_sync() -> List[Dict]:
             seen.add(full)
             title = title.strip()
             if title in _COMMON_SITE_NAV:  # サイト共通ナビ（案件でない）を除外
+                continue
+            # 年度別公告一覧へのハブリンク（例「令和7年度の公告（入札・公売等）」）は案件でない
+            if re.match(r"^(平成|令和|Ｈ|H)\s*(元|\d+)\s*年度の公告", title):
                 continue
             cat = "プロポーザル" if re.search(r"プロポーザル|企画提案|企画競争", title) else "入札"
             slug = re.sub(r"[^A-Za-z0-9]+", "-", href.rsplit("/", 1)[-1]).strip("-")
@@ -4995,7 +5001,7 @@ _HOKKAIDO_LIST = _HOKKAIDO_BASE + "/news/nyusatsu/"
 _HOKKAIDO_ROW = re.compile(
     r'<time datetime="(\d{4}-\d{2}-\d{2})"[^>]*>[^<]*</time>\s*'
     r'<h2>\s*<a href="([^"]+)">([^<]+)</a>', re.S)
-_HOKKAIDO_HUB = re.compile(r"^入札(予定|結果|案内|等)|結果等の公表|入札案内$|の公表$|の公表について")
+_HOKKAIDO_HUB = re.compile(r"^入札(予定|結果|案内|等)|結果等の公表|入札案内$|の公表$|の公表について|過去の入札")
 
 
 def _scrape_hokkaido_sync() -> List[Dict]:
