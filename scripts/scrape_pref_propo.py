@@ -34,6 +34,12 @@ CONFIGS = {
     "MIYAZAKI": {"pref": "宮崎県", "base": "https://www.pref.miyazaki.lg.jp",
                  "hubs": ["https://www.pref.miyazaki.lg.jp/kense/chotatsu/itaku/kikakutean/index.html"],
                  "domain": "www.pref.miyazaki.lg.jp", "recent_days": 60},  # 入札はwww.e-nyusatsu-joho.pref…で区別
+    "IBARAKI": {"pref": "茨城県", "base": "https://www.pref.ibaraki.jp",
+                "hubs": ["https://www.pref.ibaraki.jp/bosyu.html"],
+                "domain": "www.pref.ibaraki.jp"},  # 入札はppi.cals-ibaraki.lg.jpで区別
+    "KAGOSHIMA": {"pref": "鹿児島県", "base": "https://www.pref.kagoshima.jp",
+                  "hubs": ["https://www.pref.kagoshima.jp/kensei/nyusatu/nyusatujoho/index.html"],
+                  "domain": "www.pref.kagoshima.jp"},  # 入札はwww.kagoshima-nyusatsu.jpで区別
 }
 
 # プロポ/企画競争として採用する語（いずれか含む）
