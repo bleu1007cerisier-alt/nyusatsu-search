@@ -35,11 +35,19 @@ CONFIGS = {
                  "hubs": ["https://www.pref.miyazaki.lg.jp/kense/chotatsu/itaku/kikakutean/index.html"],
                  "domain": "www.pref.miyazaki.lg.jp", "recent_days": 60},  # 入札はwww.e-nyusatsu-joho.pref…で区別
     "IBARAKI": {"pref": "茨城県", "base": "https://www.pref.ibaraki.jp",
-                "hubs": ["https://www.pref.ibaraki.jp/bosyu.html"],
-                "domain": "www.pref.ibaraki.jp"},  # 入札はppi.cals-ibaraki.lg.jpで区別
+                # 全庁横断の新着情報(/news.html)＋募集ページ。プロポは各部局に散在するため
+                # 全庁新着から拾うのが最も網羅的。入札はppi.cals-ibaraki.lg.jpで区別。
+                "hubs": ["https://www.pref.ibaraki.jp/news.html",
+                         "https://www.pref.ibaraki.jp/bosyu.html"],
+                "domain": "www.pref.ibaraki.jp"},
     "KAGOSHIMA": {"pref": "鹿児島県", "base": "https://www.pref.kagoshima.jp",
                   "hubs": ["https://www.pref.kagoshima.jp/kensei/nyusatu/nyusatujoho/index.html"],
                   "domain": "www.pref.kagoshima.jp"},  # 入札はwww.kagoshima-nyusatsu.jpで区別
+    "ISHIKAWA": {"pref": "石川県", "base": "https://www.pref.ishikawa.lg.jp",
+                 # 中央一覧が無く各部局に散在するため全庁新着情報から拾う。
+                 # 入札はwww.ep-bis.supercals.jp(SuperCALS)で区別。
+                 "hubs": ["https://www.pref.ishikawa.lg.jp/shinchaku/index.html"],
+                 "domain": "www.pref.ishikawa.lg.jp"},
 }
 
 # プロポ/企画競争として採用する語（いずれか含む）
@@ -172,27 +180,19 @@ def ingest(all_recs, targets, write):
         allrows = list(rd)
         cols = rd.fieldnames
     idcol = cols[0]
-    # 安全ガード: データを取得できた県だけを置換対象にする（0件の県は既存を保持）。
-    # 全県一律に削除→挿入すると、1県でもサイト障害で0件だとその県の既存が消えるため。
-    got = {r.get("source") for r in recs}
-    skipped = [s for s in targets if s not in got]
-    if skipped:
-        print("[GUARD] 取得0件で置換をスキップ（既存保持）: %s" % ", ".join(skipped))
-    dom = {s: CONFIGS[s]["domain"] for s in targets if s in got}
-
-    def is_target_propo(r):
-        s = r.get("source")
-        return s in dom and dom[s] in (r.get("url") or "")
-    kept = [r for r in allrows if not is_target_propo(r)]
-    prev_fs = {r["url"]: r.get("first_seen", "") for r in allrows if is_target_propo(r)}
-    maxid = max(int(r[idcol]) for r in kept)
-    exurls = {r["url"] for r in kept}
+    import collections
+    # 追記型: 既存行は一切削除せず、まだ無いURLのプロポだけ追加する。
+    # 新着情報ページはローリング（直近分のみ）なので、置換方式だと過去に公開された
+    # プロポが毎回消えて蓄積しない。追記なら日次実行で新規公開分が積み上がる。
+    # ユーザーの「データは消さない」方針とも一致し、サイト障害で0件でも既存は無傷
+    # （＝空消し事故が原理的に起きない）。締切切れは締切日で「終了」表示されるだけ。
+    exurls = {r.get("url") for r in allrows}
+    maxid = max(int(r[idcol]) for r in allrows if (r.get(idcol) or "").isdigit())
     new = [r for r in recs if r["url"] not in exurls]
-    print("既存プロポ除去:%d 保持:%d 新規プロポ:%d" % (len(allrows) - len(kept), len(kept), len(new)))
+    print("追記型 既存保持:%d 新規プロポ:%d 県別:%s" % (
+        len(allrows), len(new), dict(collections.Counter(r["source"] for r in new))))
     if not write:
-        import collections
-        print("  県別:", dict(collections.Counter(r["source"] for r in new)))
-        for r in new[:10]:
+        for r in new[:12]:
             print("   ", r["source"], r["deadline"] or "締切?", "|", r["title"][:40])
         print("[DRY RUN] --write で反映")
         return
@@ -205,17 +205,18 @@ def ingest(all_recs, targets, write):
         for k, v in r.items():
             if k in row:
                 row[k] = v
-        row["first_seen"] = prev_fs.get(r["url"], today_s)
+        row["first_seen"] = today_s
         row["last_seen"] = now_s
         outrows.append(row)
     with open(TENDERS, "w", encoding="utf-8-sig", newline="") as f:
         w = csv.DictWriter(f, fieldnames=cols)
         w.writeheader()
-        for r in kept:
+        for r in allrows:
             w.writerow({c: r.get(c, "") for c in cols})
         for r in outrows:
             w.writerow(r)
-    print("[WRITE] プロポ %d件 (id %d..%d)" % (len(outrows), maxid + 1, i))
+    print("[WRITE] プロポ新規 %d件 追加 (id %d..%d) / 総 %d件" % (
+        len(outrows), maxid + 1, i, len(allrows) + len(outrows)))
 
 
 def main():
