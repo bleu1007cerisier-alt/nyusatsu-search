@@ -1151,18 +1151,8 @@ def main():
             writer.writerow({k: r.get(k, "") for k in FIELDNAMES})
 
     print(f"書き出し完了: {CSV_PATH} ({len(rows)}件)")
-
-    # 非公開データバケット(R2_DATA_BUCKET)へアップロード（データ配布をgitから切り離す
-    # 移行の第一歩）。gitコミットは当面併用（フォールバック）。R2_DATA_BUCKET未設定なら
-    # 何もしない（公開バケットには絶対に置かない）。
-    try:
-        sys.path.insert(0, os.path.join(ROOT, "backend"))
-        import storage
-        with open(CSV_PATH, "rb") as _f:
-            if storage.upload_data("tenders.csv", _f.read(), "text/csv; charset=utf-8"):
-                print("R2(非公開)アップロード完了: tenders.csv")
-    except Exception as _e:  # noqa: BLE001
-        print(f"R2アップロード skip/失敗: {_e}")
+    # R2へのアップロードは、件数急減チェック(monitor_counts.py)を通過した後に
+    # ワークフローの scripts/sync_r2.py push で行う（不正データをR2へ載せないため）。
 
     # 実行履歴ログ（開発ページ用）。直近50件をローリング保存する。
     try:

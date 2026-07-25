@@ -31,6 +31,14 @@ jobs:
       - name: 依存インストール
         run: pip install -r requirements.txt
 
+      - name: R2から最新データを取得（スクレイプの土台。取得失敗なら中断）
+        env:
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_DATA_BUCKET: ${{ secrets.R2_DATA_BUCKET }}
+        run: python scripts/sync_r2.py pull
+
       - name: データ蓄積（スクレイピング）
         env:
           # R2の鍵はGitHubのSecretsに登録（未登録なら添付保存はスキップされる）
@@ -46,20 +54,29 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: python scripts/build_dataset.py
 
-      - name: 件数の急減チェック（異常なら以降を中止しコミットしない）
+      - name: 件数の急減チェック（異常なら以降を中止しR2にもgitにも反映しない）
         run: python scripts/monitor_counts.py
 
-      - name: 変更があればコミット
+      - name: R2へ保存（件数チェック通過後。ここが本番データの正）
+        env:
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_DATA_BUCKET: ${{ secrets.R2_DATA_BUCKET }}
+        run: python scripts/sync_r2.py push
+
+      - name: ログをコミット（CSVはR2が正なのでgitには載せない＝.git肥大を止める）
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git stash
           git pull --rebase origin main
-          git stash pop
-          git add dataset/tenders.csv dataset/update_log.json dataset/source_counts.json
+          git stash pop || true
+          # tenders.csv は add しない（＝コミットされない）。R2へ保存済みなので不要。
+          git add dataset/update_log.json dataset/source_counts.json
           if git diff --staged --quiet; then
             echo "更新なし"
           else
-            git commit -m "データ自動更新 $(date -u +%Y-%m-%d)"
+            git commit -m "データ更新ログ $(date -u +%Y-%m-%d)"
             git push
           fi

@@ -39,6 +39,14 @@ jobs:
           pip install playwright
           python -m playwright install --with-deps chromium
 
+      - name: R2から最新データを取得（土台。取得失敗なら中断）
+        env:
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_DATA_BUCKET: ${{ secrets.R2_DATA_BUCKET }}
+        run: python scripts/sync_r2.py pull
+
       - name: 収集（奈良・神奈川・宮城建設・茨城）
         run: |
           set +e
@@ -49,20 +57,28 @@ jobs:
           done
           true
 
-      - name: 件数の急減チェック（異常なら以降を中止しコミットしない）
+      - name: 件数の急減チェック（異常なら以降を中止しR2にもgitにも反映しない）
         run: python scripts/monitor_counts.py
 
-      - name: 変更があればコミット
+      - name: R2へ保存（件数チェック通過後。ここが本番データの正）
+        env:
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_DATA_BUCKET: ${{ secrets.R2_DATA_BUCKET }}
+        run: python scripts/sync_r2.py push
+
+      - name: ログをコミット（CSVはR2が正なのでgitには載せない）
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git stash
           git pull --rebase origin main
           git stash pop || true
-          git add dataset/tenders.csv dataset/source_counts.json
+          git add dataset/source_counts.json
           if git diff --staged --quiet; then
-            echo "更新なし"
+            echo "更新なし（デプロイは日次側のログ更新で起きる）"
           else
-            git commit -m "電子入札(Playwright)自動更新 $(date -u +%Y-%m-%d)"
+            git commit -m "電子入札(Playwright)データ更新 $(date -u +%Y-%m-%d)"
             git push
           fi
