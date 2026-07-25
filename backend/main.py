@@ -419,10 +419,15 @@ def get_tags(db: Session = Depends(get_db)):
 @app.get("/api/datainfo")
 def get_datainfo(db: Session = Depends(get_db)):
     """データの読み込み元（R2 or git）と件数を返す確認用エンドポイント（R2移行の稼働確認）。"""
+    # どの環境変数が「設定されているか」だけを返す（値は返さない＝安全）。
+    # 足りない/名前ミスのものを true/false で特定するため。
+    env_present = {k: bool(os.environ.get(k)) for k in
+                   ("R2_ENDPOINT", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_DATA_BUCKET")}
     return {
         "data_source": _DATA_SOURCE.get("source"),
         "r2_bytes": _DATA_SOURCE.get("bytes"),
         "note": _DATA_SOURCE.get("note"),
+        "env_present": env_present,
         "rows": db.query(Tender).count(),
     }
 
