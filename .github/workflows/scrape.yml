@@ -39,6 +39,9 @@ jobs:
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_BUCKET: ${{ secrets.R2_BUCKET }}
           R2_PUBLIC_URL: ${{ secrets.R2_PUBLIC_URL }}
+          # データCSVの非公開バケット（R2移行用。Secretsに登録すると build_dataset が
+          # R2へアップロードし始める。未登録の間は従来どおりgitのCSVのみ）
+          R2_DATA_BUCKET: ${{ secrets.R2_DATA_BUCKET }}
           # Anthropic API（公告テキストのAI要約用。未設定なら生テキストをそのまま格納）
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: python scripts/build_dataset.py
