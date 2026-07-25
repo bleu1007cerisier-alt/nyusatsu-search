@@ -50,6 +50,9 @@ STATUS_ENDED = "公開終了"
 _STATS_CACHE: dict = {"date": None, "data": None}
 _ITEMS_CACHE: dict = {"date": None, "items": None}
 
+# データの読み込み元（R2 or git）を記録（/api/datainfo で確認用）
+_DATA_SOURCE: dict = {"source": "git", "bytes": 0, "note": "起動前"}
+
 
 def _refresh_from_r2() -> bool:
     """R2にデータセット(data/tenders.csv)があればローカルへ取得し、gitのCSVより優先する。
@@ -57,17 +60,22 @@ def _refresh_from_r2() -> bool:
     try:
         import storage
         if not storage.data_bucket_enabled():
+            _DATA_SOURCE.update(source="git", bytes=0, note="R2_DATA_BUCKET等の環境変数が未設定")
+            print("R2データバケット未設定 → gitのCSVを使用", flush=True)
             return False
         data = storage.download_data("tenders.csv")
         # 妥当性チェック: 空/極端に小さい取得結果でgit版CSVを潰さない
         if data and len(data) > 100000:
             with open(DATASET_CSV, "wb") as f:
                 f.write(data)
-            print(f"R2からデータセット取得: {len(data):,} bytes（gitより優先）")
+            _DATA_SOURCE.update(source="R2", bytes=len(data), note="OK")
+            print(f"R2からデータセット取得: {len(data):,} bytes（gitより優先）", flush=True)
             return True
-        print("R2にデータ無し/小さすぎ → gitのCSVを使用")
+        _DATA_SOURCE.update(source="git", bytes=0, note="R2に有効なデータ無し/小さすぎ")
+        print("R2にデータ無し/小さすぎ → gitのCSVを使用", flush=True)
     except Exception as e:  # noqa: BLE001
-        print(f"R2取得失敗（gitのCSVを使用）: {e}")
+        _DATA_SOURCE.update(source="git", bytes=0, note=f"R2取得失敗: {e}")
+        print(f"R2取得失敗（gitのCSVを使用）: {e}", flush=True)
     return False
 
 
@@ -406,6 +414,17 @@ def get_tags(db: Session = Depends(get_db)):
                     "open": open_counts.get(t, 0)} for t in tags]
         categories.append({"category": cat, "tags": entries})
     return {"categories": categories}
+
+
+@app.get("/api/datainfo")
+def get_datainfo(db: Session = Depends(get_db)):
+    """データの読み込み元（R2 or git）と件数を返す確認用エンドポイント（R2移行の稼働確認）。"""
+    return {
+        "data_source": _DATA_SOURCE.get("source"),
+        "r2_bytes": _DATA_SOURCE.get("bytes"),
+        "note": _DATA_SOURCE.get("note"),
+        "rows": db.query(Tender).count(),
+    }
 
 
 @app.get("/api/stats")
