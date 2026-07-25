@@ -51,11 +51,33 @@ _STATS_CACHE: dict = {"date": None, "data": None}
 _ITEMS_CACHE: dict = {"date": None, "items": None}
 
 
+def _refresh_from_r2() -> bool:
+    """R2にデータセット(data/tenders.csv)があればローカルへ取得し、gitのCSVより優先する。
+    R2鍵未設定・不在・破損時は False を返し、gitに同梱のCSVをそのまま使う（無停止移行）。"""
+    try:
+        import storage
+        if not storage.data_bucket_enabled():
+            return False
+        data = storage.download_data("tenders.csv")
+        # 妥当性チェック: 空/極端に小さい取得結果でgit版CSVを潰さない
+        if data and len(data) > 100000:
+            with open(DATASET_CSV, "wb") as f:
+                f.write(data)
+            print(f"R2からデータセット取得: {len(data):,} bytes（gitより優先）")
+            return True
+        print("R2にデータ無し/小さすぎ → gitのCSVを使用")
+    except Exception as e:  # noqa: BLE001
+        print(f"R2取得失敗（gitのCSVを使用）: {e}")
+    return False
+
+
 def load_dataset_into_db() -> int:
-    """蓄積済みCSV（dataset/tenders.csv）をDBへ読み込む。サイト側はスクレイピングしない。"""
+    """蓄積済みCSV（dataset/tenders.csv）をDBへ読み込む。サイト側はスクレイピングしない。
+    起動時にR2から最新CSVを取得できればそれを優先し、無理ならgit同梱CSVを使う。"""
     global _STATS_CACHE, _ITEMS_CACHE
     _STATS_CACHE = {"date": None, "data": None}  # データ更新でキャッシュ無効化
     _ITEMS_CACHE = {"date": None, "items": None}
+    _refresh_from_r2()
     if not os.path.exists(DATASET_CSV):
         return 0
     db = SessionLocal()
