@@ -196,6 +196,18 @@ PREF_ORDER = [
 ]
 _PREF_RANK = {p: i + 1 for i, p in enumerate(PREF_ORDER)}  # 国=0、以降 北→南
 
+# 国のデータソース（案件の所在地は各地だが、機関としては国＝表の先頭に置く）。
+# PORTAL(政府調達ポータル)を国の先頭にする。
+NATIONAL_ORDER = {"PORTAL": 0, "NEDO": 1, "JOGMEC": 2, "JST": 3}
+NATIONAL_SOURCES = set(NATIONAL_ORDER)
+
+
+def source_sort_key(source: str, pref: str, label: str = ""):
+    """ソースの並び順キー。国ソースを先頭(PORTAL→NEDO…)、続いて県を北→南。"""
+    if source in NATIONAL_SOURCES:
+        return (0, NATIONAL_ORDER.get(source, 9), label)
+    return (1, pref_rank(pref), label)
+
 
 def pref_rank(pref: str) -> int:
     """都道府県名→並び順の数値。国/空は0（先頭）、未知は末尾。"""
@@ -509,7 +521,7 @@ def get_stats(db: Session = Depends(get_db)):
     # 機関は「国→県(北から南)」順。同一県内は件数の多い順。
     top_orgs = sorted(org_counts.items(),
                       key=lambda kv: (pref_rank(org_pref.get(kv[0])), -kv[1], kv[0]))
-    sources_ordered = sorted(sources, key=lambda s: (pref_rank(src_pref.get(s)), s))
+    sources_ordered = sorted(sources, key=lambda s: source_sort_key(s, src_pref.get(s), s))
     nyusatsu = sum(1 for t in all_items if t.category == "入札")
     proposal = sum(1 for t in all_items if t.category == "プロポーザル")
 
@@ -712,7 +724,7 @@ def dev_matrix():
             "counts": [counts.get(dd, 0) for dd in days],
             "total": sum(counts.values()),
         })
-    rows.sort(key=lambda r: (pref_rank(r["prefecture"]), r["label"]))
+    rows.sort(key=lambda r: source_sort_key(r["source"], r["prefecture"], r["label"]))
     col_totals = [sum(r["counts"][i] for r in rows) for i in range(len(days))]
     return {"days": days, "rows": rows, "col_totals": col_totals,
             "grand_total": sum(col_totals)}
