@@ -70,7 +70,7 @@
         <div id="tags" class="flex flex-wrap gap-2"></div>
       </div>
 
-      <div class="mb-6">
+      <div id="detail-section" class="mb-6">
         <h2 id="detail-label" class="flex items-center gap-2 text-sm font-semibold text-slate-700 mb-2"><span class="inline-block w-1 h-3.5 rounded-full bg-indigo-400"></span>公募概要</h2>
         <div id="detail" class="text-sm text-gray-600 leading-relaxed"></div>
       </div>
@@ -150,24 +150,6 @@
     };
     function statusBadge(status) {
       return `<span class="text-xs font-medium px-2.5 py-1 rounded-full ${STATUS_STYLE[status] || 'bg-gray-100 text-gray-600'}">${esc(status)}</span>`;
-    }
-
-    // 公式本文が無い案件向け: 把握済みの項目から概要文を組み立てる（事実の言い換えのみ・創作しない）
-    function synthDesc(t) {
-      const who = (t.organization || t.prefecture || '').trim();
-      const kind = (t.source_category || '').trim()
-        || (t.category === 'プロポーザル' ? 'プロポーザル'
-          : t.category === '入札' ? '入札'
-          : t.category === '随意契約' ? '随意契約' : '公募');
-      const generic = new Set(['工事', '業務委託', '物品購入', '賃貸借', '売払', '役務', 'コンサルティング', 'RFI', '随意契約']);
-      const fields = (t.tags || []).filter(x => !generic.has(x)).slice(0, 3);
-      const bits = [];
-      bits.push(`${who ? who + 'が' : ''}発注する${kind}案件です。`);
-      if (fields.length) bits.push(`分野: ${fields.join('、')}。`);
-      if (t.deadline) bits.push(`${t.category === '入札' ? '入札締切' : '締切'} ${t.deadline}。`);
-      else if (t.published_at) bits.push(`掲載 ${t.published_at}。`);
-      if (t.amount) bits.push(`予算規模 ${t.amount}。`);
-      return bits.join('');
     }
 
     async function load() {
@@ -268,13 +250,14 @@
         detailEl.appendChild(ul);
       } else {
         const raw = summaryText || (t.detail || '').trim();
+        const section = document.getElementById('detail-section');
         if (raw) {
+          if (section) section.style.display = '';
           detailEl.innerHTML = esc(raw).replace(/\n\n/g, '<br><br>').replace(/\n/g, '<br>');
         } else {
-          // 公式本文を取得できていない案件（電子入札システム等でセッション必須のため）。
-          // 空欄にせず、把握済みの項目から概要を自動生成して掲示する（自動生成である旨を明記）。
-          detailEl.innerHTML = esc(synthDesc(t)) +
-            '<p class="mt-2 text-xs text-slate-400">※公式の本文を取得できていないため、当サイトが把握している項目から自動生成した概要です。正確な内容・仕様は公式ページでご確認ください。</p>';
+          // 公式本文が無い案件（電子入札システム等でセッション必須のため取得不可）は
+          // 概要セクションごと非表示にする（薄い自動生成文はかえって邪魔なため）。
+          if (section) section.style.display = 'none';
         }
       }
 
