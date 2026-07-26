@@ -11,7 +11,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from database import init_db, get_db, Tender, SessionLocal
+from database import init_db, get_db, Tender, SessionLocal, DB_PATH, engine
 from tag_master import TAG_MASTER
 from datetime import date, timedelta
 import csv
@@ -54,38 +54,64 @@ _ITEMS_CACHE: dict = {"date": None, "items": None}
 _DATA_SOURCE: dict = {"source": "git", "bytes": 0, "note": "起動前"}
 
 
+def _place_db(raw: bytes, note: str, data_len: int) -> bool:
+    """展開済みSQLiteバイト列をDB_PATHへ書き込み、以降そのDBを直接使う。"""
+    if not raw or len(raw) < 100000:
+        return False
+    engine.dispose()  # 既存接続を閉じてからファイルを差し替える
+    with open(DB_PATH, "wb") as f:
+        f.write(raw)
+    _DATA_SOURCE.update(source="R2", bytes=data_len, note=note)
+    return True
+
+
 def _refresh_from_r2() -> bool:
-    """R2にデータセット(data/tenders.csv)があればローカルへ取得し、gitのCSVより優先する。
-    R2鍵未設定・不在・破損時は False を返し、gitに同梱のCSVをそのまま使う（無停止移行）。"""
+    """データセット(SQLite)を取得してDB_PATHへ展開する。サイトはそのDBを直接使う。
+    順に R2(tenders.db.gz) → git同梱(dataset/tenders.db.gz) を試し、両方ダメなら
+    False を返す（呼び出し側で git同梱CSVからDBを構築＝無停止フォールバック）。"""
+    import gzip
     try:
         import storage
-        if not storage.data_bucket_enabled():
-            _DATA_SOURCE.update(source="git", bytes=0, note="R2_DATA_BUCKET等の環境変数が未設定")
-            print("R2データバケット未設定 → gitのCSVを使用", flush=True)
-            return False
-        data = storage.download_data("tenders.csv")
-        # 妥当性チェック: 空/極端に小さい取得結果でgit版CSVを潰さない
-        if data and len(data) > 100000:
-            with open(DATASET_CSV, "wb") as f:
-                f.write(data)
-            _DATA_SOURCE.update(source="R2", bytes=len(data), note="OK")
-            print(f"R2からデータセット取得: {len(data):,} bytes（gitより優先）", flush=True)
-            return True
-        _DATA_SOURCE.update(source="git", bytes=0, note="R2に有効なデータ無し/小さすぎ")
-        print("R2にデータ無し/小さすぎ → gitのCSVを使用", flush=True)
+        if storage.data_bucket_enabled():
+            data = storage.download_data("tenders.db.gz")
+            if data and len(data) > 30000:
+                if _place_db(gzip.decompress(data), "OK(SQLite)", len(data)):
+                    print(f"R2からSQLite取得: {len(data):,} bytes（gzip）", flush=True)
+                    return True
+            _DATA_SOURCE.update(source="git", bytes=0, note="R2にDB無し/小さすぎ")
+            print("R2にDB無し/小さすぎ → フォールバック", flush=True)
+        else:
+            _DATA_SOURCE.update(source="git", bytes=0, note="R2_DATA_BUCKET等が未設定")
     except Exception as e:  # noqa: BLE001
         _DATA_SOURCE.update(source="git", bytes=0, note=f"R2取得失敗: {e}")
-        print(f"R2取得失敗（gitのCSVを使用）: {e}", flush=True)
+        print(f"R2取得失敗（フォールバック）: {e}", flush=True)
+    # git同梱の SQLite(gz) フォールバック
+    local_gz = os.path.join(os.path.dirname(__file__), "../dataset/tenders.db.gz")
+    if os.path.exists(local_gz):
+        try:
+            if _place_db(gzip.decompress(open(local_gz, "rb").read()), "git同梱SQLite", 0):
+                _DATA_SOURCE.update(source="git", note="git同梱SQLite")
+                print("git同梱SQLite(tenders.db.gz)を使用", flush=True)
+                return True
+        except Exception as e:  # noqa: BLE001
+            print(f"ローカルDB展開失敗: {e}", flush=True)
     return False
 
 
 def load_dataset_into_db() -> int:
-    """蓄積済みCSV（dataset/tenders.csv）をDBへ読み込む。サイト側はスクレイピングしない。
-    起動時にR2から最新CSVを取得できればそれを優先し、無理ならgit同梱CSVを使う。"""
+    """データセットをDBに用意する。R2/git同梱のSQLite(tenders.db.gz)を取得できれば
+    そのDBを直接使う（CSVパース不要で高速）。取れなければ git同梱CSVからDBを構築する。"""
     global _STATS_CACHE, _ITEMS_CACHE
     _STATS_CACHE = {"date": None, "data": None}  # データ更新でキャッシュ無効化
     _ITEMS_CACHE = {"date": None, "items": None}
-    _refresh_from_r2()
+    if _refresh_from_r2():
+        init_db()  # 差し替えたDBに列不足があれば補う（通常は同スキーマでno-op）
+        db = SessionLocal()
+        try:
+            return db.query(Tender).count()
+        finally:
+            db.close()
+    # フォールバック: git同梱CSVからDBを構築（従来経路）
     if not os.path.exists(DATASET_CSV):
         return 0
     db = SessionLocal()

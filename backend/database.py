@@ -10,7 +10,8 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.environ.get("DATA_DIR", os.path.join(BASE_DIR, "data"))
 os.makedirs(DATA_DIR, exist_ok=True)
 
-DATABASE_URL = f"sqlite:///{os.path.join(DATA_DIR, 'nyusatsu.db')}"
+DB_PATH = os.path.join(DATA_DIR, "nyusatsu.db")
+DATABASE_URL = f"sqlite:///{DB_PATH}"
 
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -41,6 +42,11 @@ class Tender(Base):
     tags = Column(String(500))           # タグ（カンマ区切り）
     source = Column(String(100))         # データソース名
     first_seen = Column(String(50))      # 初回取得日（新着判定用 YYYY-MM-DD）
+    last_seen = Column(String(50))       # 最終確認日時（取得状況の監視用）
+    result_url = Column(String(1000))    # 落札結果ページURL
+    awardee_checked = Column(String(10))     # 落札者確認済みフラグ
+    budget_checked = Column(String(10))      # 予算確認済みフラグ
+    attachments_checked = Column(String(10)) # 添付確認済みフラグ
     fetched_at = Column(DateTime, default=datetime.now)
 
     __table_args__ = (
@@ -67,6 +73,11 @@ def init_db():
             ("source_category", "ALTER TABLE tenders ADD COLUMN source_category VARCHAR(200)"),
             ("close_date", "ALTER TABLE tenders ADD COLUMN close_date VARCHAR(50)"),
             ("first_seen", "ALTER TABLE tenders ADD COLUMN first_seen VARCHAR(50)"),
+            ("last_seen", "ALTER TABLE tenders ADD COLUMN last_seen VARCHAR(50)"),
+            ("result_url", "ALTER TABLE tenders ADD COLUMN result_url VARCHAR(1000)"),
+            ("awardee_checked", "ALTER TABLE tenders ADD COLUMN awardee_checked VARCHAR(10)"),
+            ("budget_checked", "ALTER TABLE tenders ADD COLUMN budget_checked VARCHAR(10)"),
+            ("attachments_checked", "ALTER TABLE tenders ADD COLUMN attachments_checked VARCHAR(10)"),
         ]
         for col, ddl in migrations:
             if col not in existing:

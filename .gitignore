@@ -11,3 +11,7 @@ venv/
 tmp_*
 result.txt
 C：*
+
+# データセットのCSVはパイプラインの作業用中間物。R2はSQLite(tenders.db.gz)が正、
+# gitフォールバックも tenders.db.gz。肥大なCSVはコミットしない。
+dataset/tenders.csv

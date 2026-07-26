@@ -27,39 +27,64 @@ if os.path.exists(envp):
             os.environ.setdefault(k.strip(), v.strip())
 
 sys.path.insert(0, os.path.join(ROOT, "backend"))
+import gzip, tempfile  # noqa: E402
 import storage  # noqa: E402
+from csv_sqlite import csv_to_db, db_to_csv  # noqa: E402
 
-MIN_BYTES = 100000  # これ未満は「壊れ/空」とみなす（正常時は数十MB）
+MIN_BYTES = 30000    # gz済DBがこれ未満は「壊れ/空」とみなす
+DB_KEY = "tenders.db.gz"
+LOCAL_DB_GZ = os.path.join(ROOT, "dataset", "tenders.db.gz")
+
+
+def _tmp(name):
+    return os.path.join(tempfile.gettempdir(), name)
 
 
 def pull():
+    """R2(またはgit同梱)のSQLite(gz)を取得し、パイプライン用にCSVへ展開する。"""
     if not storage.data_bucket_enabled():
-        print("[pull] R2未設定 → gitのCSVをそのまま使用（no-op）")
+        # ローカル: CSVが無くて db.gz があれば展開（開発時の利便）
+        if not os.path.exists(CSV) and os.path.exists(LOCAL_DB_GZ):
+            db = _tmp("pull_local.db")
+            open(db, "wb").write(gzip.decompress(open(LOCAL_DB_GZ, "rb").read()))
+            n = db_to_csv(db, CSV)
+            print(f"[pull] R2未設定 → git同梱DBからCSV展開 {n}行")
+        else:
+            print("[pull] R2未設定 → 既存CSVをそのまま使用（no-op）")
         return 0
-    data = storage.download_data("tenders.csv")
+    data = storage.download_data(DB_KEY)
     if data and len(data) >= MIN_BYTES:
-        with open(CSV, "wb") as f:
-            f.write(data)
-        print(f"[pull] R2から取得: {len(data):,} bytes → {CSV}")
+        db = _tmp("pull.db")
+        open(db, "wb").write(gzip.decompress(data))
+        n = db_to_csv(db, CSV)
+        print(f"[pull] R2から取得: {len(data):,} bytes(gz) → DB → CSV {n}行")
         return 0
-    # R2は有効なのに取れない/空 → 古い土台での上書き事故を避けるため中断
+    # 移行期: R2にdb.gzがまだ無ければ、旧 tenders.csv を土台にする（次のpushでdb.gz化）
+    old = storage.download_data("tenders.csv")
+    if old and len(old) >= 100000:
+        open(CSV, "wb").write(old)
+        print(f"[pull] R2にdb.gz無し → 旧tenders.csvを土台に {len(old):,}B（次のpushでSQLite化）")
+        return 0
     print("[pull] ⚠ R2からの取得に失敗/空。古いデータでの上書きを防ぐため中断します。")
     return 1
 
 
 def push():
-    if not storage.data_bucket_enabled():
-        print("[push] R2未設定 → pushスキップ（no-op）")
-        return 0
+    """ローカルCSVをSQLite化・gzipしてR2へ保存する（R2の正はSQLite）。"""
     if not os.path.exists(CSV):
         print("[push] ⚠ ローカルCSVが無い。pushスキップ。")
         return 1
-    data = open(CSV, "rb").read()
-    if len(data) < MIN_BYTES:
-        print("[push] ⚠ ローカルCSVが小さすぎ。安全のためpushしません。")
+    db = _tmp("push.db")
+    n = csv_to_db(CSV, db)
+    gz = gzip.compress(open(db, "rb").read(), 6)
+    if len(gz) < MIN_BYTES:
+        print("[push] ⚠ 生成DBが小さすぎ。安全のためpushしません。")
         return 1
-    if storage.upload_data("tenders.csv", data, "text/csv; charset=utf-8"):
-        print(f"[push] R2へ保存: {len(data):,} bytes")
+    if not storage.data_bucket_enabled():
+        print(f"[push] R2未設定 → pushスキップ（DB化のみ確認: {n}行 / {len(gz):,}B）")
+        return 0
+    if storage.upload_data(DB_KEY, gz, "application/gzip"):
+        print(f"[push] R2へ保存: SQLite {n}行 / {len(gz):,} bytes(gz)")
         return 0
     print("[push] ⚠ R2へのアップロード失敗。")
     return 1
