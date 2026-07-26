@@ -78,6 +78,10 @@
            class="bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-lg text-sm font-medium transition">
           🔗 公式ページで原文・応募方法を見る
         </a>
+        <button id="copy-name-btn" type="button"
+           class="hidden bg-white border border-blue-600 text-blue-600 hover:bg-blue-50 px-4 py-2.5 rounded-lg text-sm font-medium transition">
+          📋 案件名をコピー
+        </button>
         <span class="text-xs text-gray-400">出典: <span id="source"></span></span>
       </div>
       <p id="ebid-note" style="display:none" class="mt-2 text-xs text-amber-700">
@@ -268,6 +272,27 @@
         origLink.textContent = '🔗 電子入札・調達システムで確認（案件名で検索）';
         const note = document.getElementById('ebid-note');
         if (note) note.style.display = '';
+        // 電子入札系は検索窓に案件名をURLで渡せない（POST/セッション式）ため、
+        // 案件名をワンタップでコピーできるようにし、開いた先の検索窓へ貼り付けてもらう。
+        const cbtn = document.getElementById('copy-name-btn');
+        if (cbtn) {
+          cbtn.classList.remove('hidden');
+          cbtn.onclick = async () => {
+            const name = (t.title || '').trim();
+            if (!name) return;
+            try { await navigator.clipboard.writeText(name); }
+            catch (_) {
+              const ta = document.createElement('textarea');
+              ta.value = name; ta.style.position = 'fixed'; ta.style.opacity = '0';
+              document.body.appendChild(ta); ta.select();
+              try { document.execCommand('copy'); } catch (e) {}
+              ta.remove();
+            }
+            const prev = cbtn.textContent;
+            cbtn.textContent = '✓ コピーしました（検索窓に貼り付け）';
+            setTimeout(() => { cbtn.textContent = prev; }, 1800);
+          };
+        }
       } else {
         origLink.href = t.url;
         origLink.textContent = '🔗 公式ページで原文・応募方法を見る';
