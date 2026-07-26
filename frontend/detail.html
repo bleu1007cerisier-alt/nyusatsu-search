@@ -280,10 +280,20 @@
           'pub.pref.aomori.lg.jp': 'http://pub.pref.aomori.lg.jp/pls/doboku/koji_nyus_sel1',
           // 茨城: 旧共同利用は閉鎖 → 現行の茨城県 電子入札トップ
           'ppi.cals-ibaraki.lg.jp': 'https://www.pref.ibaraki.jp/doboku/kensa/kanri/ebid/denshinyusatu-top.html',
+          // 大阪: ログイン前トップではなく「入札公告情報」の一覧ページへ
+          'www.e-nyusatsu.pref.osaka.jp': 'https://www.e-nyusatsu.pref.osaka.jp/CALS/Publish/EbController?Shori=KokokuInfo',
         };
         const host = ((t.url || '').match(/^https?:\/\/([^/]+)/) || [])[1] || '';
         const origin = (t.url || '').match(/^https?:\/\/[^/]+/);
-        origLink.href = EBID_LANDING[host] || (origin ? origin[0] : (t.url || '').split('#')[0]);
+        if (EBID_LANDING[host]) {
+          origLink.href = EBID_LANDING[host];
+        } else if (/ebidPPIG?Publish/.test(t.url || '')) {
+          // SuperCALS(福井・千葉・石川・長野・新潟・静岡・鹿児島・宮崎)は KikanNO が安定IDなので
+          // 断片(#…)だけ外せば「入札情報サービス」が開く（オリジンだとパスを失い開けない）。
+          origLink.href = (t.url || '').split('#')[0];
+        } else {
+          origLink.href = origin ? origin[0] : (t.url || '').split('#')[0];
+        }
         origLink.textContent = '🔗 電子入札・調達システムで確認（案件名で検索）';
         const note = document.getElementById('ebid-note');
         if (note) note.style.display = '';
