@@ -555,6 +555,25 @@ def basic_summary(row):
     """本文(detail)の無い電子入札系案件向けの補足要約。
     発注機関/日付/予算等はカード・詳細に専用欄で表示されるため要約には入れず、
     そこに出ない工種・業種（source_category）だけを箇条書きで提示する（AIコスト0）。"""
+    import re as _re
+    src = (row.get("source") or "")
+    # 政府調達ポータル: 仕様書PDFは認証必須で取れないが、詳細ページの「公告内容」
+    # （＝正式公告の所在案内・品目分類）は公開されている。これ自体が「どこに公告が
+    # あるか」を示し有用なので要約に出す（AIコスト0・既存案件にも遡及適用）。
+    if src == "PORTAL":
+        det = _re.sub(r"\s+", " ", (row.get("detail") or "").strip())
+        core = _re.sub(r"[\s　]", "", det)
+        if len(core) < 8:
+            return ""
+        # 「〜のとおり」等、内容ゼロの定型文は要約にしない
+        if _re.search(r"(のとおり|の通り)\.?$", det):
+            return ""
+        # 品目分類マーカー等を除いた実体がタイトルとほぼ同一なら重複なので出さない
+        title_core = _re.sub(r"[\s　【】]", "", (row.get("title") or ""))
+        det_core = _re.sub(r"(【電子可】|[（(](物品|役務|物品・役務|工事)[)）])", "", core)
+        if title_core and (det_core == title_core or det_core in title_core):
+            return ""
+        return "・公告内容: " + det[:250]
     sc = (row.get("source_category") or "").strip()
     # カテゴリ名そのもの（工事/入札等）は情報量が無いので除く
     if sc and sc not in ("入札", "プロポーザル", "公募", "一般競争入札", "工事", "委託", "物品"):
