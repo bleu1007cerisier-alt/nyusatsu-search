@@ -7947,7 +7947,7 @@ _ISHIKAWA_CALS_EJ = _ISHIKAWA_BASE + "/ebidPPIPublish/EjPPIj"   # Gなし＝建�
 _ISHIKAWA_CALS_KIKAN = "1700000"  # 石川県（departArray, 物品の1700100とは別）
 _ISHIKAWA_CALS_CHOUTATSU = [("00", "工事"), ("01", "測量・コンサル")]
 _ISHIKAWA_CALS_WINDOW_DAYS = 30
-_ISHIKAWA_CALS_MAX_DETAIL = 150   # 共用ホスト(ep-bis)配慮の詳細取得上限
+_ISHIKAWA_CALS_MAX_DETAIL = 300   # 共用ホスト(ep-bis)配慮の詳細取得上限（新着が多い日も工種を拾えるよう引上げ。throttle付き）
 
 
 def _scrape_ishikawa_cals_sync() -> List[Dict]:
