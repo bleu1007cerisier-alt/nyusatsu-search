@@ -266,9 +266,17 @@
       const origLink = document.getElementById('orig-link');
       const isEbid = /ebidPPIG?Publish|EbController|GPPI_MENU|ebid-joho\.e-kanagawa|ebid-kouji-gyoumu|cals-ibaraki|efftis\.jp|pub\.pref\.aomori|buppin\.e-aichi/i.test(t.url || '');
       if (isEbid) {
-        // セッション付き個別URLは無効化されるため、確実に開けるシステム入口(オリジン)へ
-        const m = (t.url || '').match(/^https?:\/\/[^/]+/);
-        origLink.href = m ? m[0] : (t.url || '').split('#')[0];
+        // セッション付き個別URLは無効化されるため、確実に開けて検索できるページへ誘導。
+        // ホスト別に「検索できる着地URL」を指定（実機確認済）。未指定はシステム入口(オリジン)。
+        const EBID_LANDING = {
+          // 青森: 建設工事入札情報の検索フォーム（発注者・場所・公告日で検索可）
+          'pub.pref.aomori.lg.jp': 'http://pub.pref.aomori.lg.jp/pls/doboku/koji_nyus_sel1',
+          // 茨城: 旧共同利用は閉鎖 → 現行の茨城県 電子入札トップ
+          'ppi.cals-ibaraki.lg.jp': 'https://www.pref.ibaraki.jp/doboku/kensa/kanri/ebid/denshinyusatu-top.html',
+        };
+        const host = ((t.url || '').match(/^https?:\/\/([^/]+)/) || [])[1] || '';
+        const origin = (t.url || '').match(/^https?:\/\/[^/]+/);
+        origLink.href = EBID_LANDING[host] || (origin ? origin[0] : (t.url || '').split('#')[0]);
         origLink.textContent = '🔗 電子入札・調達システムで確認（案件名で検索）';
         const note = document.getElementById('ebid-note');
         if (note) note.style.display = '';
