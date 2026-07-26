@@ -559,27 +559,53 @@ def basic_summary(row):
     そこに出ない工種・業種（source_category）だけを箇条書きで提示する（AIコスト0）。"""
     import re as _re
     src = (row.get("source") or "")
-    # 政府調達ポータル: 仕様書PDFは認証必須で取れないが、詳細ページの「公告内容」
-    # （＝正式公告の所在案内・品目分類）は公開されている。これ自体が「どこに公告が
-    # あるか」を示し有用なので要約に出す（AIコスト0・既存案件にも遡及適用）。
+    det = _re.sub(r"\s+", " ", (row.get("detail") or "").strip())
+
+    # (A) まず本文・工種からルール抽出（工種＋入札方式＋実体のある場所/期間）。
+    #     構造化された入札公告（「(3)工事場所 … (5)工期 …」等）はこれで綺麗に出る。
+    bullets = []
+    sc = (row.get("source_category") or "").strip()
+    if sc and sc not in ("入札", "プロポーザル", "公募", "一般競争入札", "工事", "委託", "物品"):
+        bullets.append(f"・工種・業種: {sc}")
+    if det:
+        text = det + " " + (row.get("title") or "")
+        method = next((p for p in ("公募型プロポーザル", "公募型指名競争入札", "指名競争入札",
+                                   "一般競争入札", "企画競争", "企画提案", "随意契約")
+                       if p in text), "")
+        if method:
+            bullets.append(f"・入札方式: {method}")
+
+        def _grab(labels):
+            m = _re.search(r"(?:" + "|".join(labels) + r")[）)\s　:：]*([^\n(（。]{2,45})", det)
+            if not m:
+                return ""
+            v = m.group(1).strip(" 　:：・")
+            if len(v) < 3 or _re.match(
+                    r"^(仕様書|別紙|別添|入札説明書|公告|上記|下記|次のとおり|支出負担|指定する)", v):
+                return ""
+            return v
+        place = _grab(["工事場所", "履行場所", "納入場所", "施工場所", "業務場所",
+                       "調達案件の範囲", "設置場所", "工事内容", "業務内容", "調達内容"])
+        if place:
+            bullets.append(f"・概要/場所: {place}")
+        term = _grab(["工期", "履行期間", "納入期限", "履行期限", "完成期限", "業務期間", "履行期日"])
+        if term:
+            bullets.append(f"・履行期間: {term}")
+    if bullets:
+        return "\n".join(bullets)
+
+    # (B) 抽出できない場合、政府ポータルは「公告内容（元HPへの案内等）」をそのまま出す。
     if src == "PORTAL":
-        det = _re.sub(r"\s+", " ", (row.get("detail") or "").strip())
         core = _re.sub(r"[\s　]", "", det)
         if len(core) < 8:
             return ""
-        # 「〜のとおり」等、内容ゼロの定型文は要約にしない
         if _re.search(r"(のとおり|の通り)\.?$", det):
             return ""
-        # 品目分類マーカー等を除いた実体がタイトルとほぼ同一なら重複なので出さない
         title_core = _re.sub(r"[\s　【】]", "", (row.get("title") or ""))
         det_core = _re.sub(r"(【電子可】|[（(](物品|役務|物品・役務|工事)[)）])", "", core)
         if title_core and (det_core == title_core or det_core in title_core):
             return ""
         return "・公告内容: " + det[:250]
-    sc = (row.get("source_category") or "").strip()
-    # カテゴリ名そのもの（工事/入札等）は情報量が無いので除く
-    if sc and sc not in ("入札", "プロポーザル", "公募", "一般競争入札", "工事", "委託", "物品"):
-        return f"・工種・業種: {sc}"
     return ""
 
 
@@ -938,7 +964,9 @@ def main():
                 _store_attachments(r, info.get("attachments", []))
             # AI抽出：公告本文＋添付PDF抜粋（仕様書等）を材料にsummary/deadline/amount/scheduleへ
             ai_extracted = {}
-            need_summary = _RUN_AI and not (r.get("summary") or "").strip()
+            # AI要約はプロポーザル等の自由文案件のみ（工事・物品入札はルール要約でコスト0）
+            need_summary = (_RUN_AI and r.get("category") != "入札"
+                            and not (r.get("summary") or "").strip())
             if need_summary:
                 detail_for_ai = (r.get("detail") or new_detail or "").strip()
                 # 要約対象のときだけPDF本文を取得（無駄なR2アクセスを避ける）。
@@ -1066,6 +1094,8 @@ def main():
                 break
             if (r.get("summary") or "").strip():
                 continue
+            if r.get("category") == "入札":   # 入札はAIを使わずルール要約に回す
+                continue
             det = (r.get("detail") or "").strip()
             if len(det) < 100:
                 continue
@@ -1115,15 +1145,18 @@ def main():
     # 構造化フィールドから「事業内容」を組み立てる。SuperCALS等の電子入札系はこれで
     # 「詳しい内容は公式ページを…」プレースホルダを解消（AIコスト0）。AI要約対象
     # （detail>=100字）は次回AI処理に委ねるため触らない。
+    # 入札はAIを使わないので、本文が長くてもここでルール要約を付ける。
     _basic = 0
     for r in merged.values():
-        if not (r.get("summary") or "").strip() and len((r.get("detail") or "").strip()) < 100:
+        if (r.get("summary") or "").strip():
+            continue
+        if len((r.get("detail") or "").strip()) < 100 or r.get("category") == "入札":
             s = basic_summary(r)
             if s:
                 r["summary"] = s
                 _basic += 1
     if _basic:
-        print(f"基本サマリー付与（本文なし案件）: {_basic}件")
+        print(f"基本サマリー付与（ルール要約）: {_basic}件")
 
     # 全ソースの要約を統一フォーマット（・ラベル: 値）へ正規化し、専用欄と重複する
     # メタ情報（発注機関/公示日/締切/落札者等）を除く。スクレイパーが独自形式で
