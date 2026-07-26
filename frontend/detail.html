@@ -11,25 +11,42 @@
   <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet">
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
-    body { font-family: 'Noto Sans JP', sans-serif; }
-    .badge-nyusatsu { background:#ede9fe; color:#4338ca; }
-    .badge-proposal { background:#ede9fe; color:#4338ca; }
-    .gradient-header { background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 50%, #312e81 100%); }
+    * { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+    body { font-family: 'Noto Sans JP', sans-serif; background:#f5f6fb; }
+    .badge-nyusatsu { background:#eef2ff; color:#4338ca; }
+    .badge-proposal { background:#ecfdf5; color:#047857; }
+    .gradient-header {
+      background:
+        radial-gradient(1100px 380px at 12% -40%, rgba(99,102,241,.40), transparent 60%),
+        linear-gradient(118deg, #0b1020 0%, #191636 45%, #312e81 100%);
+      position: relative;
+    }
+    .gradient-header::after { content:""; position:absolute; left:0; right:0; bottom:0; height:1px;
+      background:linear-gradient(90deg, transparent, rgba(165,180,252,.5), transparent); }
+    .logo-mark { width:36px; height:36px; border-radius:11px;
+      background:linear-gradient(145deg, #6366f1, #4338ca);
+      display:flex; align-items:center; justify-content:center;
+      box-shadow:0 8px 20px -6px rgba(67,56,202,.7), inset 0 1px 0 rgba(255,255,255,.28); }
+    .ic { width:1em; height:1em; display:inline-block; vertical-align:-0.14em; flex:none; }
   </style>
 </head>
 <body class="bg-slate-50 min-h-screen">
 
   <!-- ヘッダー -->
-  <header class="gradient-header text-white shadow-lg">
-    <div class="max-w-4xl mx-auto px-4 py-4 flex items-center gap-3">
-      <a href="/" class="flex items-center gap-2 hover:opacity-80 transition">
-        <span class="text-xl">🧭</span>
-        <div>
-          <span class="font-bold text-lg leading-none">全国AI公募ナビ</span>
-          <span class="text-blue-300 text-xs ml-2">KOUBO NAVI</span>
-        </div>
+  <header class="gradient-header text-white">
+    <div class="max-w-4xl mx-auto px-4 py-3.5 flex items-center gap-3">
+      <a href="/" class="flex items-center gap-2.5 hover:opacity-90 transition">
+        <span class="logo-mark shrink-0">
+          <svg width="21" height="21" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <circle cx="12" cy="12" r="9" stroke="#fff" stroke-opacity=".85" stroke-width="1.5"/>
+            <path d="M12 3.5 L13.7 12 L12 20.5 L10.3 12 Z" fill="#fff"/>
+            <path d="M3.5 12 L12 10.3 L20.5 12 L12 13.7 Z" fill="#fff" fill-opacity=".5"/>
+            <circle cx="12" cy="12" r="1.5" fill="#4338ca"/>
+          </svg>
+        </span>
+        <span class="font-bold text-base sm:text-lg leading-none">全国AI公募ナビ</span>
       </a>
-      <span class="text-blue-300 text-sm ml-2">/ 案件詳細</span>
+      <span class="text-indigo-300/80 text-sm">/ 案件詳細</span>
     </div>
   </header>
 
@@ -37,8 +54,9 @@
     <a href="/" class="inline-flex items-center text-sm text-blue-600 hover:underline mb-4">← 検索結果へ戻る</a>
 
     <div id="loading" class="text-center py-16 text-gray-400">読み込み中...</div>
-    <div id="error" class="hidden text-center py-16 text-gray-400">
-      <p class="text-4xl mb-2">😢</p><p>案件を表示できませんでした</p>
+    <div id="error" class="hidden text-center py-16 text-slate-400">
+      <svg class="w-11 h-11 mx-auto mb-3 text-slate-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9 15c.8-1 2.2-1 3 0M9 9h.01M15 9h.01"/></svg>
+      <p class="text-slate-500">案件を表示できませんでした</p>
     </div>
 
     <article id="content" class="hidden bg-white border rounded-2xl shadow-sm p-6">
@@ -48,39 +66,42 @@
       <div id="meta" class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm bg-gray-50 rounded-xl p-4 mb-5"></div>
 
       <div id="tags-wrap" class="mb-5">
-        <h2 class="text-sm font-semibold text-gray-700 mb-2">🏷️ タグ</h2>
+        <h2 class="flex items-center gap-2 text-sm font-semibold text-slate-700 mb-2"><span class="inline-block w-1 h-3.5 rounded-full bg-indigo-400"></span>タグ</h2>
         <div id="tags" class="flex flex-wrap gap-2"></div>
       </div>
 
       <div class="mb-6">
-        <h2 id="detail-label" class="text-sm font-semibold text-gray-700 mb-2">📋 公募概要</h2>
+        <h2 id="detail-label" class="flex items-center gap-2 text-sm font-semibold text-slate-700 mb-2"><span class="inline-block w-1 h-3.5 rounded-full bg-indigo-400"></span>公募概要</h2>
         <div id="detail" class="text-sm text-gray-600 leading-relaxed"></div>
       </div>
 
       <div id="schedule-wrap" class="mb-6 hidden">
-        <h2 class="text-sm font-semibold text-gray-700 mb-2">🗓️ スケジュール</h2>
+        <h2 class="flex items-center gap-2 text-sm font-semibold text-slate-700 mb-2"><span class="inline-block w-1 h-3.5 rounded-full bg-indigo-400"></span>スケジュール</h2>
         <ol id="schedule" class="space-y-1.5"></ol>
       </div>
 
       <div id="attach-wrap" class="mb-6 hidden">
-        <h2 class="text-sm font-semibold text-gray-700 mb-2">📎 関連資料（仕様書・公募要領・評価基準）</h2>
+        <h2 class="flex items-center gap-2 text-sm font-semibold text-slate-700 mb-2"><span class="inline-block w-1 h-3.5 rounded-full bg-indigo-400"></span>関連資料（仕様書・公募要領・評価基準）</h2>
         <ul id="attachments" class="space-y-1.5"></ul>
       </div>
 
       <div id="timeline-wrap" class="mb-6 hidden">
-        <h2 class="text-sm font-semibold text-gray-700 mb-1">📚 同じ事業名の公募回</h2>
+        <h2 class="flex items-center gap-2 text-sm font-semibold text-slate-700 mb-1"><span class="inline-block w-1 h-3.5 rounded-full bg-indigo-400"></span>同じ事業名の公募回</h2>
         <p class="text-xs text-gray-400 mb-2">同じ正式名称で複数回行われた公募です（各回が 公募→受付終了→事業者決定 と進みます）。</p>
         <ol id="timeline" class="space-y-2"></ol>
       </div>
 
       <div class="pt-4 border-t flex flex-wrap gap-3 items-center">
         <a id="orig-link" href="#" target="_blank" rel="noopener"
-           class="bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-lg text-sm font-medium transition">
-          🔗 公式ページで原文・応募方法を見る
+           class="inline-flex items-center gap-2 text-white px-5 py-2.5 rounded-lg text-sm font-semibold transition"
+           style="background:linear-gradient(135deg,#4f46e5,#4338ca);box-shadow:0 6px 16px -6px rgba(67,56,202,.6)">
+          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6M20 4l-9 9M18 13v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h6"/></svg>
+          <span>公式ページで原文・応募方法を見る</span>
         </a>
         <button id="copy-name-btn" type="button"
-           class="hidden bg-white border border-blue-600 text-blue-600 hover:bg-blue-50 px-4 py-2.5 rounded-lg text-sm font-medium transition">
-          📋 案件名をコピー
+           class="hidden inline-flex items-center gap-1.5 bg-white border border-indigo-600 text-indigo-600 hover:bg-indigo-50 px-4 py-2.5 rounded-lg text-sm font-medium transition">
+          <svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h2"/></svg>
+          案件名をコピー
         </button>
         <span class="text-xs text-gray-400">出典: <span id="source"></span></span>
       </div>
@@ -99,7 +120,7 @@
 
     <!-- テーマが近い案件 -->
     <section id="similar-wrap" class="hidden mt-6">
-      <h2 class="text-sm font-semibold text-gray-700 mb-3">🔎 テーマが近い案件</h2>
+      <h2 class="flex items-center gap-2 text-sm font-semibold text-slate-700 mb-3"><span class="inline-block w-1 h-3.5 rounded-full bg-indigo-400"></span>テーマが近い案件</h2>
       <div id="similar" class="space-y-2"></div>
     </section>
   </main>
@@ -178,19 +199,21 @@
       }
 
       const ds = deadlineStatus(t.deadline);
+      const cell = (label, valueHtml) =>
+        `<div><span class="block text-[11px] font-medium text-slate-400 tracking-wide">${label}</span><span class="block mt-0.5">${valueHtml}</span></div>`;
       const cells = [
-        `<div>🏢 <span class="text-gray-500">発注機関</span><br><span class="text-gray-800">${esc(t.organization) || '—'}</span></div>`,
-        `<div>📅 <span class="text-gray-500">公示日（掲載日）</span><br><span class="text-gray-800">${esc(t.published_at) || '—'}</span></div>`,
-        `<div>⏰ <span class="text-gray-500">入札締切日</span><br><span class="${ds.cls}">${esc(ds.text) || '記載なし'}${ds.badge}</span></div>`,
-        `<div>💰 <span class="text-gray-500">予算規模</span><br><span class="text-gray-800">${esc(t.amount) || '記載なし'}</span></div>`,
+        cell('発注機関', `<span class="text-slate-800 font-medium">${esc(t.organization) || '—'}</span>`),
+        cell('公示日（掲載日）', `<span class="text-slate-800">${esc(t.published_at) || '—'}</span>`),
+        cell('入札締切日', `<span class="${ds.cls}">${esc(ds.text) || '記載なし'}${ds.badge}</span>`),
+        cell('予算規模', `<span class="text-slate-800">${esc(t.amount) || '記載なし'}</span>`),
       ];
       if (t.close_date)
-        cells.push(`<div>📋 <span class="text-gray-500">公開終了日</span><br><span class="text-gray-600">${esc(t.close_date)}</span></div>`);
+        cells.push(cell('公開終了日', `<span class="text-slate-600">${esc(t.close_date)}</span>`));
       if (t.result_date)
-        cells.push(`<div>📆 <span class="text-gray-500">事業者決定日</span><br><span class="text-purple-700 font-medium">${esc(t.result_date)}</span></div>`);
+        cells.push(cell('事業者決定日', `<span class="text-violet-700 font-medium">${esc(t.result_date)}</span>`));
       if (t.awardee) {
         const awardeeHtml = esc(t.awardee).split('｜').map(a => `<span class="block">${a.trim()}</span>`).join('');
-        cells.push(`<div class="sm:col-span-2">🏆 <span class="text-gray-500">決定事業者</span><br><span class="text-purple-700 font-semibold">${awardeeHtml}</span></div>`);
+        cells.push(`<div class="sm:col-span-2"><span class="block text-[11px] font-medium text-slate-400 tracking-wide">決定事業者</span><span class="block mt-0.5 text-violet-700 font-semibold">${awardeeHtml}</span></div>`);
       }
       document.getElementById('meta').innerHTML = cells.join('');
 
@@ -203,7 +226,6 @@
       const detailEl = document.getElementById('detail');
       const detailLabel = document.getElementById('detail-label');
       if (summaryText && (summaryText.startsWith('・') || summaryText.includes('\n・'))) {
-        detailLabel.textContent = '📋 公募概要';
         const lines = summaryText.split('\n').filter(l => l.trim());
         const ul = document.createElement('ul');
         ul.className = 'space-y-1';
@@ -249,7 +271,7 @@
           const link = a.url || a.source_url;
           return `<li class="text-sm flex items-center gap-2">
             <span class="text-xs px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 shrink-0">${esc(a.kind || '資料')}</span>
-            <a href="${esc(link)}" target="_blank" rel="noopener" class="text-blue-600 hover:underline">📄 ${esc(a.name || a.kind)}</a>
+            <a href="${esc(link)}" target="_blank" rel="noopener" class="inline-flex items-center gap-1.5 text-indigo-600 hover:underline"><svg class="ic text-slate-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3v5h5M15 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8Z"/></svg>${esc(a.name || a.kind)}</a>
           </li>`;
         }).join('');
       }
@@ -264,12 +286,13 @@
       // ※政府調達ポータル(p-portal.go.jp)とMy TOKYO(my.metro.tokyo)は個別URLで正常に
       //   深リンクできる（＝除外。実機確認済み）。
       const origLink = document.getElementById('orig-link');
+      const EXT_SVG = '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6M20 4l-9 9M18 13v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h6"/></svg>';
       const isEbid = /ebidPPIG?Publish|EbController|GPPI_MENU|ebid-joho\.e-kanagawa|ebid-kouji-gyoumu|cals-ibaraki|efftis\.jp|pub\.pref\.aomori|buppin\.e-aichi/i.test(t.url || '');
       if (isEbid) {
         // セッション付き個別URLは無効化されるため、確実に開けるシステム入口(オリジン)へ
         const m = (t.url || '').match(/^https?:\/\/[^/]+/);
         origLink.href = m ? m[0] : (t.url || '').split('#')[0];
-        origLink.textContent = '🔗 電子入札・調達システムで確認（案件名で検索）';
+        origLink.innerHTML = EXT_SVG + '<span>電子入札・調達システムで確認（案件名で検索）</span>';
         const note = document.getElementById('ebid-note');
         if (note) note.style.display = '';
         // 電子入札系は検索窓に案件名をURLで渡せない（POST/セッション式）ため、
@@ -288,14 +311,14 @@
               try { document.execCommand('copy'); } catch (e) {}
               ta.remove();
             }
-            const prev = cbtn.textContent;
+            const prev = cbtn.innerHTML;
             cbtn.textContent = '✓ コピーしました（検索窓に貼り付け）';
-            setTimeout(() => { cbtn.textContent = prev; }, 1800);
+            setTimeout(() => { cbtn.innerHTML = prev; }, 1800);
           };
         }
       } else {
         origLink.href = t.url;
-        origLink.textContent = '🔗 公式ページで原文・応募方法を見る';
+        origLink.innerHTML = EXT_SVG + '<span>公式ページで原文・応募方法を見る</span>';
       }
       document.getElementById('source').textContent = srcLabel(t.source);
 
