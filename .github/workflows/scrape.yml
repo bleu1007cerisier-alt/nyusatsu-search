@@ -52,6 +52,9 @@ jobs:
           R2_DATA_BUCKET: ${{ secrets.R2_DATA_BUCKET }}
           # Anthropic API（公告テキストのAI要約用。未設定なら生テキストをそのまま格納）
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          # AI要約は1日1回に抑える（コスト削減）。朝の定期(21:17 UTC)と手動実行のみtrue、
+          # 夜の定期(09:17 UTC)はfalse＝スクレイプのみ・AI要約なし。
+          RUN_AI_SUMMARY: ${{ (github.event_name != 'schedule' || github.event.schedule == '17 21 * * *') && 'true' || 'false' }}
         run: python scripts/build_dataset.py
 
       - name: 件数の急減チェック（異常なら以降を中止しR2にもgitにも反映しない）

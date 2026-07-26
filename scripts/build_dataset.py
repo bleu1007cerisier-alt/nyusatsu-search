@@ -75,8 +75,10 @@ def _has_corrupt_latin(s: str) -> bool:
 # AI使用量の累積（1回の実行内）。開発ページのコスト推定に使う。
 _AI_USAGE = {"calls": 0, "input_tokens": 0, "output_tokens": 0}
 # Claude Haiku 4.5 の料金（USD / 100万トークン）https://www.anthropic.com/pricing
-_HAIKU_IN_PER_M = 0.80
-_HAIKU_OUT_PER_M = 4.00
+_HAIKU_IN_PER_M = 1.00
+_HAIKU_OUT_PER_M = 5.00
+# AI要約を回すか（朝の定期＋手動のみtrue。夜の定期はfalseにして1日1回に抑える）
+_RUN_AI = os.environ.get("RUN_AI_SUMMARY", "1") not in ("0", "false", "False", "off")
 
 
 _EXTRACT_PROMPT = """\
@@ -141,7 +143,7 @@ def _ai_extract(raw_text: str, title: str = "") -> dict:
         for attempt in range(3):
             msg = client.messages.create(
                 model="claude-haiku-4-5-20251001",
-                max_tokens=1200,
+                max_tokens=800,
                 messages=[{"role": "user", "content": prompt}],
             )
             try:
@@ -424,7 +426,7 @@ def _interleave_by_priority(rows, priority_map):
 # 大阪の網羅性拡大(264→1979)や千葉・福井の建設工事追加で詳細取得バックログが
 # 増えたため引き上げ。ソース横断のラウンドロビンで按分され1サイト当たりは緩やか。
 MAX_DETAIL_PER_RUN = 400
-MAX_AI_SUMMARY_PER_RUN = 500  # 1実行あたりAI要約（増分）の上限（コスト分散）。
+MAX_AI_SUMMARY_PER_RUN = 250  # 1実行あたりAI要約（増分）の上限（コスト抑制）。
 # ※要約正規化で空になった本文あり案件（バックログ347件）を次回1実行で一括解消するため
 #   300→500に引き上げ。通常運用では新規は数十件程度で上限に達しないためコスト影響は限定的。
 MAX_AI_REPAIR_PER_RUN = 30    # 1実行あたり英字混入要約の再生成上限
@@ -936,7 +938,7 @@ def main():
                 _store_attachments(r, info.get("attachments", []))
             # AI抽出：公告本文＋添付PDF抜粋（仕様書等）を材料にsummary/deadline/amount/scheduleへ
             ai_extracted = {}
-            need_summary = not (r.get("summary") or "").strip()
+            need_summary = _RUN_AI and not (r.get("summary") or "").strip()
             if need_summary:
                 detail_for_ai = (r.get("detail") or new_detail or "").strip()
                 # 要約対象のときだけPDF本文を取得（無駄なR2アクセスを避ける）。
@@ -947,7 +949,7 @@ def main():
                         pdf_text = _overview_from_r2(r, max_pages=12, max_lines=120, max_chars=5000)
                     except Exception as e:  # noqa: BLE001
                         print(f"PDF抜粋取得失敗: {e}")
-                ai_input = detail_for_ai[:4000]
+                ai_input = detail_for_ai[:3000]
                 if pdf_text:
                     ai_input += "\n\n【添付資料抜粋】\n" + pdf_text
                 if len(ai_input.strip()) > 100:
@@ -1058,7 +1060,7 @@ def main():
     # 【増分】detailはあるがsummaryが空の案件をAI抽出する。
     # needs_fetch()を通らない既存案件（budget_checked=1済み）もここでカバーする。
     summarized_count = 0
-    if os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("CLAUDE_API_KEY"):
+    if _RUN_AI and (os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("CLAUDE_API_KEY")):
         for r in merged.values():
             if summarized_count >= MAX_AI_SUMMARY_PER_RUN:
                 break
