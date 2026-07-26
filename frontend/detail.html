@@ -250,12 +250,18 @@
         }).join('');
       }
 
-      // 公式ページリンク。電子入札システム(SuperCALS=ebidPPI / 大阪CALS=EbController)は
-      // 案件個別の固定URLが無くトップ/メニューに飛ぶため、#断片を除去しラベルと注記を切り替える。
+      // 公式ページリンク。電子入札/調達システムはセッション制で、案件個別URLに直接
+      // アクセスすると「システム中断/セッションタイムアウト」等になり個別ページに飛べない。
+      // 該当システムはシステム入口(オリジン)へ誘導し、ラベルと注記を切り替えて
+      // 「案件名で検索」の運用に導く（主要情報は当ページに掲載済み）。
+      // 対象: SuperCALS(ebidPPIPublish) / 大阪(EbController) / 神奈川GPPI(e-kanagawa) /
+      //       奈良(ebid-kouji-gyoumu) / 茨城(cals-ibaraki) / efftis(三重・宮城・富山)
       const origLink = document.getElementById('orig-link');
-      const isEbid = /ebidPPIG?Publish/.test(t.url || '') || /EbController/.test(t.url || '');
+      const isEbid = /ebidPPIG?Publish|EbController|GPPI_MENU|ebid-joho\.e-kanagawa|ebid-kouji-gyoumu|cals-ibaraki|efftis\.jp/i.test(t.url || '');
       if (isEbid) {
-        origLink.href = (t.url || '').split('#')[0];
+        // セッション付き個別URLは無効化されるため、確実に開けるシステム入口(オリジン)へ
+        const m = (t.url || '').match(/^https?:\/\/[^/]+/);
+        origLink.href = m ? m[0] : (t.url || '').split('#')[0];
         origLink.textContent = '🔗 電子入札・調達システムで確認（案件名で検索）';
         const note = document.getElementById('ebid-note');
         if (note) note.style.display = '';
