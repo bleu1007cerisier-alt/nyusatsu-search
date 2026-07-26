@@ -14,7 +14,7 @@
   "TOYAMA": 365,
   "NAGANO": 604,
   "SHIZUOKA": 187,
-  "FUKUI": 257,
+  "FUKUI": 258,
   "NIIGATA": 227,
   "ISHIKAWA": 700,
   "TOCHIGI": 101,
@@ -37,7 +37,7 @@
   "OITA": 45,
   "AKITA": 230,
   "FUKUSHIMA": 249,
-  "TOTTORI": 95,
+  "TOTTORI": 99,
   "GUNMA": 150,
   "SAITAMA": 21,
   "MIYAZAKI": 134,
@@ -52,5 +52,5 @@
   "KANAGAWA": 282,
   "IBARAKI": 431
  },
- "total": 20860
+ "total": 20865
 }
