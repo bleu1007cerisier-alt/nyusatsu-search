@@ -4334,15 +4334,40 @@ _HIROSHIMA_ROW = re.compile(
 
 def _scrape_hiroshima_sync() -> List[Dict]:
     import urllib.request
+    import time as _time
     from urllib.parse import urljoin
     from datetime import date, timedelta
     op = urllib.request.build_opener()
-    op.addheaders = [("User-Agent", "Mozilla/5.0")]
+    # データセンターIPにbot向けの空ページを返される対策として、実ブラウザ相当の
+    # ヘッダ一式を送る（Accept / Accept-Language / Referer 等）。
+    op.addheaders = [
+        ("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                       "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"),
+        ("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"),
+        ("Accept-Language", "ja,en-US;q=0.9,en;q=0.8"),
+        ("Referer", _HIROSHIMA_BASE + "/site/nyusatsukeiyaku/"),
+        ("Connection", "keep-alive"),
+    ]
+
+    def _fetch(url):
+        # 空ページ/一時失敗に備え最大3回リトライ（記事が取れたら即返す）
+        last_err = None
+        for attempt in range(3):
+            try:
+                doc = op.open(url, timeout=40).read().decode("utf-8", "replace")
+                if "article_title" in doc:
+                    return doc
+                last_err = "article_title無し(bot向け応答の疑い)"
+            except Exception as e:  # noqa: BLE001
+                last_err = e
+            _time.sleep(2)
+        raise RuntimeError(last_err)
+
     result_cutoff = (date.today() - timedelta(days=_HIROSHIMA_RESULT_WINDOW_DAYS)).isoformat()
     results, seen = [], set()
     for path, cat_label, is_result in _HIROSHIMA_CATEGORIES:
         try:
-            html_doc = op.open(_HIROSHIMA_BASE + path, timeout=40).read().decode("utf-8", "replace")
+            html_doc = _fetch(_HIROSHIMA_BASE + path)
         except Exception as e:  # noqa: BLE001
             logger.error(f"広島県一覧取得失敗（{cat_label}）: {e}")
             continue

@@ -685,7 +685,8 @@ def dev_matrix():
     """開発者ページ用: 直近8日間、各データソース(機関)が日ごとに新規取得(first_seen)した件数の表。
     横軸=日付(8日/古い→新しい)、縦軸=機関(国→県 北から南)。0件も表示し取りこぼしを検知する。"""
     today = date.today()
-    days = [(today - timedelta(days=i)).isoformat() for i in range(7, -1, -1)]
+    # 左が最新になるよう新しい→古いの順（today, 昨日, …, 7日前）
+    days = [(today - timedelta(days=i)).isoformat() for i in range(0, 8)]
     day_set = set(days)
     all_srcs: dict = {}   # source -> prefecture（並び用）
     by_src: dict = {}     # source -> {date: count}

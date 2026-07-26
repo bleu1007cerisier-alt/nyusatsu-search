@@ -181,18 +181,18 @@
       const dow = (iso) => ['日','月','火','水','木','金','土'][new Date(iso + 'T00:00:00').getDay()];
       const head = `<tr class="text-gray-500 border-b">
         <th class="py-2 pr-2 text-left sticky left-0 bg-white">機関</th>
-        ${days.map((dd, i) => `<th class="py-2 px-2 text-right whitespace-nowrap ${i === last ? 'text-indigo-600' : ''}">${md(dd)}<span class="block text-[10px] font-normal">(${dow(dd)})</span></th>`).join('')}
+        ${days.map((dd, i) => `<th class="py-2 px-2 text-right whitespace-nowrap ${i === 0 ? 'text-indigo-600' : ''}">${md(dd)}<span class="block text-[10px] font-normal">(${dow(dd)})</span></th>`).join('')}
         <th class="py-2 pl-3 text-right">計</th></tr>`;
       const body = (d.rows || []).map(r => {
         const zero = r.total === 0;
         return `<tr class="border-b last:border-0 ${zero ? 'bg-rose-50' : ''}">
           <td class="py-1.5 pr-2 font-medium text-gray-800 whitespace-nowrap sticky left-0 ${zero ? 'bg-rose-50' : 'bg-white'}">${zero ? '<span class="text-rose-500">⚠️</span> ' : ''}${esc(r.label)}</td>
-          ${r.counts.map((n, i) => `<td class="py-1.5 px-2 text-right ${n > 0 ? (i === last ? 'text-indigo-700 font-semibold' : 'text-gray-700') : 'text-gray-300'}">${n || '·'}</td>`).join('')}
+          ${r.counts.map((n, i) => `<td class="py-1.5 px-2 text-right ${n > 0 ? (i === 0 ? 'text-indigo-700 font-semibold' : 'text-gray-700') : 'text-gray-300'}">${n || '·'}</td>`).join('')}
           <td class="py-1.5 pl-3 text-right font-semibold ${zero ? 'text-rose-400' : 'text-gray-800'}">${r.total.toLocaleString()}</td></tr>`;
       }).join('');
       const foot = `<tr class="border-t-2 font-semibold text-gray-700">
         <td class="py-2 pr-2 sticky left-0 bg-white">合計</td>
-        ${(d.col_totals || []).map((n, i) => `<td class="py-2 px-2 text-right ${i === last ? 'text-indigo-700' : ''}">${n.toLocaleString()}</td>`).join('')}
+        ${(d.col_totals || []).map((n, i) => `<td class="py-2 px-2 text-right ${i === 0 ? 'text-indigo-700' : ''}">${n.toLocaleString()}</td>`).join('')}
         <td class="py-2 pl-3 text-right">${(d.grand_total || 0).toLocaleString()}</td></tr>`;
       document.getElementById('matrix-wrap').innerHTML =
         `<table class="text-xs min-w-full"><thead>${head}</thead><tbody>${body}</tbody><tfoot>${foot}</tfoot></table>`;
