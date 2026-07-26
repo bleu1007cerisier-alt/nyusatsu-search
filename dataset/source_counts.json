@@ -2,7 +2,7 @@
  "sources": {
   "NEDO": 295,
   "JST": 14,
-  "PORTAL": 6103,
+  "PORTAL": 6318,
   "JOGMEC": 88,
   "AICHI": 998,
   "TOKYO": 171,
@@ -37,7 +37,7 @@
   "OITA": 45,
   "AKITA": 230,
   "FUKUSHIMA": 249,
-  "TOTTORI": 94,
+  "TOTTORI": 95,
   "GUNMA": 150,
   "SAITAMA": 21,
   "MIYAZAKI": 134,
@@ -52,5 +52,5 @@
   "KANAGAWA": 282,
   "IBARAKI": 431
  },
- "total": 20644
+ "total": 20860
 }
