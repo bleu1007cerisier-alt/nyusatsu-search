@@ -719,26 +719,24 @@ DEV_SOURCES = [
 
 
 @app.get("/api/dev/matrix")
-def dev_matrix():
+def dev_matrix(db: Session = Depends(get_db)):
     """開発者ページ用: 直近8日間、各データソース(機関)が日ごとに新規取得(first_seen)した件数の表。
-    横軸=日付(8日/古い→新しい)、縦軸=機関(国→県 北から南)。0件も表示し取りこぼしを検知する。"""
+    横軸=日付(8日/新しい→古い)、縦軸=機関(国→県 北から南)。0件も表示し取りこぼしを検知する。"""
     today = date.today()
     # 左が最新になるよう新しい→古いの順（today, 昨日, …, 7日前）
     days = [(today - timedelta(days=i)).isoformat() for i in range(0, 8)]
     day_set = set(days)
     all_srcs: dict = {}   # source -> prefecture（並び用）
     by_src: dict = {}     # source -> {date: count}
-    if os.path.exists(DATASET_CSV):
-        with open(DATASET_CSV, encoding="utf-8-sig", newline="") as f:
-            for row in csv.DictReader(f):
-                s = (row.get("source") or "?").strip()
-                pref = (row.get("prefecture") or "").strip()
-                if s not in all_srcs or pref == "国":
-                    all_srcs[s] = pref
-                fs = (row.get("first_seen") or "")[:10]
-                if fs in day_set:
-                    d = by_src.setdefault(s, {})
-                    d[fs] = d.get(fs, 0) + 1
+    for s, pref, fs in db.query(Tender.source, Tender.prefecture, Tender.first_seen):
+        s = (s or "?").strip()
+        pref = (pref or "").strip()
+        if s not in all_srcs or pref == "国":
+            all_srcs[s] = pref
+        fs = (fs or "")[:10]
+        if fs in day_set:
+            d = by_src.setdefault(s, {})
+            d[fs] = d.get(fs, 0) + 1
     label_map = {x["code"]: x["label"] for x in DEV_SOURCES}
     rows = []
     for s, pref in all_srcs.items():
@@ -757,7 +755,7 @@ def dev_matrix():
 
 
 @app.get("/api/dev/status")
-def dev_status():
+def dev_status(db: Session = Depends(get_db)):
     """開発者ページ用：自動更新履歴・データソースの取得状況・AIコスト推定を返す。"""
     today = date.today().isoformat()
 
@@ -767,61 +765,57 @@ def dev_status():
     except Exception:
         _week_ago = today
 
-    # ソース別の取得状況をCSVから集計（last_seen はDB未保持のためCSVを直接読む）
+    # ソース別の取得状況をDB(SQLite)から集計する。
+    from sqlalchemy import func as _func
     by_source = {}
     total = 0
     summarized = 0          # AI要約が入っている件数
     summary_eligible = 0    # 本文(detail)があり要約対象になりうる件数
     tag_total = 0           # タグ総数（平均タグ数の算出用）
     tag_zero = 0            # タグ0件の案件数
-    if os.path.exists(DATASET_CSV):
-        with open(DATASET_CSV, encoding="utf-8-sig", newline="") as f:
-            for row in csv.DictReader(f):
-                total += 1
-                s = row.get("source") or "?"
-                d = by_source.setdefault(
-                    s, {"count": 0, "last_seen": "", "open": 0,
-                        "last_new": "", "new_7d": 0,
-                        "nyusatsu": 0, "proposal": 0, "awardee": 0,
-                        "attachments": 0, "summary": 0})
-                d["count"] += 1
-                # 星取表（何が取れているか）用の集計
-                cat = (row.get("category") or "")
-                if "入札" in cat:
-                    d["nyusatsu"] += 1
-                if "プロポーザル" in cat or "公募" in cat:
-                    d["proposal"] += 1
-                if (row.get("awardee") or "").strip():
-                    d["awardee"] += 1
-                if (row.get("attachments") or "").strip():
-                    d["attachments"] += 1
-                if (row.get("summary") or "").strip():
-                    d["summary"] += 1
-                ls = (row.get("last_seen") or "")
-                if ls > d["last_seen"]:
-                    d["last_seen"] = ls
-                # 新規取得の指標：first_seen（初回取得日）
-                fs = (row.get("first_seen") or "")
-                if fs > d["last_new"]:
-                    d["last_new"] = fs
-                if fs and fs[:10] >= _week_ago:
-                    d["new_7d"] += 1
-                # 募集中＝結果未確定 かつ 締切が今日以降（または未設定）
-                result_date = (row.get("result_date") or "").strip()
-                deadline = (row.get("deadline") or "").strip()
-                if not result_date and (not deadline or deadline >= today):
-                    d["open"] += 1
-                # AI要約のカバレッジ
-                if len((row.get("detail") or "").strip()) >= 100:
-                    summary_eligible += 1
-                if (row.get("summary") or "").strip():
-                    summarized += 1
-                # タグの充足状況（目標: 平均3.5タグ/件）
-                n_tags = len([t for t in (row.get("tags") or "").split(",")
-                              if t.strip()])
-                tag_total += n_tags
-                if n_tags == 0:
-                    tag_zero += 1
+    for (s, cat, awardee, attachments, summary, last_seen, first_seen,
+         result_date, deadline, detail_len, tags) in db.query(
+            Tender.source, Tender.category, Tender.awardee, Tender.attachments,
+            Tender.summary, Tender.last_seen, Tender.first_seen, Tender.result_date,
+            Tender.deadline, _func.length(Tender.detail), Tender.tags):
+        total += 1
+        s = s or "?"
+        d = by_source.setdefault(
+            s, {"count": 0, "last_seen": "", "open": 0,
+                "last_new": "", "new_7d": 0,
+                "nyusatsu": 0, "proposal": 0, "awardee": 0,
+                "attachments": 0, "summary": 0})
+        d["count"] += 1
+        cat = cat or ""
+        if "入札" in cat:
+            d["nyusatsu"] += 1
+        if "プロポーザル" in cat or "公募" in cat:
+            d["proposal"] += 1
+        if (awardee or "").strip():
+            d["awardee"] += 1
+        if (attachments or "").strip():
+            d["attachments"] += 1
+        has_sum = bool((summary or "").strip())
+        if has_sum:
+            d["summary"] += 1
+        ls = last_seen or ""
+        if ls > d["last_seen"]:
+            d["last_seen"] = ls
+        fs = first_seen or ""
+        if fs > d["last_new"]:
+            d["last_new"] = fs
+        if fs and fs[:10] >= _week_ago:
+            d["new_7d"] += 1
+        if not (result_date or "").strip() and (not (deadline or "").strip() or deadline >= today):
+            d["open"] += 1
+        if (detail_len or 0) >= 100:
+            summary_eligible += 1
+        if has_sum:
+            summarized += 1
+        n_tags = len([t for t in (tags or "").split(",") if t.strip()])
+        tag_total += n_tags
+        if n_tags == 0:
+            tag_zero += 1
 
     sources = []
     for src in DEV_SOURCES:
