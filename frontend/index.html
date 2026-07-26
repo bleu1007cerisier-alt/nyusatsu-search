@@ -165,9 +165,10 @@
 
         <!-- 並び替え -->
         <select id="sort" onchange="search(0)" class="border border-slate-200 rounded-lg px-3 py-2 text-sm bg-slate-50 focus:outline-none focus:ring-2 focus:ring-blue-400">
-          <option value="">おすすめ順（募集中→新着）</option>
+          <option value="attention">注目度順（新着・募集中を優先）</option>
+          <option value="">おすすめ順（募集中→掲載日）</option>
           <option value="deadline">締切が近い順</option>
-          <option value="new">新着順</option>
+          <option value="new">新着順（取得日）</option>
         </select>
 
         <!-- 期間（詳細検索）トグル -->
@@ -270,7 +271,12 @@
     let currentStatus = '';
     let currentDue = 0;       // 締切間近フィルタ（0=なし、7=7日以内）
     let pendingMinistry = ''; // URL復元用（機関プルダウンは非同期で埋まるため）
+    let newOnly = true;       // トップの既定=新着のみ（過去N日）。トグルで全件に切替
+    const NEW_WITHIN = 7;     // 「新着」とみなす日数
     const PAGE_SIZE = 20;
+    // 当日（ローカル日付 YYYY-MM-DD）。新着マークの判定に使う
+    const TODAY = (() => { const d = new Date();
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; })();
 
     function esc(s) {
       return (s == null ? '' : String(s))
@@ -362,9 +368,12 @@
       const dueBtn = `<button onclick="filterByDue()"
         class="text-sm px-3 py-1.5 rounded-lg border transition font-medium ${dueActive ? 'bg-red-600 text-white border-red-600 shadow-sm' : 'bg-white text-red-600 border-red-200 hover:bg-red-50'}">
         ⏰ 締切7日以内</button>`;
+      const newBtn = `<button onclick="toggleNewOnly()"
+        class="text-sm px-3 py-1.5 rounded-lg border transition font-medium ${newOnly ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm' : 'bg-white text-indigo-600 border-indigo-200 hover:bg-indigo-50'}">
+        🆕 新着のみ<span class="text-xs font-normal ${newOnly ? 'opacity-80' : 'text-slate-400'}">（${NEW_WITHIN}日）</span></button>`;
       statusBar.innerHTML =
-        `<span class="text-xs text-slate-400 self-center mr-1">状態:</span>` +
-        btn('', data.total) + btn('募集中', sc['募集中']) + btn('公開中', sc['公開中']) + btn('公開終了', sc['公開終了']) + dueBtn;
+        `<span class="text-xs text-slate-400 self-center mr-1">絞り込み:</span>` +
+        newBtn + btn('', data.total) + btn('募集中', sc['募集中']) + btn('公開中', sc['公開中']) + btn('公開終了', sc['公開終了']) + dueBtn;
 
       // 発注機関プルダウン
       const msel = document.getElementById('ministry');
@@ -396,6 +405,12 @@
     function filterByStatus(status) {
       currentStatus = (currentStatus === status) ? '' : status;
       loadStats();
+      search(0);
+    }
+
+    function toggleNewOnly() {
+      newOnly = !newOnly;
+      loadStats();   // ボタンの見た目を更新
       search(0);
     }
 
@@ -529,9 +544,11 @@
         params.append('tag_mode', tagMode);
       }
       if (currentStatus) params.append('status', currentStatus);
+      if (newOnly) params.append('new_within', NEW_WITHIN);
 
       // 検索条件をURLに反映（ブックマーク・共有・リロード復元用）
       const urlParams = new URLSearchParams();
+      if (!newOnly) urlParams.set('all', '1');
       if (q) urlParams.set('q', q);
       if (category) urlParams.set('category', category);
       if (prefecture) urlParams.set('prefecture', prefecture);
@@ -639,12 +656,14 @@
         </div>`;
       }
       const summaryHtml = renderSummary(t.summary);
+      const isNew = (t.first_seen || '') === TODAY;   // 当日取得した案件のみ「新着」
 
       return `
         <div onclick="goDetail(${t.id})"
-             class="bg-white border border-slate-200 rounded-2xl p-4 card-hover cursor-pointer">
+             class="bg-white border ${isNew ? 'border-rose-200' : 'border-slate-200'} rounded-2xl p-4 card-hover cursor-pointer">
           <div class="flex items-start gap-3">
             <div class="flex flex-col gap-1.5 mt-0.5 shrink-0">
+              ${isNew ? `<span class="text-center text-[11px] font-bold px-2 py-0.5 rounded-full bg-rose-500 text-white whitespace-nowrap">🆕 新着</span>` : ''}
               ${statusBadge(t.status)}
               <span class="text-center text-xs font-medium px-2 py-0.5 rounded-full ${badgeClass}">${esc(t.category)}</span>
             </div>
@@ -704,6 +723,8 @@
       tagMode = 'or';
       currentStatus = '';
       currentDue = 0;
+      newOnly = true;
+      document.getElementById('sort').value = 'attention';
       renderSelectedTags();
       if (TAG_DATA) renderTagPanel();
       loadStats();
@@ -723,6 +744,7 @@
       pendingMinistry = params.get('ministry') || '';
       currentStatus = params.get('status') || '';
       currentDue = parseInt(params.get('due') || '0', 10) || 0;
+      newOnly = params.get('all') !== '1';   // 既定は新着のみ。?all=1 で全件
       // 期間（詳細検索）の復元
       const dateMap = { 'deadline-from': 'dlf', 'deadline-to': 'dlt',
                         'published-from': 'pbf', 'published-to': 'pbt' };

@@ -40,6 +40,7 @@ class Tender(Base):
     attachments = Column(Text)           # 添付ファイル（R2保存先）JSON文字列
     tags = Column(String(500))           # タグ（カンマ区切り）
     source = Column(String(100))         # データソース名
+    first_seen = Column(String(50))      # 初回取得日（新着判定用 YYYY-MM-DD）
     fetched_at = Column(DateTime, default=datetime.now)
 
     __table_args__ = (
@@ -65,6 +66,7 @@ def init_db():
             ("attachments", "ALTER TABLE tenders ADD COLUMN attachments TEXT"),
             ("source_category", "ALTER TABLE tenders ADD COLUMN source_category VARCHAR(200)"),
             ("close_date", "ALTER TABLE tenders ADD COLUMN close_date VARCHAR(50)"),
+            ("first_seen", "ALTER TABLE tenders ADD COLUMN first_seen VARCHAR(50)"),
         ]
         for col, ddl in migrations:
             if col not in existing:

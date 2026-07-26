@@ -135,6 +135,7 @@ def load_dataset_into_db() -> int:
                     attachments=row.get("attachments", ""),
                     tags=row.get("tags", ""),
                     source=row.get("source", ""),
+                    first_seen=(row.get("first_seen", "") or "")[:10],
                 ))
         db.commit()
         return db.query(Tender).count()
@@ -180,6 +181,28 @@ def compute_status(t: Tender, today: str) -> str:
     if close and close >= today:
         return STATUS_PUBLIC   # ポータルページはまだ公開中
     return STATUS_ENDED
+
+
+# 都道府県の正準順（国→北から南＝全国地方公共団体コード順）。機関・ソース・開発ページの並びに使う。
+PREF_ORDER = [
+    "北海道", "青森県", "岩手県", "宮城県", "秋田県", "山形県", "福島県",
+    "茨城県", "栃木県", "群馬県", "埼玉県", "千葉県", "東京都", "神奈川県",
+    "新潟県", "富山県", "石川県", "福井県", "山梨県", "長野県",
+    "岐阜県", "静岡県", "愛知県", "三重県",
+    "滋賀県", "京都府", "大阪府", "兵庫県", "奈良県", "和歌山県",
+    "鳥取県", "島根県", "岡山県", "広島県", "山口県",
+    "徳島県", "香川県", "愛媛県", "高知県",
+    "福岡県", "佐賀県", "長崎県", "熊本県", "大分県", "宮崎県", "鹿児島県", "沖縄県",
+]
+_PREF_RANK = {p: i + 1 for i, p in enumerate(PREF_ORDER)}  # 国=0、以降 北→南
+
+
+def pref_rank(pref: str) -> int:
+    """都道府県名→並び順の数値。国/空は0（先頭）、未知は末尾。"""
+    p = (pref or "").strip()
+    if not p or p == "国":
+        return 0
+    return _PREF_RANK.get(p, 999)
 
 
 def _status_rank(status: str) -> int:
@@ -234,6 +257,7 @@ def _item_dict(t: Tender, today: str) -> dict:
         "source_category": t.source_category,
         "summary": t.summary,
         "source": t.source,
+        "first_seen": (t.first_seen or "")[:10],
         "tags": _tag_list(t),
     }
 
@@ -255,6 +279,7 @@ def search_tenders(
     deadline_to: Optional[str] = Query(None, description="締切日の上限 YYYY-MM-DD"),
     published_from: Optional[str] = Query(None, description="掲載日の下限 YYYY-MM-DD"),
     published_to: Optional[str] = Query(None, description="掲載日の上限 YYYY-MM-DD"),
+    new_within: Optional[int] = Query(None, ge=1, le=60, description="初回取得(first_seen)がN日以内の新着だけに絞る"),
     skip: int = 0,
     limit: int = 50,
     db: Session = Depends(get_db),
@@ -313,6 +338,10 @@ def search_tenders(
         items = [i for i in items if i["published_at"] and i["published_at"] >= published_from]
     if published_to:
         items = [i for i in items if i["published_at"] and i["published_at"] <= published_to]
+    if new_within:
+        # 新着のみ: first_seen（初回取得日）が today−N日 以降
+        cutoff = (date.fromisoformat(today) - timedelta(days=new_within - 1)).isoformat()
+        items = [i for i in items if (i.get("first_seen") or "") >= cutoff]
 
     # 並び替え（キャッシュ共有リストを壊さないよう sorted() で新リストを作る）
     if sort == "deadline":
@@ -320,8 +349,16 @@ def search_tenders(
         items = sorted(items, key=lambda i: (_status_rank(i["status"]),
                                              i["deadline"] or "9999-12-31"))
     elif sort == "new":
-        # 掲載日が新しい順
-        items = sorted(items, key=lambda i: _rev(i["published_at"] or ""))
+        # 取得が新しい順（first_seen）→ 掲載日
+        items = sorted(items, key=lambda i: _rev((i.get("first_seen") or "") + (i["published_at"] or "")))
+    elif sort == "attention":
+        # 注目度順: 募集中を最優先→締切が近い順、次に新しく取得した順。トップの既定。
+        def _att(i):
+            rank = _status_rank(i["status"])
+            if i["status"] == STATUS_OPEN:
+                return (rank, 0, i["deadline"] or "9999-12-31", _rev(i.get("first_seen") or ""))
+            return (rank, 1, "", _rev(i.get("first_seen") or i["published_at"] or ""))
+        items = sorted(items, key=_att)
 
     total = len(items)
     page = items[skip:skip + limit]
@@ -448,21 +485,31 @@ def get_stats(db: Session = Depends(get_db)):
     status_counts = {STATUS_OPEN: 0, STATUS_PUBLIC: 0, STATUS_ENDED: 0}
     tag_counts: dict = {}
     org_counts: dict = {}
+    org_pref: dict = {}      # 機関名→都道府県（並び順算出用）
+    src_pref: dict = {}      # ソース→都道府県（同上）
     sources = set()
     for t in all_items:
         status_counts[compute_status(t, today)] += 1
+        pref = (t.prefecture or "").strip()
         if t.source:
             sources.add(t.source)
+            # ソースの代表県は「国」を優先（PORTAL等は国扱いに寄せる）
+            if t.source not in src_pref or pref == "国":
+                src_pref[t.source] = pref
         org = (t.organization or "").strip()
         if org:
             org_counts[org] = org_counts.get(org, 0) + 1
+            org_pref.setdefault(org, pref)
         for tag in (t.tags or "").split(","):
             tag = tag.strip()
             if tag:
                 tag_counts[tag] = tag_counts.get(tag, 0) + 1
 
     top_tags = sorted(tag_counts.items(), key=lambda kv: kv[1], reverse=True)
-    top_orgs = sorted(org_counts.items(), key=lambda kv: kv[1], reverse=True)
+    # 機関は「国→県(北から南)」順。同一県内は件数の多い順。
+    top_orgs = sorted(org_counts.items(),
+                      key=lambda kv: (pref_rank(org_pref.get(kv[0])), -kv[1], kv[0]))
+    sources_ordered = sorted(sources, key=lambda s: (pref_rank(src_pref.get(s)), s))
     nyusatsu = sum(1 for t in all_items if t.category == "入札")
     proposal = sum(1 for t in all_items if t.category == "プロポーザル")
 
@@ -471,7 +518,7 @@ def get_stats(db: Session = Depends(get_db)):
         "nyusatsu": nyusatsu,
         "proposal": proposal,
         "status": status_counts,
-        "sources": sorted(sources),
+        "sources": sources_ordered,
         "tags": [{"name": name, "count": cnt} for name, cnt in top_tags],
         "organizations": [{"name": name, "count": cnt} for name, cnt in top_orgs],
         # 開発者リンクの表示可否（環境変数 DEV_PAGE_PUBLIC=0 で非表示）
@@ -631,6 +678,43 @@ DEV_SOURCES = [
      "url": "http://ppi.cals-ibaraki.lg.jp/koukai/do/KF000ShowAction",
      "desc": "茨城県の入札公告（建設工事・コンサル／いばらき電子入札）"},
 ]
+
+
+@app.get("/api/dev/matrix")
+def dev_matrix():
+    """開発者ページ用: 直近8日間、各データソース(機関)が日ごとに新規取得(first_seen)した件数の表。
+    横軸=日付(8日/古い→新しい)、縦軸=機関(国→県 北から南)。0件も表示し取りこぼしを検知する。"""
+    today = date.today()
+    days = [(today - timedelta(days=i)).isoformat() for i in range(7, -1, -1)]
+    day_set = set(days)
+    all_srcs: dict = {}   # source -> prefecture（並び用）
+    by_src: dict = {}     # source -> {date: count}
+    if os.path.exists(DATASET_CSV):
+        with open(DATASET_CSV, encoding="utf-8-sig", newline="") as f:
+            for row in csv.DictReader(f):
+                s = (row.get("source") or "?").strip()
+                pref = (row.get("prefecture") or "").strip()
+                if s not in all_srcs or pref == "国":
+                    all_srcs[s] = pref
+                fs = (row.get("first_seen") or "")[:10]
+                if fs in day_set:
+                    d = by_src.setdefault(s, {})
+                    d[fs] = d.get(fs, 0) + 1
+    label_map = {x["code"]: x["label"] for x in DEV_SOURCES}
+    rows = []
+    for s, pref in all_srcs.items():
+        counts = by_src.get(s, {})
+        rows.append({
+            "source": s,
+            "label": label_map.get(s, s),
+            "prefecture": pref,
+            "counts": [counts.get(dd, 0) for dd in days],
+            "total": sum(counts.values()),
+        })
+    rows.sort(key=lambda r: (pref_rank(r["prefecture"]), r["label"]))
+    col_totals = [sum(r["counts"][i] for r in rows) for i in range(len(days))]
+    return {"days": days, "rows": rows, "col_totals": col_totals,
+            "grand_total": sum(col_totals)}
 
 
 @app.get("/api/dev/status")
