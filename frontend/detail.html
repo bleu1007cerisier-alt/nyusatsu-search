@@ -152,6 +152,24 @@
       return `<span class="text-xs font-medium px-2.5 py-1 rounded-full ${STATUS_STYLE[status] || 'bg-gray-100 text-gray-600'}">${esc(status)}</span>`;
     }
 
+    // 公式本文が無い案件向け: 把握済みの項目から概要文を組み立てる（事実の言い換えのみ・創作しない）
+    function synthDesc(t) {
+      const who = (t.organization || t.prefecture || '').trim();
+      const kind = (t.source_category || '').trim()
+        || (t.category === 'プロポーザル' ? 'プロポーザル'
+          : t.category === '入札' ? '入札'
+          : t.category === '随意契約' ? '随意契約' : '公募');
+      const generic = new Set(['工事', '業務委託', '物品購入', '賃貸借', '売払', '役務', 'コンサルティング', 'RFI', '随意契約']);
+      const fields = (t.tags || []).filter(x => !generic.has(x)).slice(0, 3);
+      const bits = [];
+      bits.push(`${who ? who + 'が' : ''}発注する${kind}案件です。`);
+      if (fields.length) bits.push(`分野: ${fields.join('、')}。`);
+      if (t.deadline) bits.push(`${t.category === '入札' ? '入札締切' : '締切'} ${t.deadline}。`);
+      else if (t.published_at) bits.push(`掲載 ${t.published_at}。`);
+      if (t.amount) bits.push(`予算規模 ${t.amount}。`);
+      return bits.join('');
+    }
+
     async function load() {
       const id = location.pathname.split('/').filter(Boolean).pop();
       try {
@@ -199,21 +217,26 @@
       }
 
       const ds = deadlineStatus(t.deadline);
-      const cell = (label, valueHtml) =>
-        `<div><span class="block text-[11px] font-medium text-slate-400 tracking-wide">${label}</span><span class="block mt-0.5">${valueHtml}</span></div>`;
+      const IC_ORG = '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18M6 21V4h9v17M15 21V9h4v12M9 8h3M9 12h3M9 16h3"/></svg>';
+      const IC_CAL = '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="18" height="16" rx="2"/><path d="M3 9h18M8 2.5v4M16 2.5v4"/></svg>';
+      const IC_CLOCK = '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></svg>';
+      const IC_YEN = '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 5l4 6 4-6M12 11v8M8.5 14h7M8.5 17h7"/></svg>';
+      const IC_AWARD = '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="9" r="5"/><path d="M9 13.5 7.5 21l4.5-2.5L16.5 21 15 13.5"/></svg>';
+      const cell = (icon, label, valueHtml) =>
+        `<div><span class="flex items-center gap-1 text-[11px] font-medium text-slate-400 tracking-wide">${icon}${label}</span><span class="block mt-0.5">${valueHtml}</span></div>`;
       const cells = [
-        cell('発注機関', `<span class="text-slate-800 font-medium">${esc(t.organization) || '—'}</span>`),
-        cell('公示日（掲載日）', `<span class="text-slate-800">${esc(t.published_at) || '—'}</span>`),
-        cell('入札締切日', `<span class="${ds.cls}">${esc(ds.text) || '記載なし'}${ds.badge}</span>`),
-        cell('予算規模', `<span class="text-slate-800">${esc(t.amount) || '記載なし'}</span>`),
+        cell(IC_ORG, '発注機関', `<span class="text-slate-800 font-medium">${esc(t.organization) || '—'}</span>`),
+        cell(IC_CAL, '公示日（掲載日）', `<span class="text-slate-800">${esc(t.published_at) || '—'}</span>`),
+        cell(IC_CLOCK, '入札締切日', `<span class="${ds.cls}">${esc(ds.text) || '記載なし'}${ds.badge}</span>`),
+        cell(IC_YEN, '予算規模', `<span class="text-slate-800">${esc(t.amount) || '記載なし'}</span>`),
       ];
       if (t.close_date)
-        cells.push(cell('公開終了日', `<span class="text-slate-600">${esc(t.close_date)}</span>`));
+        cells.push(cell(IC_CAL, '公開終了日', `<span class="text-slate-600">${esc(t.close_date)}</span>`));
       if (t.result_date)
-        cells.push(cell('事業者決定日', `<span class="text-violet-700 font-medium">${esc(t.result_date)}</span>`));
+        cells.push(cell(IC_CAL, '事業者決定日', `<span class="text-violet-700 font-medium">${esc(t.result_date)}</span>`));
       if (t.awardee) {
         const awardeeHtml = esc(t.awardee).split('｜').map(a => `<span class="block">${a.trim()}</span>`).join('');
-        cells.push(`<div class="sm:col-span-2"><span class="block text-[11px] font-medium text-slate-400 tracking-wide">決定事業者</span><span class="block mt-0.5 text-violet-700 font-semibold">${awardeeHtml}</span></div>`);
+        cells.push(`<div class="sm:col-span-2"><span class="flex items-center gap-1 text-[11px] font-medium text-slate-400 tracking-wide">${IC_AWARD}決定事業者</span><span class="block mt-0.5 text-violet-700 font-semibold">${awardeeHtml}</span></div>`);
       }
       document.getElementById('meta').innerHTML = cells.join('');
 
@@ -244,8 +267,15 @@
         detailEl.innerHTML = '';
         detailEl.appendChild(ul);
       } else {
-        const raw = summaryText || (t.detail || '').trim() || '（詳しい内容は公式ページをご確認ください）';
-        detailEl.innerHTML = esc(raw).replace(/\n\n/g, '<br><br>').replace(/\n/g, '<br>');
+        const raw = summaryText || (t.detail || '').trim();
+        if (raw) {
+          detailEl.innerHTML = esc(raw).replace(/\n\n/g, '<br><br>').replace(/\n/g, '<br>');
+        } else {
+          // 公式本文を取得できていない案件（電子入札システム等でセッション必須のため）。
+          // 空欄にせず、把握済みの項目から概要を自動生成して掲示する（自動生成である旨を明記）。
+          detailEl.innerHTML = esc(synthDesc(t)) +
+            '<p class="mt-2 text-xs text-slate-400">※公式の本文を取得できていないため、当サイトが把握している項目から自動生成した概要です。正確な内容・仕様は公式ページでご確認ください。</p>';
+        }
       }
 
       // 予定（説明会・各種期限）を時系列で表示
