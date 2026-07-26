@@ -255,9 +255,12 @@
       // 該当システムはシステム入口(オリジン)へ誘導し、ラベルと注記を切り替えて
       // 「案件名で検索」の運用に導く（主要情報は当ページに掲載済み）。
       // 対象: SuperCALS(ebidPPIPublish) / 大阪(EbController) / 神奈川GPPI(e-kanagawa) /
-      //       奈良(ebid-kouji-gyoumu) / 茨城(cals-ibaraki) / efftis(三重・宮城・富山)
+      //       奈良(ebid-kouji-gyoumu) / 茨城(cals-ibaraki) / efftis(三重・宮城・富山) /
+      //       青森(pub.pref.aomori) / 愛知物品(buppin.e-aichi)
+      // ※政府調達ポータル(p-portal.go.jp)とMy TOKYO(my.metro.tokyo)は個別URLで正常に
+      //   深リンクできる（＝除外。実機確認済み）。
       const origLink = document.getElementById('orig-link');
-      const isEbid = /ebidPPIG?Publish|EbController|GPPI_MENU|ebid-joho\.e-kanagawa|ebid-kouji-gyoumu|cals-ibaraki|efftis\.jp/i.test(t.url || '');
+      const isEbid = /ebidPPIG?Publish|EbController|GPPI_MENU|ebid-joho\.e-kanagawa|ebid-kouji-gyoumu|cals-ibaraki|efftis\.jp|pub\.pref\.aomori|buppin\.e-aichi/i.test(t.url || '');
       if (isEbid) {
         // セッション付き個別URLは無効化されるため、確実に開けるシステム入口(オリジン)へ
         const m = (t.url || '').match(/^https?:\/\/[^/]+/);
