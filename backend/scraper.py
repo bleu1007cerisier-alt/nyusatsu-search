@@ -5399,6 +5399,7 @@ _OITA_CATEGORIES = [
     ("/site/nyusatu-koubo/list22380-29038.html", "企画提案", False),
     ("/site/nyusatu-koubo/list22377-29036.html", "調査・委託", False),
     ("/site/nyusatu-koubo/list22377-29035.html", "土木・建築・設備", False),
+    ("/site/nyusatu-koubo/list22377-29037.html", "物品", False),
     ("/site/nyusatu-koubo/list22377-29227.html", "その他", False),
     ("/site/nyusatu-koubo/list22381-29228.html", "入札結果", True),
 ]
