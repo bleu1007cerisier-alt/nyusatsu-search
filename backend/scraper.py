@@ -7310,6 +7310,406 @@ async def scrape_toyama_cals() -> List[Dict]:
         return []
 
 
+# ---------------------------------------------------------------------------
+# 京都府・香川県 入札情報公開システム（efftis旧JSP系 = NEC「入札情報公開システム」
+# OME egov PPI・frameset＋Velocity(.vm)）。過去「未攻略・多段トークン」とされた難物を
+# raw HTTP で攻略（2026-07-27 実測攻略）。両県とも同一ベンダー・攻略手順は共通:
+#   1. GET 入口(frameset) でセッションCookie(＋香川はURLパスの ;jsessionid=)を確立
+#   2. GET 検索start.vm → auto-submit する隠しフォーム(omeProcessName=start)を模倣し
+#      POST {画面}Start.do → 検索条件フォーム(conditionform)が返る
+#   3. conditionform の全hidden/選択値をharvestし条件を上書きして
+#      POST {画面}GetList.do(omeProcessName=findList) → 案件一覧
+# 重要な差異:
+#   ・.vm(frameset/menu)は Shift_JIS、.do(検索/一覧)は UTF-8（charset自動判定で吸収）
+#   ・京都: kyoto.efftis.jp/26000/CALS/PPI_P/ 。工事・測量コンサルのみ(物品は別系統無し)。
+#     PiCtBaFi02(全案件詳細検索)を使用。発注機関=京都府に限定。omeMaxDisplayRowCount=1000で
+#     年度内全件を1頁取得可。24時間稼働(土0-7時除く)。列: [No,調達機関,案件名,場所,種別,
+#     入札方式,資料配布(期間),申請受付(期間),詳細]。日付は令和表記。
+#   ・香川: dennyu.pref.kagawa.lg.jp/PPI_P/ 。県+市町の共同システム(発注機関で香川県のみ抽出)。
+#     PiCtCrFi01(工事r1=00/コンサルr1=01)・PiCtCrFi02(物品)。運用8:00-22:00(時間外はトップへ
+#     リダイレクト→0件で正常終了)。結果>100件は中間頁を挟むため getListPage で
+#     omeStartPosition を進めてページング(omePageDirection=absolute)。列: [No,公告日,発注機関,
+#     発注組織,案件名,入札方式]。一覧に締切列が無いためdeadlineは空・公告日(西暦)をpublished_atに。
+# 運用時間外・メンテ時はトップページ("運用時間"/Facebookトラッカ)へ飛ぶため is_top で検知し[]。
+# ---------------------------------------------------------------------------
+def _efftis_ppi_opener():
+    import ssl as _ssl
+    import urllib.request
+    import http.cookiejar
+    ctx = _ssl.create_default_context()
+    try:
+        ctx.set_ciphers("DEFAULT@SECLEVEL=1")  # efftisは弱DH鍵→SECLEVEL下げ
+    except _ssl.SSLError:
+        pass
+    # 証明書チェーン/ホスト名不備に強くする（efftis系は中間証明書欠落の前例あり）
+    ctx.check_hostname = False
+    ctx.verify_mode = _ssl.CERT_NONE
+    jar = http.cookiejar.CookieJar()
+    op = urllib.request.build_opener(
+        urllib.request.HTTPCookieProcessor(jar),
+        urllib.request.HTTPSHandler(context=ctx))
+    op.addheaders = [("User-Agent", "Mozilla/5.0")]
+    return op, jar
+
+
+def _ppi_decode(raw: bytes) -> str:
+    """PPI_P応答をcharset自動判定でデコード（.vm=Shift_JIS / .do=UTF-8）。"""
+    m = re.search(rb'charset=["\']?([\w\-]+)', raw[:2000], re.I)
+    enc = (m.group(1).decode() if m else "cp932").lower()
+    if enc in ("shift_jis", "shift-jis", "sjis", "x-sjis"):
+        enc = "cp932"
+    try:
+        return raw.decode(enc, "replace")
+    except LookupError:
+        return raw.decode("cp932", "replace")
+
+
+def _ppi_harvest(body: str, formname: str) -> Dict[str, str]:
+    """指定フォームのhidden/text/select(選択値)を回収して dict 化。"""
+    m = re.search(r'<form[^>]*name="' + formname + r'"[^>]*>(.*?)</form>', body, re.S | re.I)
+    inner = m.group(1) if m else body
+    pairs: Dict[str, str] = {}
+    for inp in re.findall(r"<input[^>]+>", inner):
+        nm = re.search(r'name="([^"]*)"', inp)
+        if not nm:
+            continue
+        tym = re.search(r'type=["\']?(\w+)', inp)
+        ty = tym.group(1).lower() if tym else "text"
+        vlm = re.search(r'value="([^"]*)"', inp)
+        val = vlm.group(1) if vlm else ""
+        if ty in ("hidden", "text"):
+            pairs[nm.group(1)] = val
+        elif ty in ("radio", "checkbox") and "checked" in inp:
+            pairs[nm.group(1)] = val
+    for sel in re.finditer(r'<select[^>]*name="([^"]*)"[^>]*>(.*?)</select>', inner, re.S | re.I):
+        selm = (re.search(r'<option[^>]*value="([^"]*)"[^>]*selected', sel.group(2))
+                or re.search(r'<option[^>]*value="([^"]*)"', sel.group(2)))
+        pairs[sel.group(1)] = selm.group(1) if selm else ""
+    return pairs
+
+
+def _ppi_rows(html_doc: str) -> List[List[str]]:
+    """一覧テーブルの getdetail(N) を含む行のセル配列を返す。"""
+    import html as _html
+    out: List[List[str]] = []
+    for tr in re.findall(r"<tr[^>]*>(.*?)</tr>", html_doc, re.S | re.I):
+        if "getdetail(" not in tr:
+            continue
+        cells = [re.sub(r"\s+", " ", _html.unescape(re.sub(r"<[^>]+>", " ", c))).replace("\xa0", " ").strip()
+                 for c in re.findall(r"<td[^>]*>(.*?)</td>", tr, re.S)]
+        out.append(cells)
+    return out
+
+
+def _ppi_is_top(body: str) -> bool:
+    """運用時間外/セッション切れでトップページへ飛ばされたかを判定。"""
+    return ("trackFacebook" in body) or ("運用時間" in body) or ("フレームの見れる" in body)
+
+
+_WAREKI_DATE = re.compile(r"令和(\d+)年\s*(\d{1,2})月\s*(\d{1,2})日")
+_SEIREKI_DATE = re.compile(r"(\d{4})年\s*(\d{1,2})月\s*(\d{1,2})日")
+
+
+def _ppi_dates(text: str) -> List[str]:
+    """令和/西暦表記の日付をすべてISO(YYYY-MM-DD)で抽出（出現順）。"""
+    out: List[str] = []
+    for m in re.finditer(r"令和(\d+)年\s*(\d{1,2})月\s*(\d{1,2})日|(\d{4})年\s*(\d{1,2})月\s*(\d{1,2})日", text or ""):
+        if m.group(1):
+            y = 2018 + int(m.group(1))
+            mo, d = int(m.group(2)), int(m.group(3))
+        else:
+            y, mo, d = int(m.group(4)), int(m.group(5)), int(m.group(6))
+        out.append(f"{y:04d}-{mo:02d}-{d:02d}")
+    return out
+
+
+def _scrape_kyoto_ebid_sync() -> List[Dict]:
+    import hashlib
+    import urllib.request
+    import urllib.parse
+    from datetime import date
+
+    ROOT = "https://kyoto.efftis.jp/26000/CALS/PPI_P/"
+    today = date.today().isoformat()
+    op, _jar = _efftis_ppi_opener()
+
+    def get(u):
+        return _ppi_decode(op.open(u, timeout=60).read())
+
+    def post(u, pairs):
+        data = urllib.parse.urlencode(pairs, encoding="utf-8").encode()
+        return _ppi_decode(op.open(urllib.request.Request(u, data=data), timeout=90).read())
+
+    results: List[Dict] = []
+    try:
+        get(ROOT)  # セッションCookie確立
+        form = post(ROOT + "PiCtBaFi02Start.do", [
+            ("omeProcessName", "start"),
+            ("omeParameterGroupID", "jp.co.nec.ome.egov.ppi.pi.ct.ba.fi.PiCtBaFi02E01.Start"),
+        ])
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"京都府電子入札セッション確立失敗: {e}")
+        return results
+    if _ppi_is_top(form):
+        logger.info("京都府電子入札: 運用時間外/リダイレクト（0件）")
+        return results
+
+    base = _ppi_harvest(form, "conditionform")
+    # 年度・発注機関(京都府)・供給種別(工事/コンサル)コードはフォームの hidden から動的取得
+    # （"2026PPIORG001" 等の年度接頭辞はFYで変わるためハードコードしない）。
+    fy = (base.get("pPI_BNSYEAR") or "").strip()
+    org_kyoto = (base.get("pPI_ORGCDvalues", "").split("|") or [""])[0]  # 先頭=京都府
+    sply_codes = [s for s in base.get("pPI_SPLYCDvalues", "").split("|") if s]  # 工事,コンサル
+    if not sply_codes:
+        sply_codes = [""]
+
+    for sply in sply_codes:
+        d = dict(base)
+        d["omeProcessName"] = "findList"
+        d["r1"] = "v2"                       # v2=入札公告・入札情報（v3=結果）
+        d["pPI_ORGCD"] = org_kyoto           # 京都府のみ（市町村を除外）
+        d["pPI_SPLYCD"] = sply
+        if fy:
+            d["pPI_BNSYEAR"] = fy
+        d["omeMaxDisplayRowCount"] = "1000"  # 年度内全件を1頁取得
+        try:
+            lst = post(ROOT + "PiCtBaFi02GetList.do", list(d.items()))
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"京都府電子入札検索失敗（sply={sply}）: {e}")
+            continue
+        if _ppi_is_top(lst):
+            continue
+        for cells in _ppi_rows(lst):
+            if len(cells) < 6:
+                continue
+            title = cells[2].strip()
+            if not title:
+                continue
+            org = cells[1].strip() or "京都府"
+            gyoshu = cells[4].strip()
+            # c[6]=資料配布(期間) / c[7]=申請受付(期間)。公告日≈資料配布開始、
+            # 締切≈申請受付終了。両セルの全日付から最早=公告、最遅=締切とする。
+            dc = _ppi_dates(cells[6] if len(cells) > 6 else "")
+            de = _ppi_dates(cells[7] if len(cells) > 7 else "")
+            all_d = sorted(dc + de)
+            published = (dc or all_d or [""])[0]
+            deadline = (all_d or [""])[-1]
+            # 現在公告中のみ（最終アクション日が未到来）。日付不明はキープ。
+            if deadline and deadline < today:
+                continue
+            cat = "プロポーザル" if re.search(r"プロポ|企画提案|企画競争|公募型", title) else "入札"
+            slug = hashlib.md5(("KYOTO_EBID" + title + published).encode("utf-8")).hexdigest()[:12]
+            results.append({
+                "title": title,
+                "category": cat,
+                "organization": org,
+                "prefecture": "京都府",
+                "published_at": published,
+                "deadline": deadline,
+                "result_date": "",
+                "result_url": "",
+                "project_code": f"KYOTO_EBID-{slug}",
+                "awardee": "",
+                "url": f"{ROOT}#{slug}",
+                "source": "KYOTO_EBID",
+                "amount": "",
+                "source_category": gyoshu,
+                "summary": "",
+                "detail": "",
+                "tags": ",".join(generate_tags(title, org)),
+            })
+    logger.info(f"京都府 電子入札(PPI): {len(results)}件取得")
+    return results
+
+
+async def scrape_kyoto_ebid() -> List[Dict]:
+    """京都府 入札情報公開システム（工事・測量コンサル）の現在公告中の入札を取得する。"""
+    try:
+        return await asyncio.to_thread(_scrape_kyoto_ebid_sync)
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"京都府電子入札スクレイパー例外: {e}")
+        return []
+
+
+# 香川県 入札方式(=入札後審査型一般競争 等)。プロポ判定に使用。
+_KAGAWA_METHODS = {
+    "一般競争入札", "公募型指名競争入札", "指名競争入札", "随意契約",
+    "公募型プロポーザル", "指名型プロポーザル", "入札後審査型一般競争",
+}
+
+
+def _scrape_kagawa_ebid_sync() -> List[Dict]:
+    import hashlib
+    import time as _time
+    import urllib.request
+    import urllib.parse
+    from datetime import date, timedelta
+    from urllib.parse import urljoin
+
+    ROOT = "https://dennyu.pref.kagawa.lg.jp/PPI_P/"
+    today = date.today().isoformat()
+    window_lo = (date.today() - timedelta(days=120)).isoformat()  # 古すぎる公告は除外
+    op, _jar = _efftis_ppi_opener()
+
+    # frameset入口で ;jsessionid= を確立（WebLogic系はパスにjsessionidを埋める）
+    try:
+        entry = _ppi_decode(op.open(ROOT, timeout=60).read())
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"香川県電子入札セッション確立失敗: {e}")
+        return []
+    jm = re.search(r";jsessionid=([^\s'\"?]+)", entry)
+    jsid = jm.group(1) if jm else None
+
+    def _u(u):
+        u = urljoin(ROOT, u)
+        if jsid and ";jsessionid=" not in u:
+            if "?" in u:
+                b, q = u.split("?", 1)
+                u = f"{b};jsessionid={jsid}?{q}"
+            else:
+                u = f"{u};jsessionid={jsid}"
+        return u
+
+    def get(u):
+        return _ppi_decode(op.open(_u(u), timeout=60).read())
+
+    def post(u, pairs):
+        data = urllib.parse.urlencode(pairs, encoding="utf-8").encode()
+        return _ppi_decode(op.open(urllib.request.Request(_u(u), data=data), timeout=90).read())
+
+    # メニュー導線を辿ってセッション状態を初期化（香川はこれが無いと検索が0件化する）
+    try:
+        get("pages/Menu/ppi_p_menu.vm?procKbn=")
+        get("pages/Menu/ppi_p_main.vm?procKbn=")
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"香川県電子入札メニュー初期化失敗: {e}")
+        return []
+
+    results: List[Dict] = []
+
+    def run_category(screen, gid_stub, start_vm, r1, label):
+        """1カテゴリ(工事/コンサル/物品)を検索しページングして香川県分を収集。"""
+        try:
+            get(f"pages/PPI_P/{screen}/{start_vm}")
+            form = post(f"/PPI_P/{screen}Start.do", [
+                ("omeProcessName", "start"),
+                ("omeParameterGroupID", f"jp.co.nec.ome.egov.ppi.pi.ct.cr.fi.{gid_stub}E01.Start"),
+            ])
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"香川県電子入札({label})開始失敗: {e}")
+            return
+        if _ppi_is_top(form):
+            logger.info(f"香川県電子入札({label}): 運用時間外/リダイレクト")
+            return
+        base = _ppi_harvest(form, "conditionform")
+        base["omeProcessName"] = "findList"
+        base["omeParameterGroupID"] = f"jp.co.nec.ome.egov.ppi.pi.ct.cr.fi.{gid_stub}E01.FindList"
+        base["ppikikanno"] = ""      # 全機関（香川県抽出は行の発注機関列で行う）
+        base["condition6"] = ""
+        base["condition7"] = ""
+        base["omeMaxDisplayRowCount"] = "100"
+        base["display"] = "100"
+        if r1 is not None:
+            base["r1"] = r1
+        try:
+            res1 = post(f"/PPI_P/{screen}GetList.do", list(base.items()))
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"香川県電子入札({label})検索失敗: {e}")
+            return
+        if _ppi_is_top(res1):
+            logger.info(f"香川県電子入札({label}): 運用時間外/リダイレクト")
+            return
+        if "該当のデータは存在しません" in res1 and "omeFindVersion" not in res1:
+            return
+        fvm = re.search(r'name="omeFindVersion"\s+value="([^"]*)"', res1)
+        if not fvm:
+            logger.info(f"香川県電子入札({label}): omeFindVersion取得失敗（0件扱い）")
+            return
+        fv = fvm.group(1)
+        gid_get = f"jp.co.nec.ome.egov.ppi.pi.ct.cr.fi.{gid_stub}E01.GetList"
+
+        pos = 0
+        for _pg in range(25):  # 安全上限（100件/頁）
+            try:
+                lst = post(f"/PPI_P/{screen}GetList.do", [
+                    ("omeProcessName", "getListPage"),
+                    ("omeParameterGroupID", gid_get),
+                    ("omeFindVersion", fv), ("omeKeyNo", ""), ("listjudgeflag", "1"),
+                    ("omePageDirection", "absolute"),
+                    ("omeMaxDisplayRowCount", "100"),
+                    ("omeStartPosition", str(pos)), ("omeEndPosition", str(pos + 99)),
+                ])
+            except Exception as e:  # noqa: BLE001
+                logger.error(f"香川県電子入札({label})ページ取得失敗（pos={pos}）: {e}")
+                break
+            if _ppi_is_top(lst):
+                break
+            rows = _ppi_rows(lst)
+            if not rows:
+                break
+            for cells in rows:
+                # 発注機関列に"香川県"が単独で入る行のみ採用（市町・企業団を除外）
+                if "香川県" not in cells:
+                    continue
+                # 案件名 = 日付でも方式でも機関でもない最長セル
+                cand = [c for c in cells
+                        if c and c != "香川県"
+                        and not _SEIREKI_DATE.search(c) and not _WAREKI_DATE.search(c)
+                        and c not in _KAGAWA_METHODS
+                        and not re.fullmatch(r"\d+", c)]
+                if not cand:
+                    continue
+                title = max(cand, key=len).strip()
+                if len(title) < 4:
+                    continue
+                dates = _ppi_dates(" ".join(cells))
+                published = dates[0] if dates else ""
+                if published and published < window_lo:
+                    continue  # 古すぎる公告は除外
+                method = next((c for c in cells if c in _KAGAWA_METHODS), "")
+                cat = "プロポーザル" if ("プロポ" in method or re.search(r"プロポ|企画提案|企画競争|公募型", title)) else "入札"
+                slug = hashlib.md5(("KAGAWA_EBID" + title + published).encode("utf-8")).hexdigest()[:12]
+                results.append({
+                    "title": title,
+                    "category": cat,
+                    "organization": "香川県",
+                    "prefecture": "香川県",
+                    "published_at": published,
+                    "deadline": "",
+                    "result_date": "",
+                    "result_url": "",
+                    "project_code": f"KAGAWA_EBID-{slug}",
+                    "awardee": "",
+                    "url": f"{ROOT}#{slug}",
+                    "source": "KAGAWA_EBID",
+                    "amount": "",
+                    "source_category": label,
+                    "summary": "",
+                    "detail": "",
+                    "tags": ",".join(generate_tags(title, "香川県")),
+                })
+            if len(rows) < 100:
+                break
+            pos += 100
+            _time.sleep(0.2)
+
+    # 工事 / 測量コンサル / 物品等
+    run_category("PiCtCrFi01", "PiCtCrFi01", "PiCtCrFi01start.vm", "00", "建設工事")
+    run_category("PiCtCrFi01", "PiCtCrFi01", "PiCtCrFi01start.vm", "01", "測量・コンサル")
+    run_category("PiCtCrFi02", "PiCtCrFi02", "PiCtCrFi02start.vm", None, "物品等")
+    logger.info(f"香川県 電子入札(PPI): {len(results)}件取得")
+    return results
+
+
+async def scrape_kagawa_ebid() -> List[Dict]:
+    """香川県 入札情報公開システム（工事・測量コンサル・物品等）の現在公告中の入札を取得する。"""
+    try:
+        return await asyncio.to_thread(_scrape_kagawa_ebid_sync)
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"香川県電子入札スクレイパー例外: {e}")
+        return []
+
+
 def fetch_shizuoka_detail(url: str) -> Optional[Dict]:
     """静岡県 入札・公募 個別記事ページの本文を取得する（更新日を公示日として抽出）。"""
     import urllib.request
@@ -8310,6 +8710,8 @@ async def run_all_scrapers(portal_date_from: str = "", jogmec_max_id: int = 0) -
         scrape_yamagata(),
         scrape_yamaguchi(),
         scrape_miyagi(),
+        scrape_kyoto_ebid(),
+        scrape_kagawa_ebid(),
     ]
 
     scraped = await asyncio.gather(*tasks, return_exceptions=True)
