@@ -41,7 +41,15 @@ def main():
                   ensure_ascii=False, indent=1)
         print("[INIT] ベースライン作成: %d件 / %dソース" % (total, len(cur)))
         return 0
-    base = json.load(open(BASELINE, encoding="utf-8"))
+    # ベースラインが壊れている（gitコンフリクトマーカー混入等）場合でもパイプライン全体を
+    # 落とさない。壊れていたら未作成扱いで作り直して正常終了する。
+    try:
+        base = json.load(open(BASELINE, encoding="utf-8"))
+    except (ValueError, OSError) as e:
+        json.dump({"sources": cur, "total": total}, open(BASELINE, "w", encoding="utf-8"),
+                  ensure_ascii=False, indent=1)
+        print("[INIT] ベースラインが不正(%s)のため再作成: %d件 / %dソース" % (e, total, len(cur)))
+        return 0
     bsrc, btotal = base.get("sources", {}), base.get("total", 0)
 
     alerts = []
