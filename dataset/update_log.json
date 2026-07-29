@@ -53,6 +53,7 @@
       "ai_cost_usd": 0.009
     },
     {
+<<<<<<< Updated upstream
       "at": "2026-07-29T01:43:25+00:00",
       "scraped": 10012,
       "new": 43,
@@ -68,4 +69,21 @@
   ],
   "cumulative_cost_usd_recent": 6.9417,
   "cumulative_cost_usd_alltime": 6.9417
+=======
+      "at": "2026-07-29T03:34:21+00:00",
+      "scraped": 10413,
+      "new": 274,
+      "updated": 10139,
+      "total": 22450,
+      "portal_retry": 0,
+      "repaired": 0,
+      "ai_calls": 396,
+      "ai_input_tokens": 1403002,
+      "ai_output_tokens": 268500,
+      "ai_cost_usd": 2.7455
+    }
+  ],
+  "cumulative_cost_usd_recent": 6.9633,
+  "cumulative_cost_usd_alltime": 6.9633
+>>>>>>> Stashed changes
 }

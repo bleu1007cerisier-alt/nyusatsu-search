@@ -7,6 +7,7 @@
   "AICHI": 1078,
   "TOKYO": 176,
   "OSAKA": 2172,
+<<<<<<< Updated upstream
   "FUKUOKA": 217,
   "MIE": 802,
   "GIFU": 688,
@@ -19,40 +20,66 @@
   "ISHIKAWA": 1039,
   "TOCHIGI": 104,
   "CHIBA": 882,
+=======
+  "FUKUOKA": 220,
+  "MIE": 804,
+  "GIFU": 688,
+  "YAMANASHI": 210,
+  "TOYAMA": 389,
+  "NAGANO": 657,
+  "SHIZUOKA": 304,
+  "FUKUI": 264,
+  "NIIGATA": 351,
+  "ISHIKAWA": 1040,
+  "TOCHIGI": 104,
+  "CHIBA": 898,
+>>>>>>> Stashed changes
   "KYOTO": 44,
   "HYOGO": 132,
-  "SHIGA": 69,
+  "SHIGA": 70,
   "WAKAYAMA": 254,
-  "HIROSHIMA": 235,
+  "HIROSHIMA": 236,
   "OKAYAMA": 253,
-  "EHIME": 262,
+  "EHIME": 264,
   "KOCHI": 85,
   "SAGA": 147,
   "SHIMANE": 37,
   "KUMAMOTO": 37,
   "HOKKAIDO": 112,
-  "TOKUSHIMA": 79,
+  "TOKUSHIMA": 80,
   "NAGASAKI": 293,
   "OKINAWA": 328,
   "OITA": 52,
   "AKITA": 232,
-  "FUKUSHIMA": 251,
-  "TOTTORI": 102,
+  "FUKUSHIMA": 252,
+  "TOTTORI": 103,
   "GUNMA": 157,
   "SAITAMA": 21,
+<<<<<<< Updated upstream
   "MIYAZAKI": 175,
+=======
+  "MIYAZAKI": 209,
+>>>>>>> Stashed changes
   "IWATE": 75,
-  "KAGOSHIMA": 447,
+  "KAGOSHIMA": 469,
   "KAGAWA": 49,
+<<<<<<< Updated upstream
   "AOMORI": 436,
+=======
+  "AOMORI": 437,
+>>>>>>> Stashed changes
   "YAMAGATA": 91,
   "YAMAGUCHI": 7,
-  "MIYAGI": 162,
+  "MIYAGI": 169,
   "NARA": 799,
   "KANAGAWA": 282,
   "IBARAKI": 431,
-  "KYOTO_EBID": 39,
-  "KAGAWA_EBID": 121
+  "KYOTO_EBID": 43,
+  "KAGAWA_EBID": 127
  },
+<<<<<<< Updated upstream
  "total": 22219
+=======
+ "total": 22450
+>>>>>>> Stashed changes
 }
