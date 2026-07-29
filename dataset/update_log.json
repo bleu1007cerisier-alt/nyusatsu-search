@@ -1,89 +1,19 @@
 {
   "runs": [
     {
-      "at": "2026-07-26T00:37:48+00:00",
-      "scraped": 9441,
-      "new": 216,
-      "updated": 9225,
-      "total": 20860,
+      "at": "2026-07-29T14:47:17+00:00",
+      "scraped": 9951,
+      "new": 105,
+      "updated": 9846,
+      "total": 22551,
       "portal_retry": 0,
       "repaired": 0,
-      "ai_calls": 217,
-      "ai_input_tokens": 836772,
-      "ai_output_tokens": 154625,
-      "ai_cost_usd": 1.2879
-    },
-    {
-      "at": "2026-07-26T14:03:53+00:00",
-      "scraped": 9413,
-      "new": 5,
-      "updated": 9408,
-      "total": 20865,
-      "portal_retry": 0,
-      "repaired": 0,
-      "ai_calls": 187,
-      "ai_input_tokens": 693362,
-      "ai_output_tokens": 119355,
-      "ai_cost_usd": 1.0321
-    },
-    {
-      "at": "2026-07-27T01:29:44+00:00",
-      "scraped": 9541,
-      "new": 280,
-      "updated": 9261,
-      "total": 21145,
-      "portal_retry": 0,
-      "repaired": 0,
-      "ai_calls": 266,
-      "ai_input_tokens": 1002763,
-      "ai_output_tokens": 177215,
-      "ai_cost_usd": 1.8888
-    },
-    {
-      "at": "2026-07-28T14:08:27+00:00",
-      "scraped": 10148,
-      "new": 797,
-      "updated": 9351,
-      "total": 22178,
-      "portal_retry": 0,
-      "repaired": 0,
-      "ai_calls": 32,
-      "ai_input_tokens": 4904,
-      "ai_output_tokens": 815,
-      "ai_cost_usd": 0.009
-    },
-    {
-<<<<<<< Updated upstream
-      "at": "2026-07-29T01:43:25+00:00",
-      "scraped": 10012,
-      "new": 43,
-      "updated": 9969,
-      "total": 22219,
-      "portal_retry": 0,
-      "repaired": 0,
-      "ai_calls": 392,
-      "ai_input_tokens": 1393871,
-      "ai_output_tokens": 266012,
-      "ai_cost_usd": 2.7239
+      "ai_calls": 31,
+      "ai_input_tokens": 4744,
+      "ai_output_tokens": 802,
+      "ai_cost_usd": 0.0088
     }
   ],
-  "cumulative_cost_usd_recent": 6.9417,
-  "cumulative_cost_usd_alltime": 6.9417
-=======
-      "at": "2026-07-29T03:34:21+00:00",
-      "scraped": 10413,
-      "new": 274,
-      "updated": 10139,
-      "total": 22450,
-      "portal_retry": 0,
-      "repaired": 0,
-      "ai_calls": 396,
-      "ai_input_tokens": 1403002,
-      "ai_output_tokens": 268500,
-      "ai_cost_usd": 2.7455
-    }
-  ],
-  "cumulative_cost_usd_recent": 6.9633,
-  "cumulative_cost_usd_alltime": 6.9633
->>>>>>> Stashed changes
+  "cumulative_cost_usd_recent": 0.0088,
+  "cumulative_cost_usd_alltime": 0.0088
 }
