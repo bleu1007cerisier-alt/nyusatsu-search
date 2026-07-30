@@ -8120,6 +8120,162 @@ async def scrape_yamagata_ebid() -> List[Dict]:
         return []
 
 
+# ---------------------------------------------------------------------------
+# 大分県 共同利用型 入札情報サービスシステム（DENTYO GPPI・iframe/Struts・cp932）
+#   ※神奈川GPPIはSPA(raw不可)だが、大分は旧世代のiframe+サーバレンダHTMLでraw可。
+#   既存の静的OITAは委託・プロポ中心 → 電子入札の建設工事(P5510入札公告)を追加。
+#   フロー: GET GPPI_MENU → GET GP5000_10F?hdn_dantai=1111(大分県) → 左iframe
+#   P5000_MENU → P5510_10(工事の入札公告検索フォーム)を GET → frm_main を harvest
+#   し hdn_action=btn_reference・ddl_keisaiNen=年度・ddl_pageSize=大きな値で POST
+#   （pageSize大で全件1頁・maxPageNo=1）。結果表の1件=非空セル列 [No,発注部局,入札方式,
+#   業種,公告日時,開札予定日時,業務名,場所,連絡]。日付は「R08.07.31 09:02」形式。
+#   開札予定日>=今日（現在公告中）のみ採用。
+# ---------------------------------------------------------------------------
+_OITA_GPPI = "https://www.t-elis.pref.oita.lg.jp/DENTYO/"
+_OITA_DANTAI = "1111"  # 大分県
+
+
+def _oita_gppi_date(s: str) -> str:
+    m = re.search(r"R\s*(\d+)\s*\.\s*(\d+)\s*\.\s*(\d+)", s or "")
+    if m:
+        return f"{2018 + int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+    return _shimane_wareki(s)
+
+
+def _scrape_oita_ebid_sync() -> List[Dict]:
+    import hashlib
+    import urllib.request
+    import urllib.parse
+    import ssl as _ssl
+    import http.cookiejar
+    import html as _html
+    from datetime import date
+
+    ctx = _ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = _ssl.CERT_NONE
+    try:
+        ctx.set_ciphers("DEFAULT@SECLEVEL=1")
+    except Exception:  # noqa: BLE001
+        pass
+    jar = http.cookiejar.CookieJar()
+    op = urllib.request.build_opener(
+        urllib.request.HTTPCookieProcessor(jar),
+        urllib.request.HTTPSHandler(context=ctx))
+    op.addheaders = [("User-Agent", "Mozilla/5.0")]
+
+    def get(u, ref=None):
+        req = urllib.request.Request(u, headers={"User-Agent": "Mozilla/5.0"})
+        if ref:
+            req.add_header("Referer", ref)
+        return op.open(req, timeout=45).read().decode("cp932", "replace")
+
+    def post(u, pairs, ref=None):
+        data = urllib.parse.urlencode(pairs, encoding="cp932").encode("ascii")
+        req = urllib.request.Request(u, data=data, headers={"User-Agent": "Mozilla/5.0"})
+        if ref:
+            req.add_header("Referer", ref)
+        return op.open(req, timeout=60).read().decode("cp932", "replace")
+
+    today = date.today()
+    fy = today.year if today.month >= 4 else today.year - 1
+    dantai = _OITA_DANTAI
+    results: List[Dict] = []
+    try:
+        get(_OITA_GPPI + "GPPI_MENU")
+        get(_OITA_GPPI + f"GP5000_10F?hdn_dantai={dantai}", ref=_OITA_GPPI + "GPPI_MENU")
+        get(_OITA_GPPI + f"P5000_MENU?hdn_dantai={dantai}")
+        form = get(_OITA_GPPI + f"P5510_10?hdn_dantai={dantai}", ref=_OITA_GPPI + f"P5000_MENU?hdn_dantai={dantai}")
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"大分県電子入札セッション確立失敗: {e}")
+        return results
+
+    fm = re.search(r'<form\b[^>]*>(.*?)</form>', form, re.S | re.I)
+    if not fm:
+        logger.error("大分県電子入札: 検索フォーム未検出")
+        return results
+    block = fm.group(1)
+    d = {}
+    for inp in re.finditer(r'<input\b[^>]*>', block, re.I):
+        nm = re.search(r'name="([^"]*)"', inp.group(0))
+        vl = re.search(r'value="([^"]*)"', inp.group(0))
+        if nm:
+            d[nm.group(1)] = _html.unescape(vl.group(1)) if vl else ""
+    for sm in re.finditer(r'<select[^>]*name="([^"]*)"', block):
+        d.setdefault(sm.group(1), "")
+    d["hdn_action"] = "btn_reference"
+    d["hdn_dantai"] = dantai
+    d["ddl_keisaiNen"] = str(fy)
+    d["ddl_pageSize"] = "2000"   # 全件を1頁に（maxPageNo=1）
+
+    try:
+        res = post(_OITA_GPPI + "P5510_10", d, ref=_OITA_GPPI + f"P5510_10?hdn_dantai={dantai}")
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"大分県電子入札検索失敗: {e}")
+        return results
+
+    seen = set()
+    for tr in re.findall(r"<tr[^>]*>(.*?)</tr>", res, re.S | re.I):
+        cells = [re.sub(r"\s+", " ", _html.unescape(re.sub(r"<[^>]+>", " ", c))).strip()
+                 for c in re.findall(r"<td[^>]*>(.*?)</td>", tr, re.S | re.I)]
+        cells = [c for c in cells if c and c != "null"]
+        # 公告日時・開札予定日時 が連続する R日付ペアの行のみ採用（発注見通しP5530型の単日付は除外）
+        di = None
+        for i in range(len(cells) - 1):
+            if re.search(r"R\s*\d+\.\d+\.\d+", cells[i]) and re.search(r"R\s*\d+\.\d+\.\d+", cells[i + 1]):
+                di = i
+                break
+        if di is None or di < 3 or di + 2 >= len(cells):
+            continue
+        published = _oita_gppi_date(cells[di])
+        deadline = _oita_gppi_date(cells[di + 1])
+        title = cells[di + 2].strip()
+        gyoshu = cells[di - 1].strip()
+        method = cells[di - 2].strip()
+        org = cells[di - 3].strip() or "大分県"
+        if not title:
+            continue
+        # 現在公告中のみ（開札予定日が未到来）。日付不明はキープ。
+        if deadline and deadline < today.isoformat():
+            continue
+        key = re.sub(r"\s+", "", title) + published
+        if key in seen:
+            continue
+        seen.add(key)
+        cat = "プロポーザル" if re.search(r"プロポ|企画提案|企画競争|公募型", title + method) else "入札"
+        slug = hashlib.md5(("OITA_EBID" + key).encode("utf-8")).hexdigest()[:12]
+        results.append({
+            "title":           title,
+            "category":        cat,
+            "organization":    f"大分県（{org}）" if org and org != "大分県" else "大分県",
+            "prefecture":      "大分県",
+            "published_at":    published,
+            "deadline":        deadline,
+            "result_date":     "",
+            "result_url":      "",
+            "project_code":    f"OITA_EBID-{slug}",
+            "awardee":         "",
+            "url":             f"{_OITA_GPPI}GP5000_10F?hdn_dantai={dantai}#{slug}",
+            "source":          "OITA_EBID",
+            "amount":          "",
+            "source_category": gyoshu,
+            "summary":         "",
+            "detail":          "",
+            "tags":            ",".join(generate_tags(title, org)),
+        })
+    logger.info(f"大分県 電子入札(GPPI工事): {len(results)}件取得")
+    return results
+
+
+async def scrape_oita_ebid() -> List[Dict]:
+    """大分県 共同利用型 入札情報サービス（建設工事の入札公告）の現在公告中を取得する。"""
+    try:
+        return await asyncio.to_thread(_scrape_oita_ebid_sync)
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"大分県電子入札スクレイパー例外: {e}")
+        return []
+
+
 def fetch_shizuoka_detail(url: str) -> Optional[Dict]:
     """静岡県 入札・公募 個別記事ページの本文を取得する（更新日を公示日として抽出）。"""
     import urllib.request
@@ -9125,6 +9281,7 @@ async def run_all_scrapers(portal_date_from: str = "", jogmec_max_id: int = 0) -
         scrape_shiga_ebid(),
         scrape_shimane_ebid(),
         scrape_yamagata_ebid(),
+        scrape_oita_ebid(),
     ]
 
     scraped = await asyncio.gather(*tasks, return_exceptions=True)
