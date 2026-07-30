@@ -28,19 +28,35 @@ jobs:
       - name: 依存インストール
         run: pip install -r requirements.txt
 
+      - name: R2から最新データを取得（tenders.csvはR2が正。SQLite化でgitからは除外済み）
+        env:
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_DATA_BUCKET: ${{ secrets.R2_DATA_BUCKET }}
+        run: python scripts/sync_r2.py pull
+
       - name: 事業者決定チェック
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: python scripts/check_results.py
 
-      - name: 変更があればコミット
+      - name: R2へ保存（チェックで更新したCSVをR2へ書き戻す＝本番データの正）
+        env:
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_DATA_BUCKET: ${{ secrets.R2_DATA_BUCKET }}
+        run: python scripts/sync_r2.py push
+
+      - name: ログをコミット（CSVはR2が正なのでgitには載せない）
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git stash
           git pull --rebase origin main
-          git stash pop
-          git add dataset/tenders.csv dataset/check_results_log.json
+          git stash pop || true
+          git add dataset/check_results_log.json
           if git diff --staged --quiet; then
             echo "更新なし"
           else
