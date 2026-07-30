@@ -7971,6 +7971,155 @@ async def scrape_shimane_ebid() -> List[Dict]:
         return []
 
 
+# ---------------------------------------------------------------------------
+# 山形県 入札情報サービス（富士通PPI /PPI/ .shtml、cp932）
+#   既存の静的 YAMAGATA はプロポ・委託中心で建設工事が欠落 → 電子入札の
+#   入札公告一覧(JS05-01-01)から工事・コンサル・設備の現在公告中を追加する。
+#   フロー: GET JS03-01(セッションCookie)→ GET JS05-01-01(検索フォーム)→
+#   JS0501Form を harvest し mode=1(検索)・chkB=ON(公開中のみ)・年度・dispCnt=99999
+#   でPOST。行に JS05-02.shtml?koujino=<20桁> の詳細リンク。列: [公告日,開札日,
+#   案件名,施行地域,発注所属,種別,入札方式,備考]。日付は「2026/ 07/30」形式（空白入り）。
+# ---------------------------------------------------------------------------
+_YAMAGATA_PPI = "https://ppi.cals.pref.yamagata.jp/PPI/"
+
+
+def _yamagata_ppi_date(s: str) -> str:
+    m = re.search(r"(\d{4})\s*/\s*(\d{1,2})\s*/\s*(\d{1,2})", s or "")
+    if m:
+        return f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+    return _shimane_wareki(s)
+
+
+def _scrape_yamagata_ebid_sync() -> List[Dict]:
+    import hashlib
+    import urllib.request
+    import urllib.parse
+    import ssl as _ssl
+    import http.cookiejar
+    import html as _html
+    from datetime import date
+
+    ctx = _ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = _ssl.CERT_NONE
+    try:
+        ctx.set_ciphers("DEFAULT@SECLEVEL=1")
+    except Exception:  # noqa: BLE001
+        pass
+    jar = http.cookiejar.CookieJar()
+    op = urllib.request.build_opener(
+        urllib.request.HTTPCookieProcessor(jar),
+        urllib.request.HTTPSHandler(context=ctx))
+    op.addheaders = [("User-Agent", "Mozilla/5.0")]
+
+    def get(u, ref=None):
+        req = urllib.request.Request(u, headers={"User-Agent": "Mozilla/5.0"})
+        if ref:
+            req.add_header("Referer", ref)
+        return op.open(req, timeout=45).read().decode("cp932", "replace")
+
+    def post(u, pairs, ref=None):
+        data = urllib.parse.urlencode(pairs, encoding="cp932").encode("ascii")
+        req = urllib.request.Request(u, data=data, headers={"User-Agent": "Mozilla/5.0"})
+        if ref:
+            req.add_header("Referer", ref)
+        return op.open(req, timeout=60).read().decode("cp932", "replace")
+
+    def harvest(body, formname):
+        m = re.search(r'<form[^>]*name="' + formname + r'"[^>]*>(.*?)</form>', body, re.S | re.I)
+        block = m.group(1) if m else ""
+        d = {}
+        for inp in re.finditer(r'<input\b[^>]*>', block, re.I):
+            nm = re.search(r'name="([^"]*)"', inp.group(0))
+            ty = re.search(r'type="([^"]*)"', inp.group(0))
+            vl = re.search(r'value="([^"]*)"', inp.group(0))
+            t = ty.group(1).lower() if ty else "text"
+            if nm and t in ("hidden", "text"):
+                d[nm.group(1)] = _html.unescape(vl.group(1)) if vl else ""
+            elif nm and t in ("radio", "checkbox") and "checked" in inp.group(0).lower():
+                d[nm.group(1)] = vl.group(1) if vl else ""
+        for sm in re.finditer(r'<select[^>]*name="([^"]*)"[^>]*>(.*?)</select>', block, re.S | re.I):
+            sel = (re.search(r'<option[^>]*value="([^"]*)"[^>]*selected', sm.group(2))
+                   or re.search(r'<option[^>]*value="([^"]*)"', sm.group(2)))
+            d[sm.group(1)] = sel.group(1) if sel else ""
+        return d
+
+    today = date.today()
+    fy = today.year if today.month >= 4 else today.year - 1
+    results: List[Dict] = []
+    try:
+        get(_YAMAGATA_PPI + "JS03-01.shtml")
+        form = get(_YAMAGATA_PPI + "JS05-01-01.shtml", ref=_YAMAGATA_PPI + "JS03-01.shtml")
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"山形県電子入札セッション確立失敗: {e}")
+        return results
+
+    d = harvest(form, "JS0501Form")
+    d["mode"] = "1"          # 検索実行
+    d["chkB"] = "ON"         # 公開中のみ
+    d["koukaichu"] = "on"
+    d["nyusatsu_jiki"] = str(fy)
+    d["dispCnt"] = "99999"   # 全件
+    try:
+        res = post(_YAMAGATA_PPI + "JS05-01-01.shtml", d, ref=_YAMAGATA_PPI + "JS05-01-01.shtml")
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"山形県電子入札検索失敗: {e}")
+        return results
+
+    for tr in re.findall(r"<tr[^>]*>(.*?)</tr>", res, re.S | re.I):
+        am = re.search(r'JS05-02\.shtml\?koujino=(\w+)', tr)
+        if not am:
+            continue
+        koujino = am.group(1)
+        anchor = re.search(r'<a\b[^>]*JS05-02[^>]*>(.*?)</a>', tr, re.S)
+        cells = [re.sub(r"\s+", " ", _html.unescape(re.sub(r"<[^>]+>", " ", c))).strip()
+                 for c in re.findall(r"<td[^>]*>(.*?)</td>", tr, re.S)]
+        title = ""
+        if anchor:
+            title = re.sub(r"\s+", " ", _html.unescape(re.sub(r"<[^>]+>", "", anchor.group(1)))).strip()
+        if not title and len(cells) > 2:
+            title = cells[2]
+        if not title:
+            continue
+        published = _yamagata_ppi_date(cells[0]) if len(cells) > 0 else ""
+        deadline = _yamagata_ppi_date(cells[1]) if len(cells) > 1 else ""
+        org = cells[4].strip() if len(cells) > 4 else "山形県"
+        gyoshu = cells[5].strip() if len(cells) > 5 else ""
+        method = cells[6].strip() if len(cells) > 6 else ""
+        cat = "プロポーザル" if re.search(r"プロポ|企画提案|企画競争|公募型", title + method + gyoshu) else "入札"
+        slug = hashlib.md5(("YAMAGATA_EBID" + koujino).encode("utf-8")).hexdigest()[:12]
+        results.append({
+            "title":           title,
+            "category":        cat,
+            "organization":    f"山形県（{org}）" if org and org != "山形県" else "山形県",
+            "prefecture":      "山形県",
+            "published_at":    published,
+            "deadline":        deadline,
+            "result_date":     "",
+            "result_url":      "",
+            "project_code":    f"YAMAGATA_EBID-{koujino}",
+            "awardee":         "",
+            "url":             f"{_YAMAGATA_PPI}JS05-02.shtml?koujino={koujino}",
+            "source":          "YAMAGATA_EBID",
+            "amount":          "",
+            "source_category": gyoshu,
+            "summary":         "",
+            "detail":          "",
+            "tags":            ",".join(generate_tags(title, org)),
+        })
+    logger.info(f"山形県 電子入札(PPI): {len(results)}件取得")
+    return results
+
+
+async def scrape_yamagata_ebid() -> List[Dict]:
+    """山形県 入札情報サービス（工事・コンサル等）の現在公告中の入札を取得する。"""
+    try:
+        return await asyncio.to_thread(_scrape_yamagata_ebid_sync)
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"山形県電子入札スクレイパー例外: {e}")
+        return []
+
+
 def fetch_shizuoka_detail(url: str) -> Optional[Dict]:
     """静岡県 入札・公募 個別記事ページの本文を取得する（更新日を公示日として抽出）。"""
     import urllib.request
@@ -8975,6 +9124,7 @@ async def run_all_scrapers(portal_date_from: str = "", jogmec_max_id: int = 0) -
         scrape_kagawa_ebid(),
         scrape_shiga_ebid(),
         scrape_shimane_ebid(),
+        scrape_yamagata_ebid(),
     ]
 
     scraped = await asyncio.gather(*tasks, return_exceptions=True)
