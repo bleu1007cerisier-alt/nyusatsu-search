@@ -7710,6 +7710,267 @@ async def scrape_kagawa_ebid() -> List[Dict]:
         return []
 
 
+# ---------------------------------------------------------------------------
+# 滋賀県 物品・役務電子調達システム（efftis eps/public 公開入札案件検索）
+#   工事は別系統（静的 SHIGA で委託等を収集済）。ここでは物品・役務の公告を追加。
+#   GET pubGroupTop.do?methodName=execOrderSearch → PubBiddingSearchBean と共に
+#   物品/役務の入札公告一覧（10件/頁）が返る。フォームを継承して
+#   methodName=execApplyListRowLengthNoCheckForPub + inputListRowLength=100 で
+#   全件を1頁展開し、開札予定日が未到来（現在公告中）のみ採用する。cp932/Struts。
+#   1行の列: [No, 発注区分/入札方式, 調達番号+案件名, 状況, 発注機関, 公告日+開札予定日時]。
+# ---------------------------------------------------------------------------
+_SHIGA_EPS_HOST = "https://shiga.efftis.jp"
+_SHIGA_EPS_TOP = _SHIGA_EPS_HOST + "/25000/eps/public/pubGroupTop.do?methodName=execOrderSearch&autonomyCd=25000"
+
+
+def _scrape_shiga_ebid_sync() -> List[Dict]:
+    import hashlib
+    import urllib.request
+    import urllib.parse
+    import ssl as _ssl
+    import http.cookiejar
+    import html as _html
+    from datetime import date as _date
+
+    ctx = _ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = _ssl.CERT_NONE
+    try:
+        ctx.set_ciphers("DEFAULT@SECLEVEL=1")
+    except Exception:  # noqa: BLE001
+        pass
+    jar = http.cookiejar.CookieJar()
+    op = urllib.request.build_opener(
+        urllib.request.HTTPCookieProcessor(jar),
+        urllib.request.HTTPSHandler(context=ctx))
+    op.addheaders = [("User-Agent", "Mozilla/5.0")]
+
+    def _get(u):
+        return op.open(u, timeout=40).read().decode("cp932", "replace")
+
+    def _post(u, data):
+        enc = urllib.parse.urlencode(data, encoding="cp932").encode("ascii")
+        req = urllib.request.Request(u, data=enc)
+        req.add_header("User-Agent", "Mozilla/5.0")
+        req.add_header("Content-Type", "application/x-www-form-urlencoded")
+        return op.open(req, timeout=60).read().decode("cp932", "replace")
+
+    def _fields(body):
+        m = re.search(r'<form[^>]*name="PubBiddingSearchBean"[^>]*>(.*?)</form>', body, re.S | re.I)
+        block = m.group(1) if m else body
+        d = {}
+        for inp in re.finditer(r'<input\b[^>]*>', block, re.I):
+            nm = re.search(r'name="([^"]*)"', inp.group(0))
+            vl = re.search(r'value="([^"]*)"', inp.group(0))
+            ty = re.search(r'type="([^"]*)"', inp.group(0))
+            if nm and (not ty or ty.group(1).lower() in ("hidden", "text")):
+                d[nm.group(1)] = _html.unescape(vl.group(1)) if vl else ""
+        for sm in re.finditer(r'<select[^>]*name="([^"]*)"[^>]*>(.*?)</select>', block, re.S | re.I):
+            sel = (re.search(r'<option[^>]*value="([^"]*)"[^>]*selected', sm.group(2))
+                   or re.search(r'<option[^>]*value="([^"]*)"', sm.group(2)))
+            d[sm.group(1)] = sel.group(1) if sel else ""
+        return d
+
+    def _action(body):
+        m = re.search(r'<form[^>]*name="PubBiddingSearchBean"[^>]*action="([^"]*)"', body, re.S | re.I)
+        # jsessionid はCookieでも維持されるがパスにも残すと確実
+        return _SHIGA_EPS_HOST + m.group(1) if m else _SHIGA_EPS_HOST + "/25000/eps/public/pubBiddingList.do"
+
+    today = _date.today().isoformat()
+    results: List[Dict] = []
+    try:
+        b1 = _get(_SHIGA_EPS_TOP)
+        d = _fields(b1)
+        act = _action(b1)
+        d["methodName"] = "execApplyListRowLengthNoCheckForPub"
+        d["inputListRowLength"] = "100"
+        d["listRowLength"] = "100"
+        body = _post(act, d)
+        rows = [tr for tr in re.findall(r"<tr[^>]*>(.*?)</tr>", body, re.S | re.I) if "openSubWinForPub" in tr]
+        if not rows:
+            rows = [tr for tr in re.findall(r"<tr[^>]*>(.*?)</tr>", b1, re.S | re.I) if "openSubWinForPub" in tr]
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"滋賀県物品役務電子調達 取得失敗: {e}")
+        return results
+
+    for tr in rows:
+        cells = [re.sub(r"\s+", " ", _html.unescape(re.sub(r"<[^>]+>", " ", c))).strip()
+                 for c in re.findall(r"<td[^>]*>(.*?)</td>", tr, re.S)]
+        if len(cells) < 6:
+            continue
+        method_cell = cells[1]           # 例: 物品調達/ 一般競争入札
+        name_cell = cells[2]             # 例: 2607222500000203074 案件名...
+        org = cells[4].strip() or "滋賀県"
+        date_cell = cells[5]             # 公告日 + 開札予定日時
+        onm = re.search(r"orderNum=(\d+)", tr)
+        order_num = onm.group(1) if onm else ""
+        title = re.sub(r"^\d{10,}\s*", "", name_cell).strip()
+        if not title:
+            continue
+        dates = _ppi_dates(date_cell)
+        published = dates[0] if dates else ""
+        deadline = dates[1] if len(dates) > 1 else ""
+        # 現在公告中のみ（開札予定日が未到来）。日付不明はキープ。
+        if deadline and deadline < today:
+            continue
+        cat = "プロポーザル" if re.search(r"プロポ|企画提案|企画競争|公募型", title + method_cell) else "入札"
+        kind = "物品" if "物品" in method_cell else ("役務" if "役務" in method_cell else "物品・役務")
+        slug = hashlib.md5(("SHIGA_EBID" + (order_num or title)).encode("utf-8")).hexdigest()[:12]
+        results.append({
+            "title":           title,
+            "category":        cat,
+            "organization":    f"滋賀県（{org}）" if org and org != "滋賀県" else "滋賀県",
+            "prefecture":      "滋賀県",
+            "published_at":    published,
+            "deadline":        deadline,
+            "result_date":     "",
+            "result_url":      "",
+            "project_code":    f"SHIGA_EBID-{order_num or slug}",
+            "awardee":         "",
+            "url":             f"{_SHIGA_EPS_HOST}/25000/eps/public/pubGroupTop.do#{slug}",
+            "source":          "SHIGA_EBID",
+            "amount":          "",
+            "source_category": kind,
+            "summary":         "",
+            "detail":          "",
+            "tags":            ",".join(generate_tags(title, org)),
+        })
+    logger.info(f"滋賀県 物品役務(電子調達): {len(results)}件取得")
+    return results
+
+
+async def scrape_shiga_ebid() -> List[Dict]:
+    """滋賀県 物品・役務電子調達システムの現在公告中の入札を取得する。"""
+    try:
+        return await asyncio.to_thread(_scrape_shiga_ebid_sync)
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"滋賀県物品役務電子調達スクレイパー例外: {e}")
+        return []
+
+
+# ---------------------------------------------------------------------------
+# 島根県 電子調達共同利用システム 入札情報サービス（NEC OME PPI /SMN/PPI_P/）
+#   京都・香川と同系統（efftis旧JSP / NEC OME PPI）。共通ヘルパを再利用する。
+#   入口 choutatsuweb.pref.shimane.lg.jp/portal/ppi → /SMN/PPI_P/ フレームセット。
+#   京都型フロー: GET入口→PiCtBaFi02Start.do(start)→conditionform harvest→
+#   発注機関=島根県(ORGCD先頭)・供給種別(工事/業務/物品)上書き+omeMaxDisplayRowCount
+#   でPiCtBaFi02GetList.do(findList)。一覧列: [No,発注課,案件番号,案件名,場所,工種,
+#   入札方式,開札予定日,詳細]。開札予定日>=今日（開札前）を現在公告中として採用。
+#   ※日付は「令和 08年06月30日」形式（令和と数字の間に空白）→空白許容パーサで解く。
+# ---------------------------------------------------------------------------
+_SHIMANE_PPI_ROOT = "https://choutatsuweb.pref.shimane.lg.jp/SMN/PPI_P/"
+
+
+def _shimane_wareki(s: str) -> str:
+    """令和/西暦（空白混じり可）の日付をISO化。例『令和 08年06月30日』。"""
+    m = re.search(r"令和\s*(\d+)\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日", s or "")
+    if m:
+        return f"{2018 + int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+    m = re.search(r"(\d{4})\s*[年/]\s*(\d{1,2})\s*[月/]\s*(\d{1,2})", s or "")
+    if m:
+        return f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+    return ""
+
+
+def _scrape_shimane_ebid_sync() -> List[Dict]:
+    import hashlib
+    import urllib.request
+    import urllib.parse
+    from datetime import date
+
+    ROOT = _SHIMANE_PPI_ROOT
+    today = date.today().isoformat()
+    op, _jar = _efftis_ppi_opener()
+
+    def get(u):
+        return _ppi_decode(op.open(u, timeout=60).read())
+
+    def post(u, pairs):
+        data = urllib.parse.urlencode(pairs, encoding="utf-8").encode()
+        return _ppi_decode(op.open(urllib.request.Request(u, data=data), timeout=90).read())
+
+    results: List[Dict] = []
+    try:
+        get(ROOT)  # フレームセットでセッションCookie確立
+        get(ROOT + "pages/PPI_P/PiCtBaFi02/PiCtBaFi02start.vm")
+        form = post(ROOT + "PiCtBaFi02Start.do", [
+            ("omeProcessName", "start"),
+            ("omeParameterGroupID", "jp.co.nec.ome.egov.ppi.pi.ct.ba.fi.PiCtBaFi02E01.Start"),
+        ])
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"島根県電子入札セッション確立失敗: {e}")
+        return results
+    if _ppi_is_top(form):
+        logger.info("島根県電子入札: 運用時間外/リダイレクト（0件）")
+        return results
+
+    base = _ppi_harvest(form, "conditionform")
+    org_shimane = (base.get("pPI_ORGCDvalues", "").split("|") or [""])[0]  # 先頭=島根県
+    sply_codes = [s for s in base.get("pPI_SPLYCDvalues", "").split("|") if s]  # 工事/業務/物品
+    if not sply_codes:
+        sply_codes = [""]
+
+    for sply in sply_codes:
+        d = dict(base)
+        d["omeProcessName"] = "findList"
+        d["r1"] = "v2"                       # v2=入札公告
+        d["pPI_ORGCD"] = org_shimane         # 島根県のみ（市町村を除外）
+        d["pPI_SPLYCD"] = sply
+        d["omeMaxDisplayRowCount"] = "2000"
+        try:
+            lst = post(ROOT + "PiCtBaFi02GetList.do", list(d.items()))
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"島根県電子入札検索失敗（sply={sply}）: {e}")
+            continue
+        if _ppi_is_top(lst):
+            continue
+        for cells in _ppi_rows(lst):
+            if len(cells) < 8:
+                continue
+            title = cells[3].strip()
+            if not title:
+                continue
+            org = cells[1].strip() or "島根県"
+            gyoshu = cells[5].strip()
+            method = cells[6].strip()
+            deadline = _shimane_wareki(cells[7])  # 開札予定日
+            # 現在公告中のみ（開札予定日が未到来）。日付不明はキープ。
+            if deadline and deadline < today:
+                continue
+            cat = "プロポーザル" if re.search(r"プロポ|企画提案|企画競争|公募型", title + method) else "入札"
+            slug = hashlib.md5(("SHIMANE_EBID" + (cells[2] or title)).encode("utf-8")).hexdigest()[:12]
+            results.append({
+                "title":           title,
+                "category":        cat,
+                "organization":    f"島根県（{org}）" if org and org != "島根県" else "島根県",
+                "prefecture":      "島根県",
+                "published_at":    "",
+                "deadline":        deadline,
+                "result_date":     "",
+                "result_url":      "",
+                "project_code":    f"SHIMANE_EBID-{cells[2] or slug}",
+                "awardee":         "",
+                "url":             f"{ROOT}#{slug}",
+                "source":          "SHIMANE_EBID",
+                "amount":          "",
+                "source_category": gyoshu,
+                "summary":         "",
+                "detail":          "",
+                "tags":            ",".join(generate_tags(title, org)),
+            })
+    logger.info(f"島根県 電子入札(PPI): {len(results)}件取得")
+    return results
+
+
+async def scrape_shimane_ebid() -> List[Dict]:
+    """島根県 電子調達共同利用システム 入札情報サービスの現在公告中の入札を取得する。"""
+    try:
+        return await asyncio.to_thread(_scrape_shimane_ebid_sync)
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"島根県電子入札スクレイパー例外: {e}")
+        return []
+
+
 def fetch_shizuoka_detail(url: str) -> Optional[Dict]:
     """静岡県 入札・公募 個別記事ページの本文を取得する（更新日を公示日として抽出）。"""
     import urllib.request
@@ -8712,6 +8973,8 @@ async def run_all_scrapers(portal_date_from: str = "", jogmec_max_id: int = 0) -
         scrape_miyagi(),
         scrape_kyoto_ebid(),
         scrape_kagawa_ebid(),
+        scrape_shiga_ebid(),
+        scrape_shimane_ebid(),
     ]
 
     scraped = await asyncio.gather(*tasks, return_exceptions=True)
