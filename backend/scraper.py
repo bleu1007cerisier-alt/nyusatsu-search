@@ -7003,6 +7003,10 @@ def _scrape_supercals_ppi(cfg: Dict) -> List[Dict]:
 
             raw_title = dtitle if (title_from == "detail" and dtitle) else list_title
             title = _SUPERCALS_TITLE_PREFIX.sub("", re.sub(r"\s*※\s*添付有\s*$", "", raw_title)).strip()
+            # 一部県(栃木)は一覧の案件名セル先頭に案件番号(例 208-157009 )が付く→cfgで除去
+            _ts = cfg.get("title_strip")
+            if _ts:
+                title = re.sub(_ts, "", title).strip()
             if not title:
                 continue
             slug = hashlib.md5((title + (published or idx)).encode("utf-8")).hexdigest()[:12]
@@ -7121,6 +7125,30 @@ async def scrape_niigata_cals() -> List[Dict]:
         return await asyncio.to_thread(_scrape_supercals_ppi, _NIIGATA_CALS_CFG)
     except Exception as e:  # noqa: BLE001
         logger.error(f"新潟県建設スクレイパー例外: {e}")
+        return []
+
+
+# 栃木県 建設工事・測量コンサル（とちぎ電子入札 SuperCALS・ep-bis.supercals.jp）。
+# 県本体 KikanNO=0900000。一覧は1日付列(col1=入札予定日)のみ・案件名(col2)先頭に案件番号
+# (例 208-157009 )が付く→title_strip で除去。BidStDate/BidEnDateは入札予定日を絞る(鹿児島型)
+# ため bid_end_days_ahead で未来へ延ばし、open_deadline_col=1 で入札予定日>=今日を現在公告中に。
+_TOCHIGI_CALS_CFG = {
+    "ej": "https://www.ep-bis.supercals.jp/ebidPPIPublish/EjPPIj",
+    "kikan": "0900000",
+    "pref": "栃木県", "source": "TOCHIGI_EBID",
+    "choutatsu": [("00", "工事"), ("01", "測量・コンサル")],
+    "window_days": 7, "bid_end_days_ahead": 150, "max_detail": 0,
+    "title_col": 2, "title_strip": r"^\d{2,4}-\d{5,7}\s*",
+    "list_deadline_col": 1, "open_deadline_col": 1, "open_only": True,
+}
+
+
+async def scrape_tochigi_cals() -> List[Dict]:
+    """栃木県 建設工事・測量コンサル（とちぎ電子入札 SuperCALS）の現在公告中を取得する。"""
+    try:
+        return await asyncio.to_thread(_scrape_supercals_ppi, _TOCHIGI_CALS_CFG)
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"栃木県建設スクレイパー例外: {e}")
         return []
 
 
@@ -9282,6 +9310,7 @@ async def run_all_scrapers(portal_date_from: str = "", jogmec_max_id: int = 0) -
         scrape_shimane_ebid(),
         scrape_yamagata_ebid(),
         scrape_oita_ebid(),
+        scrape_tochigi_cals(),
     ]
 
     scraped = await asyncio.gather(*tasks, return_exceptions=True)
