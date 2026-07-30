@@ -1,13 +1,14 @@
 {
   "runs": [
     {
-      "at": "2026-07-29T14:47:17+00:00",
-      "scraped": 9951,
-      "new": 105,
-      "updated": 9846,
-      "total": 22551,
+      "at": "2026-07-30T14:23:51+00:00",
+      "scraped": 10753,
+      "new": 719,
+      "updated": 10034,
+      "total": 23552,
       "portal_retry": 0,
       "repaired": 0,
+<<<<<<< Updated upstream
       "ai_calls": 31,
       "ai_input_tokens": 4744,
       "ai_output_tokens": 802,
@@ -30,3 +31,14 @@
   "cumulative_cost_usd_recent": 2.5639,
   "cumulative_cost_usd_alltime": 2.5639
 }
+=======
+      "ai_calls": 30,
+      "ai_input_tokens": 4562,
+      "ai_output_tokens": 772,
+      "ai_cost_usd": 0.0084
+    }
+  ],
+  "cumulative_cost_usd_recent": 0.0084,
+  "cumulative_cost_usd_alltime": 0.0084
+}
+>>>>>>> Stashed changes
