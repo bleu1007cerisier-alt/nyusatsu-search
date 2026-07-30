@@ -72,9 +72,15 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git stash
+          # 再生成された統計ファイルはコピーで退避 → 作業ツリーをHEADに戻す → クリーンにpull
+          # → 退避版で上書き。これにより stash pop 衝突でコンフリクトマーカーが混入する事故
+          #   （過去にmonitor_counts/dev画面を壊した）を構造的に排除する。
+          cp dataset/update_log.json "$RUNNER_TEMP/ul.json"
+          cp dataset/source_counts.json "$RUNNER_TEMP/sc.json"
+          git checkout -- dataset/update_log.json dataset/source_counts.json 2>/dev/null || true
           git pull --rebase origin main
-          git stash pop || true
+          cp "$RUNNER_TEMP/ul.json" dataset/update_log.json
+          cp "$RUNNER_TEMP/sc.json" dataset/source_counts.json
           # tenders.csv は add しない（＝コミットされない）。R2へ保存済みなので不要。
           git add dataset/update_log.json dataset/source_counts.json
           if git diff --staged --quiet; then

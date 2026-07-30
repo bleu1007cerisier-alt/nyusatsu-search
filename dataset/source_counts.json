@@ -4,23 +4,6 @@
   "JST": 14,
   "PORTAL": 6318,
   "JOGMEC": 92,
-<<<<<<< Updated upstream
-  "AICHI": 1080,
-  "TOKYO": 176,
-  "OSAKA": 2175,
-  "FUKUOKA": 227,
-  "MIE": 806,
-  "GIFU": 691,
-  "YAMANASHI": 210,
-  "TOYAMA": 389,
-  "NAGANO": 659,
-  "SHIZUOKA": 307,
-  "FUKUI": 265,
-  "NIIGATA": 353,
-  "ISHIKAWA": 1046,
-  "TOCHIGI": 106,
-  "CHIBA": 909,
-=======
   "AICHI": 1081,
   "TOKYO": 176,
   "OSAKA": 2175,
@@ -36,7 +19,6 @@
   "ISHIKAWA": 1079,
   "TOCHIGI": 106,
   "CHIBA": 910,
->>>>>>> Stashed changes
   "KYOTO": 44,
   "HYOGO": 136,
   "SHIGA": 70,
@@ -58,15 +40,9 @@
   "TOTTORI": 104,
   "GUNMA": 162,
   "SAITAMA": 21,
-<<<<<<< Updated upstream
-  "MIYAZAKI": 252,
-  "IWATE": 81,
-  "KAGOSHIMA": 469,
-=======
   "MIYAZAKI": 297,
   "IWATE": 82,
   "KAGOSHIMA": 495,
->>>>>>> Stashed changes
   "KAGAWA": 54,
   "AOMORI": 438,
   "YAMAGATA": 91,
@@ -78,9 +54,5 @@
   "KYOTO_EBID": 49,
   "KAGAWA_EBID": 186
  },
-<<<<<<< Updated upstream
- "total": 22590
-=======
  "total": 22844
->>>>>>> Stashed changes
 }

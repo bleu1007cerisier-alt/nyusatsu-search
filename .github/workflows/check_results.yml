@@ -53,9 +53,12 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git stash
+          # 再生成ログはコピー退避→HEADに戻す→クリーンpull→退避版で上書き。
+          # stash pop 衝突によるコンフリクトマーカー混入を構造的に排除する。
+          cp dataset/check_results_log.json "$RUNNER_TEMP/crl.json" 2>/dev/null || true
+          git checkout -- dataset/check_results_log.json 2>/dev/null || true
           git pull --rebase origin main
-          git stash pop || true
+          cp "$RUNNER_TEMP/crl.json" dataset/check_results_log.json 2>/dev/null || true
           git add dataset/check_results_log.json
           if git diff --staged --quiet; then
             echo "更新なし"
