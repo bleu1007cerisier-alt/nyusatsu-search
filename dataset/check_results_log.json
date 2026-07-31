@@ -77,6 +77,12 @@
       "checked": 50,
       "updated": 33,
       "expired": 24
+    },
+    {
+      "at": "2026-07-31T11:13:46+00:00",
+      "checked": 50,
+      "updated": 60,
+      "expired": 39
     }
   ]
 }
