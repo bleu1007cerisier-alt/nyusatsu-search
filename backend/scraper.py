@@ -50,12 +50,18 @@ def _decode(raw: bytes, content_type: str = "") -> str:
         return raw.decode("utf-8", "replace")
 
 
-async def fetch_bytes(session: aiohttp.ClientSession, url: str, retries: int = 3):
-    """URLを取得して (本文バイト列, Content-Type) を返す。失敗時はリトライ、最終的に (b"", "")。"""
+async def fetch_bytes(session: aiohttp.ClientSession, url: str, retries: int = 3,
+                      headers: dict = None, timeout: int = 30):
+    """URLを取得して (本文バイト列, Content-Type) を返す。失敗時はリトライ、最終的に (b"", "")。
+
+    headers: 省略時は共通HEADERS。bot対策の厳しいサイト（調達ポータル等）には
+             実ブラウザ相当のヘッダを渡す。timeout: 総タイムアウト秒。
+    """
+    hdrs = headers or HEADERS
     for attempt in range(retries):
         try:
             await asyncio.sleep(0.7)  # サーバー負荷対策
-            async with session.get(url, headers=HEADERS, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+            async with session.get(url, headers=hdrs, timeout=aiohttp.ClientTimeout(total=timeout)) as resp:
                 resp.raise_for_status()
                 raw = await resp.read()
                 return raw, resp.headers.get("Content-Type", "")
@@ -63,7 +69,7 @@ async def fetch_bytes(session: aiohttp.ClientSession, url: str, retries: int = 3
             if attempt < retries - 1:
                 await asyncio.sleep(1.5 * (attempt + 1))
                 continue
-            logger.error(f"取得失敗 {url}: {e}")
+            logger.error(f"取得失敗 {url}: {type(e).__name__} {e}")
             return b"", ""
 
 
@@ -799,6 +805,23 @@ PORTAL_FORM   = PORTAL_BASE + "/pps-web-biz/UAA01/OAA0101"
 PORTAL_SEARCH = PORTAL_BASE + "/pps-web-biz/UAA01/OAA0100"
 PORTAL_DETAIL = PORTAL_BASE + "/pps-web-biz/UAA01/OAA0104"
 
+# 調達ポータルは bot 名の User-Agent + データセンターIP を WAF が弾き、
+# GitHub Actions から接続がタイムアウトしていた（2026-07-28以降・新着が数日間ゼロ）。
+# 実ブラウザ相当のヘッダを与えて突破する。他スクレイパーには影響させない。
+PORTAL_HEADERS = {
+    "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                   "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"),
+    "Accept": ("text/html,application/xhtml+xml,application/xml;q=0.9,"
+               "image/avif,image/webp,image/apng,*/*;q=0.8"),
+    "Accept-Language": "ja,en-US;q=0.9,en;q=0.8",
+    "Upgrade-Insecure-Requests": "1",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "same-origin",
+    "Sec-Fetch-User": "?1",
+    "Connection": "keep-alive",
+}
+
 # 調達種別 → category/tags のマッピング
 _PORTAL_TYPE_MAP = {
     "公募型プロポーザル": "プロポーザル",
@@ -845,7 +868,7 @@ def _portal_item_id_from_url(url: str) -> str:
 
 async def _portal_get_form_data(session: aiohttp.ClientSession) -> dict:
     """フォームページを GET してセッション確立 + フォームデータ（CSRF含む）を返す。"""
-    raw, ct = await fetch_bytes(session, PORTAL_FORM)
+    raw, ct = await fetch_bytes(session, PORTAL_FORM, headers=PORTAL_HEADERS, timeout=60)
     soup = BeautifulSoup(_decode(raw, ct), "html.parser")
     form = soup.find("form", {"id": "tri_WAA0101FM01"})
     if not form:
@@ -938,13 +961,15 @@ async def scrape_portal(date_from: str = "", date_to: str = "") -> List[Dict]:
         if date_to:
             form_data["searchConditionBean.publicStartDateTo"] = date_to
         form_data["OAA0102"] = "検索"
-        ph = {**HEADERS, "Referer": PORTAL_FORM,
+        ph = {**PORTAL_HEADERS, "Referer": PORTAL_FORM,
+              "Origin": PORTAL_BASE,
               "Content-Type": "application/x-www-form-urlencoded"}
 
         # 初回 POST で検索実行
         await asyncio.sleep(0.7)
         async with session.post(PORTAL_SEARCH, data=form_data, headers=ph,
-                                allow_redirects=True) as resp:
+                                allow_redirects=True,
+                                timeout=aiohttp.ClientTimeout(total=60)) as resp:
             page_html = await resp.text(encoding="utf-8", errors="replace")
             result_url_base = str(resp.url)
 
@@ -959,7 +984,8 @@ async def scrape_portal(date_from: str = "", date_to: str = "") -> List[Dict]:
                 await asyncio.sleep(0.7)
                 async with session.get(
                     result_url_base.split("?")[0] + f"?page={page}&size=50",
-                    headers=HEADERS
+                    headers={**PORTAL_HEADERS, "Referer": result_url_base},
+                    timeout=aiohttp.ClientTimeout(total=60)
                 ) as resp2:
                     page_html = await resp2.text(encoding="utf-8", errors="replace")
 
