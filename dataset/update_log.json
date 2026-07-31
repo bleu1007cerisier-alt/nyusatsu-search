@@ -1,19 +1,19 @@
 {
   "runs": [
     {
-      "at": "2026-07-31T02:33:03+00:00",
-      "scraped": 10645,
-      "new": 184,
-      "updated": 10461,
-      "total": 23702,
+      "at": "2026-07-31T04:55:21+00:00",
+      "scraped": 10806,
+      "new": 382,
+      "updated": 10424,
+      "total": 23900,
       "portal_retry": 0,
       "repaired": 0,
-      "ai_calls": 386,
-      "ai_input_tokens": 1334041,
-      "ai_output_tokens": 259720,
-      "ai_cost_usd": 2.6326
+      "ai_calls": 404,
+      "ai_input_tokens": 1394883,
+      "ai_output_tokens": 272138,
+      "ai_cost_usd": 2.7556
     }
   ],
-  "cumulative_cost_usd_recent": 2.6326,
-  "cumulative_cost_usd_alltime": 2.6326
+  "cumulative_cost_usd_recent": 2.7556,
+  "cumulative_cost_usd_alltime": 2.7556
 }
