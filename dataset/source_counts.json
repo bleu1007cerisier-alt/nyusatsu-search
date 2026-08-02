@@ -40,7 +40,7 @@
   "TOTTORI": 106,
   "GUNMA": 163,
   "SAITAMA": 23,
-  "MIYAZAKI": 289,
+  "MIYAZAKI": 288,
   "IWATE": 86,
   "KAGOSHIMA": 512,
   "KAGAWA": 60,
@@ -58,5 +58,5 @@
   "TOCHIGI_EBID": 180,
   "KANAGAWA": 267
  },
- "total": 24573
+ "total": 24572
 }
