@@ -23,7 +23,7 @@
   "HYOGO": 137,
   "SHIGA": 75,
   "WAKAYAMA": 255,
-  "HIROSHIMA": 240,
+  "HIROSHIMA": 241,
   "OKAYAMA": 261,
   "EHIME": 280,
   "KOCHI": 100,
@@ -40,7 +40,7 @@
   "TOTTORI": 106,
   "GUNMA": 163,
   "SAITAMA": 23,
-  "MIYAZAKI": 298,
+  "MIYAZAKI": 289,
   "IWATE": 86,
   "KAGOSHIMA": 512,
   "KAGAWA": 60,
@@ -58,5 +58,5 @@
   "TOCHIGI_EBID": 180,
   "KANAGAWA": 267
  },
- "total": 24581
+ "total": 24573
 }
