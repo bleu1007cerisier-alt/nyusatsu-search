@@ -144,22 +144,33 @@ def build(cfg, items):
         parts = ["区分: 公募型プロポーザル"]
         if deadline:
             parts.append("提出期限: " + deadline)
-        summary = " ／ ".join(parts)
+        thin = " ／ ".join(parts)  # 本文が取れない場合のフォールバック要約
         sched = []
         if pub:
             sched.append({"date": pub, "label": "公告日"})
         if deadline:
             sched.append({"date": deadline, "label": "提出期限"})
-        tags = generate_tags(it["title"], summary, summary)
+        # ★本文(art)が取れたら detail に入れ summary は空にする。build_dataset の
+        #   AI要約ループが「summary空 かつ detail>=100字 かつ 非入札」を拾って正規要約を
+        #   付ける。従来は薄い"区分:..."をsummaryに入れていたため非空扱いでAIが素通り→
+        #   公募概要が薄いまま固定されていた。budget_checked=1 で build_dataset 側の
+        #   誤パーサ(else→fetch_nedo_detail)による本文上書き/再取得を防ぐ。
+        art_clean = (art or "").strip()
+        tag_src = art_clean[:3000] or thin
+        if len(art_clean) >= 120:
+            summary_val, detail_val = "", art_clean[:6000]
+        else:
+            summary_val, detail_val = thin, thin  # 本文取れず→最低限の区分/締切（空よりマシ）
+        tags = generate_tags(it["title"], tag_src, tag_src)
         for pat, tag in _ORG:
             if tag not in tags and pat.search(org):
                 tags.append(tag)
         recs.append({
             "title": it["title"], "category": "プロポーザル", "organization": org, "prefecture": cfg["pref"],
             "published_at": pub, "deadline": deadline, "close_date": "", "result_date": "",
-            "project_code": "", "awardee": "", "awardee_checked": "", "amount": "", "budget_checked": "",
+            "project_code": "", "awardee": "", "awardee_checked": "", "amount": "", "budget_checked": "1",
             "url": it["url"], "result_url": "", "source_category": "",
-            "summary": summary, "detail": summary, "schedule": json.dumps(sched, ensure_ascii=False),
+            "summary": summary_val, "detail": detail_val, "schedule": json.dumps(sched, ensure_ascii=False),
             "attachments": "", "attachments_checked": "", "tags": ",".join(tags), "source": cfg["_source"],
         })
     return recs
