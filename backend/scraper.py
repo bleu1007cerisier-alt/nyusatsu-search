@@ -22,8 +22,14 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# bot名を名乗るUAは go.jp 系のWAF（調達ポータル・NEDO・JST等）が
+# データセンターIP(GitHub Actions)からのアクセスを弾き、接続タイムアウトを起こす。
+# 実ブラウザ相当のUAに統一する（scraping上も安全側）。個別サイトで
+# さらに厳しい場合は PORTAL_HEADERS（Accept/Sec-Fetch付き）を使う。
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (compatible; NyusatsuSearch/1.0; +https://nyusatsu-search.onrender.com/)"
+    "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                   "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"),
+    "Accept-Language": "ja,en-US;q=0.9,en;q=0.8",
 }
 
 # 詳細ページを取得する最大件数（負荷・速度対策）
@@ -411,7 +417,8 @@ async def scrape_nedo() -> List[Dict]:
     async with aiohttp.ClientSession() as session:
         field_pages: Dict[str, str] = {}
         for ylist in NEDO_YEAR_LISTS:
-            raw, ct = await fetch_bytes(session, NEDO_BASE + ylist)
+            raw, ct = await fetch_bytes(session, NEDO_BASE + ylist,
+                                        headers=PORTAL_HEADERS, timeout=60)
             if not raw:
                 continue
             soup = BeautifulSoup(_decode(raw, ct), "html.parser")
@@ -421,7 +428,8 @@ async def scrape_nedo() -> List[Dict]:
         logger.info(f"NEDO: 分野ページ {len(field_pages)}件を巡回")
 
         for href, field_name in field_pages.items():
-            raw, ct = await fetch_bytes(session, NEDO_BASE + href)
+            raw, ct = await fetch_bytes(session, NEDO_BASE + href,
+                                        headers=PORTAL_HEADERS, timeout=60)
             if not raw:
                 continue
             soup = BeautifulSoup(_decode(raw, ct), "html.parser")
@@ -682,7 +690,8 @@ async def scrape_jst() -> List[Dict]:
     seen: set = set()
 
     async with aiohttp.ClientSession() as session:
-        raw, ct = await fetch_bytes(session, JST_BASE + JST_BOSYU)
+        raw, ct = await fetch_bytes(session, JST_BASE + JST_BOSYU,
+                                    headers=PORTAL_HEADERS, timeout=60)
         if not raw:
             logger.warning("JST: 一覧ページ取得失敗")
             return results
