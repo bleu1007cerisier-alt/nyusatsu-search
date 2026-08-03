@@ -101,9 +101,12 @@ def fetch():
             f = _formframe(pg)
             if not f:
                 continue
-            f.evaluate("""(a,z)=>{const s=document.querySelector('[name=date_start]');if(s)s.value=a;
+            # Playwright の Frame.evaluate は引数を1つしか取れない（2つ渡すと
+            # TypeError: takes 2 to 3 positional arguments but 4 were given）。
+            # 配列1つにまとめて分割代入する。
+            f.evaluate("""([a,z])=>{const s=document.querySelector('[name=date_start]');if(s)s.value=a;
               const e=document.querySelector('[name=date_end]');if(e)e.value=z;
-              const p=document.querySelector('select[name=A300]');if(p){const o=[...p.options].find(o=>o.text.trim()=='100');if(o)p.value=o.value;}}""", NENDO_START, NENDO_END)
+              const p=document.querySelector('select[name=A300]');if(p){const o=[...p.options].find(o=>o.text.trim()=='100');if(o)p.value=o.value;}}""", [NENDO_START, NENDO_END])
             f.evaluate("doSearch1()")
             pg.wait_for_timeout(4500)
             rows, seen = [], set()
