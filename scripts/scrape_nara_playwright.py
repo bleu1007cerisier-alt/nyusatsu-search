@@ -36,7 +36,11 @@ def _fetch_tab(pg, consul):
     """検索フォームに到達し、（コンサルなら切替）年度を選び検索→CSVダウンロードのパスを返す。"""
     pg.goto(TOP, wait_until="networkidle", timeout=60000)
     pg.wait_for_timeout(2500)
-    pg.get_by_text("案件情報", exact=True).first.click()
+    # メニュー「案件情報」が描画されるまで明示的に待つ（GitHub IPからは描画が遅く、
+    # 即clickだと30秒でLocator.clickタイムアウト→0件になっていた）。
+    anken = pg.get_by_text("案件情報", exact=True).first
+    anken.wait_for(state="visible", timeout=45000)
+    anken.click()
     pg.wait_for_timeout(1200)
     pg.get_by_text("案件情報検索").first.click()
     pg.wait_for_selector("select", timeout=15000)
@@ -74,7 +78,11 @@ def fetch_csvs():
     paths = []
     with sync_playwright() as p:
         b = p.chromium.launch()
-        ctx = b.new_context(ignore_https_errors=True, accept_downloads=True)
+        # go.jp系のDENCHOはヘッドレス既定UAを嫌う可能性があるため実ブラウザ相当UA＋日本語ロケール。
+        ctx = b.new_context(
+            ignore_https_errors=True, accept_downloads=True, locale="ja-JP",
+            user_agent=("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                        "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"))
         pg = ctx.new_page()
         pg.on("dialog", lambda d: d.accept())
         for consul in (False, True):
