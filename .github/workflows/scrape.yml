@@ -57,6 +57,13 @@ jobs:
           RUN_AI_SUMMARY: ${{ (github.event_name != 'schedule' || github.event.schedule == '17 21 * * *') && 'true' || 'false' }}
         run: python scripts/build_dataset.py
 
+      - name: 公募ハブの収集（青森・宮崎・茨城・鹿児島・石川の企画提案/公募）
+        # build_dataset の run_all_scrapers に含まれない専用スクレイパー。
+        # 全庁横断の公募ハブを追記型で収集する（既存は消さず新URLのみ追加）。
+        # rows は summary/deadline/tags/category を自己完結で持つためAI不要。
+        # これを結線していなかったため、宮崎等の企画提案公募が数週間取り込まれていなかった。
+        run: python scripts/scrape_pref_propo.py --write
+
       - name: 件数の急減チェック（異常なら以降を中止しR2にもgitにも反映しない）
         run: python scripts/monitor_counts.py
 
