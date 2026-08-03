@@ -52,9 +52,11 @@ jobs:
           R2_DATA_BUCKET: ${{ secrets.R2_DATA_BUCKET }}
           # Anthropic API（公告テキストのAI要約用。未設定なら生テキストをそのまま格納）
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          # AI要約は1日1回に抑える（コスト削減）。朝の定期(21:17 UTC)と手動実行のみtrue、
-          # 夜の定期(09:17 UTC)はfalse＝スクレイプのみ・AI要約なし。
-          RUN_AI_SUMMARY: ${{ (github.event_name != 'schedule' || github.event.schedule == '17 21 * * *') && 'true' || 'false' }}
+          # AI要約は「朝の定期(21:17 UTC)」の1日1回だけ。
+          # ※以前は「手動実行(workflow_dispatch)もtrue」だったが、外部cron-job.orgが毎日
+          #   workflow_dispatchを叩くため朝cronと合わせAIが1日2回走り二重課金していた（日$5超）。
+          #   → schedule かつ 21:17 のときだけAI。夕cron・外部dispatch・手動は全てAIなし＝1日1回に是正。
+          RUN_AI_SUMMARY: ${{ github.event_name == 'schedule' && github.event.schedule == '17 21 * * *' && 'true' || 'false' }}
         run: python scripts/build_dataset.py
 
       - name: 公募ハブの収集（青森・宮崎・茨城・鹿児島・石川の企画提案/公募）
