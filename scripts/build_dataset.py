@@ -1146,15 +1146,29 @@ def main():
     # 「詳しい内容は公式ページを…」プレースホルダを解消（AIコスト0）。AI要約対象
     # （detail>=100字）は次回AI処理に委ねるため触らない。
     # 入札はAIを使わないので、本文が長くてもここでルール要約を付ける。
+    #
+    # ★going-forwardバグ修正: プロポ等(非入札)で「本文取得をまだ試みていない」
+    #   （budget_checked未=次回以降に本文が取れる見込み）案件には、ここで薄いルール
+    #   要約を付けない。付けるとsummaryが非空になり、次回本文が取れてもAI要約ループが
+    #   `if summary: continue`でスキップ→リッチな本文があるのに薄い要約(「・工種・業種」)
+    #   のまま固定される。空のまま残せば本文取得後にAIが正規の要約を付ける。
+    #   本文取得を試みた後(budget_checked=1)で本文<100字なら、それ以上良い材料は
+    #   無いのでルール要約を付ける（従来どおり）。
     _basic = 0
     for r in merged.values():
         if (r.get("summary") or "").strip():
             continue
-        if len((r.get("detail") or "").strip()) < 100 or r.get("category") == "入札":
-            s = basic_summary(r)
-            if s:
-                r["summary"] = s
-                _basic += 1
+        is_bid = r.get("category") == "入札"
+        short = len((r.get("detail") or "").strip()) < 100
+        if not (is_bid or short):
+            continue
+        if (not is_bid) and short and (r.get("budget_checked") or "") != "1":
+            # 非入札で本文が短く、かつ本文取得を未試行 → AIに委ねるため空のまま残す
+            continue
+        s = basic_summary(r)
+        if s:
+            r["summary"] = s
+            _basic += 1
     if _basic:
         print(f"基本サマリー付与（ルール要約）: {_basic}件")
 
