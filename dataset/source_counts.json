@@ -40,7 +40,7 @@
   "TOTTORI": 112,
   "GUNMA": 182,
   "SAITAMA": 24,
-  "MIYAZAKI": 408,
+  "MIYAZAKI": 403,
   "IWATE": 99,
   "KAGOSHIMA": 623,
   "KAGAWA": 74,
@@ -58,5 +58,5 @@
   "KANAGAWA": 228,
   "IBARAKI": 322
  },
- "total": 27612
+ "total": 27607
 }
