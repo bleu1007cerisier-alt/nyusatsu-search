@@ -38,9 +38,24 @@ NENDO_LABEL = "令和8"  # 現年度。年度替わりで更新すること。
 
 def _fetch_tab(pg, consul):
     """検索フォームに到達し、（コンサルなら切替）年度を選び検索→CSVダウンロードのパスを返す。"""
-    pg.goto(SEARCH, wait_until="networkidle", timeout=60000)
+    # 検索フォーム(PPJ0050)へ直接gotoすると headless では描画されない（TOPで
+    # セッション/アプリシェルを確立しないとSPAが空になる）。先にTOPを踏んでから
+    # 検索フォームへ遷移する。networkidleはSPAのポーリングで発火しないことがあるため
+    # domcontentloaded＋明示waitにする。
+    pg.goto(TOP, wait_until="domcontentloaded", timeout=60000)
+    pg.wait_for_timeout(2500)
+    pg.goto(SEARCH, wait_until="domcontentloaded", timeout=60000)
     # 年度セレクト(searchJyokenNendo)が描画されるまで待つ＝検索フォーム到達の判定。
-    pg.wait_for_selector("select[name=searchJyokenNendo]", timeout=30000)
+    try:
+        pg.wait_for_selector("select[name=searchJyokenNendo]", timeout=45000)
+    except Exception:
+        # headlessで何が表示されているか診断ログを残す（次回修正の材料）。
+        try:
+            print("NARA診断 url=%s title=%r body=%r" % (
+                pg.url, pg.title(), (pg.inner_text("body")[:200] if pg.query_selector("body") else "")))
+        except Exception:
+            pass
+        raise
     pg.wait_for_timeout(1500)
     if consul:
         pg.get_by_text("コンサル", exact=True).first.click()
