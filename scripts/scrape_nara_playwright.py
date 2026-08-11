@@ -37,25 +37,25 @@ NENDO_LABEL = "令和8"  # 現年度。年度替わりで更新すること。
 
 
 def _fetch_tab(pg, consul):
-    """検索フォームに到達し、（コンサルなら切替）年度を選び検索→CSVダウンロードのパスを返す。"""
-    # 検索フォーム(PPJ0050)へ直接gotoすると headless では描画されない（TOPで
-    # セッション/アプリシェルを確立しないとSPAが空になる）。先にTOPを踏んでから
-    # 検索フォームへ遷移する。networkidleはSPAのポーリングで発火しないことがあるため
-    # domcontentloaded＋明示waitにする。
+    """検索フォームに到達し、（コンサルなら切替）年度を選び検索→CSVダウンロードのパスを返す。
+
+    ★2026-08 判明: 奈良DENCHOは GitHub Actions のデータセンターIPに対し **403 Forbidden**
+      を返すハードなIPブロックを導入した（~07-23以降・停止開始と一致）。日本の住宅IPからは
+      正常。session/UA/Playwright いずれでも回避不可で、コードでは直せない（大分EBIDと同種）。
+      解決には日本IPのegress（プロキシ/self-hostedランナー）が必要。ブロックが続く間は403を
+      即検知して早期スキップし、無駄な待機を避ける（既存データは[SKIP]で保持される）。
+    """
     pg.goto(TOP, wait_until="domcontentloaded", timeout=60000)
-    pg.wait_for_timeout(2500)
-    pg.goto(SEARCH, wait_until="domcontentloaded", timeout=60000)
-    # 年度セレクト(searchJyokenNendo)が描画されるまで待つ＝検索フォーム到達の判定。
+    pg.wait_for_timeout(1500)
+    # 403(IPブロック)なら即バイル。titleかbodyに 403/Forbidden が出る。
     try:
-        pg.wait_for_selector("select[name=searchJyokenNendo]", timeout=45000)
+        head = (pg.title() or "") + " " + (pg.inner_text("body")[:120] if pg.query_selector("body") else "")
     except Exception:
-        # headlessで何が表示されているか診断ログを残す（次回修正の材料）。
-        try:
-            print("NARA診断 url=%s title=%r body=%r" % (
-                pg.url, pg.title(), (pg.inner_text("body")[:200] if pg.query_selector("body") else "")))
-        except Exception:
-            pass
-        raise
+        head = ""
+    if "403" in head or "Forbidden" in head:
+        raise RuntimeError("奈良DENCHOがGitHub IPを403ブロック中（要 日本IP egress）: %r" % head[:80])
+    pg.goto(SEARCH, wait_until="domcontentloaded", timeout=60000)
+    pg.wait_for_selector("select[name=searchJyokenNendo]", timeout=45000)
     pg.wait_for_timeout(1500)
     if consul:
         pg.get_by_text("コンサル", exact=True).first.click()
