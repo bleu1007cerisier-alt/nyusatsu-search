@@ -1087,18 +1087,28 @@ def main():
 
     # 【増分】detailはあるがsummaryが空の案件をAI抽出する。
     # needs_fetch()を通らない既存案件（budget_checked=1済み）もここでカバーする。
+    # ★1回の上限(MAX_AI_SUMMARY_PER_RUN)を、ユーザーが実際に見る案件に優先配分する：
+    #   ①募集中(締切前/締切なし)を締切切れより優先 ②同順位内は新着(first_seen)が新しい順。
+    #   辞書順のままだと締切切れの古い案件に枠を食われ、募集中の新規公募の要約が数日空のまま
+    #   残る（＝「県によってイマイチ」の一因）ため、配分順を最適化する（AIコストは不変）。
     summarized_count = 0
     if _RUN_AI and (os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("CLAUDE_API_KEY")):
-        for r in merged.values():
+        _today_iso = date.today().isoformat()
+
+        def _ai_open(r):
+            dl = (r.get("deadline") or "").strip()
+            return (not dl) or (dl >= _today_iso)  # 締切なし=継続中/締切前=募集中
+
+        _cands = [r for r in merged.values()
+                  if not (r.get("summary") or "").strip()
+                  and r.get("category") != "入札"
+                  and len((r.get("detail") or "").strip()) >= 100]
+        _cands.sort(key=lambda r: (r.get("first_seen") or ""), reverse=True)  # 新着優先
+        _cands.sort(key=lambda r: 0 if _ai_open(r) else 1)  # 安定ソート＝募集中優先(新着順を保持)
+        for r in _cands:
             if summarized_count >= MAX_AI_SUMMARY_PER_RUN:
                 break
-            if (r.get("summary") or "").strip():
-                continue
-            if r.get("category") == "入札":   # 入札はAIを使わずルール要約に回す
-                continue
             det = (r.get("detail") or "").strip()
-            if len(det) < 100:
-                continue
             extracted = _ai_extract(det, r.get("title", ""))
             if extracted.get("bullets"):
                 r["summary"] = _bullets_to_summary(extracted["bullets"])
