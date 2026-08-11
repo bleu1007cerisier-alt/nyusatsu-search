@@ -77,6 +77,48 @@ def _get(u):
     return b.decode("utf-8", "replace")
 
 
+# 本文開始マーカー（この位置以降を本文とみなし、前のヘッダ/ナビを捨てる）
+_BODY_START = ("ここから本文です", 'id="tmp_contents"', 'id="voice_area"',
+               '<main', 'id="contents"', 'id="main_area"')
+# フッタ開始マーカー（この位置以降を捨てる。問い合わせ/アンケート/フッタ等）
+_BODY_END = ("このページに関するお問い合わせ", "お問い合わせ先", "より良いホームページ",
+             "このページの情報は役に立ち", "アンケート", "ページの先頭へ", "本文ここまで",
+             'id="tmp_pankuzu', 'id="footer', "<footer", "Copyright", "All Rights Reserved",
+             "サイトマップ", "関連リンク", "このページを見た人はこんなページも")
+
+
+def _clean_article(html):
+    """生ページHTMLから本文だけを抽出してテキスト化する。
+    SITE PUBLIS等の自治体CMSはヘッダ/ナビ/フッタが本文と一緒に取れてしまい、AI要約の
+    ノイズになる。本文開始マーカー以降〜フッタマーカー手前を採り、script/styleを除去する。
+    マーカーが無いCMSは全体にフォールバック（従来同等）。"""
+    h = html or ""
+    h = re.sub(r"(?is)<(script|style|noscript)[^>]*>.*?</\1>", " ", h)  # JS/CSS塊を除去
+    for st in _BODY_START:
+        i = h.find(st)
+        if i >= 0:
+            h = h[i:]
+            break
+    for en in _BODY_END:
+        j = h.find(en)
+        if j > 300:  # 十分に本文がある位置でのみ切る（誤爆防止）
+            h = h[:j]
+            break
+    txt = re.sub(r"<[^>]+>", " ", h)
+    txt = txt.replace("&gt;", ">").replace("&lt;", "<").replace("&amp;", "&").replace("&nbsp;", " ")
+    txt = re.sub(r"[ \t　]+", " ", txt)
+    txt = re.sub(r"\s*\n\s*", " ", txt)
+    txt = re.sub(r"\s{2,}", " ", txt).strip()
+    # 先頭のパンくず（ホーム > 組織 > … > ）を落とす。先頭250字以内に > が連なる場合、
+    # 最後の > 以降を本文とみなす。別CMS(SITE PUBLISマーカー無し)のヘッダ対策。
+    head = txt[:250]
+    if head.count(">") >= 2 and ("ホーム" in head or "トップ" in head):
+        k = head.rfind(">")
+        if 0 <= k < 240:
+            txt = txt[k + 1:].strip()
+    return txt
+
+
 def _iso_any(s):
     m = re.search(r"令和\s*(\d+)\s*年\s*(\d+)\s*月\s*(\d+)\s*日", s)
     if m:
@@ -134,7 +176,7 @@ def build(cfg, items):
         if cutoff and (not it.get("hub_date") or it["hub_date"] < cutoff):
             continue
         try:
-            art = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", _get(it["url"])))
+            art = _clean_article(_get(it["url"]))  # 本文だけ抽出（ナビ/フッタ除去）
         except Exception:
             art = ""
         deadline = _labeled_date(art, ["企画提案書.{0,8}提出期限", "提出期限", "応募期限",
