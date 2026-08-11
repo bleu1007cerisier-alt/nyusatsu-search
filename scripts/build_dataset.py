@@ -46,6 +46,79 @@ def _strip_detail_boilerplate(s: str) -> str:
     return s.strip()
 
 
+# AI要約の入力ノイズ（ナビ/パンくず/フッタ定型）。県ごとにdetailの作りが違い、生ページの
+# ヘッダ・フッタが混入する27ソースがあるため、AIに渡す直前でテキスト段階の共通除去を行う。
+_AI_FOOTER_MARKERS = (
+    "このページに関するお問い合わせ", "この記事に関するお問い合わせ", "お問い合わせ先",
+    "このページの情報は役に立ち", "より良いホームページにするために", "アンケート",
+    "この情報は役に立ちましたか", "関連リンク", "関連情報", "このページを見た人はこんな",
+    "サイトマップ", "ページの先頭へ", "Copyright", "All Rights Reserved",
+    "無断転載を禁じます", "音声読み上げ")
+_AI_NAV_WORDS = ("音声読み上げ", "文字サイズの変更", "文字サイズ変更", "背景色の変更",
+                 "組織から探す", "組織でさがす", "よくある質問", "サイト内検索",
+                 "ナビゲーションをスキップ", "メニューをスキップ", "現在位置：", "現在位置 ：",
+                 "本文へジャンプ", "本文へスキップ", "ヘッダーをスキップ", "読み上げる",
+                 "ふりがなをつける", "ふりがな表示", "文字・音声サポート", "Foreign Language")
+# 頻出ヘッダーナビ塊（実本文に出にくい定型のみ）：文字サイズ/背景色の切替UIと言語切替リンク。
+_AI_NAV_CLUSTER = _re_summary.compile(
+    r"文字サイズ\s*(?:の変更)?\s*(?:小|標準|中|大|拡大|縮小|\s)*"
+    r"|背景色\s*(?:の変更)?\s*(?:白|黒|青|標準|\s)*"
+    r"|(?:English|中文(?:\(简体字\)|\(简化字\)|\(繁體字\)|簡体字|繁体字)?|한국어|ハングル)\s*")
+
+
+def _clean_for_ai(text: str) -> str:
+    """AI要約の入力用に、detailからナビ/パンくず/フッタ等の定型ノイズを除去する。
+    detail自体は変えず、_ai_extractに渡す直前のみクリーン化する（表示・タグ・過去分に不干渉）。
+    誤って本文を削り過ぎないよう、十分な本文が残る場合だけカットする。マーカーが無ければ素通り。"""
+    t = (text or "").strip()
+    if len(t) < 200:
+        return t  # 短文は生ページでないことが多く、触らない
+    orig = t
+    # 添付資料抜粋がある場合は公告本文部分だけを対象にクリーニングし、後で連結し直す
+    tail = ""
+    if "【添付資料抜粋】" in t:
+        t, tail = t.split("【添付資料抜粋】", 1)
+        tail = "【添付資料抜粋】" + tail
+    # SITE PUBLIS等: 本文開始/終了マーカーの内側を優先
+    if "ここから本文です" in t:
+        t = t.split("ここから本文です", 1)[1]
+    if "本文ここまで" in t:
+        t = t.split("本文ここまで", 1)[0]
+    # 「本文へ/ヘッダーをスキップ/メインコンテンツへ」等のスキップリンク以降を本文とみなす
+    # （先頭付近に限る＝本文中の語を誤検出しない）。CMSごとに文言が違うため複数対応。
+    for st in ("ヘッダーをスキップ", "メインコンテンツへ移動", "メインコンテンツへ",
+               "本文へスキップ", "本文へ移動", "コンテンツへ移動", "本文へ"):
+        i = t.find(st)
+        if 0 <= i < 400:
+            t = t[i + len(st):]
+            break
+    # 先頭パンくず（ホーム > A > B > … 本文）を落とす。区切り文字は > ＞ › » ＞ 等に対応。
+    head = t[:300]
+    seps = _re_summary.findall(r"[>＞›»▶]", head)
+    if len(seps) >= 2 and ("ホーム" in head or "トップ" in head or "現在位置" in head or "入札情報" in head):
+        k = max(head.rfind(c) for c in "＞>›»▶")
+        if 0 <= k < 290:
+            t = t[k + 1:]
+    # フッタ以降を落とす（十分に本文がある位置でのみ＝誤爆防止）
+    for en in _AI_FOOTER_MARKERS:
+        j = t.find(en)
+        if j > 250:
+            t = t[:j]
+            break
+    # ナビ定型語の単発除去
+    for nav in _AI_NAV_WORDS:
+        if nav in t:
+            t = t.replace(nav, " ")
+    # 頻出ヘッダーナビ塊（文字サイズ/背景色/言語切替/読み上げ等）を除去。実本文に出にくい語のみ。
+    t = _AI_NAV_CLUSTER.sub(" ", t)
+    t = _re_summary.sub(r"[ \t　]{2,}", " ", t).strip()
+    # 連結し直し、削り過ぎ（本文がほぼ消えた）なら元に戻す
+    result = (t + " " + tail).strip() if tail else t
+    if len(result.strip()) < 80:
+        return orig
+    return result
+
+
 def _clean_summary(s: str) -> str:
     """AI要約の後処理：見出し・電話番号・メール・空括弧を除去し整形する。"""
     if not s:
@@ -133,9 +206,12 @@ def _ai_extract(raw_text: str, title: str = "") -> dict:
     api_key = os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("CLAUDE_API_KEY")
     if not api_key or len(raw_text.strip()) < 80:
         return {}
+    # 全ソース一律の中央クリーニング：ナビ/パンくず/フッタ等の生ページノイズを除去してから
+    # AIに渡す（県ごとにdetailの作りが違う問題への横断対策・トークン減）。
+    clean_text = _clean_for_ai(raw_text)
     prompt = (
         _EXTRACT_PROMPT
-        + f"\n\nタイトル: {title}\n\nテキスト:\n{raw_text[:8000]}"
+        + f"\n\nタイトル: {title}\n\nテキスト:\n{clean_text[:8000]}"
     )
     try:
         import anthropic
