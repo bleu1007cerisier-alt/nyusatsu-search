@@ -64,9 +64,17 @@ def _fetch():
         for code, nm in CODES.items():
             pg.goto(MENU, wait_until="networkidle", timeout=60000)
             pg.wait_for_timeout(1600)
+            # 団体(神奈川県=0001)選択 → インフォメーション画面へ遷移
             pg.click(f'button[data-code="{DANTAI}"]')
             pg.wait_for_timeout(3000)
-            pg.evaluate(f"""()=>{{const a=document.querySelector('#{code} a'); if(a)a.click();}}""")
+            # サイト改修(2026-08頃)で工事/コンサル/物品メニューが #P5510 aリンク→
+            # 「入札公告」リンク(hidden selectJikkoUrl が P5510_10?... で始まる)に変更された。
+            # 各カテゴリの「入札公告」を選んで検索条件画面(Pxxxx_10/Condition)へ進む。
+            pg.evaluate(r"""(code)=>{
+              const links=[...document.querySelectorAll('a')].filter(a=>/入札公告/.test(a.innerText));
+              const t=links.find(a=>[...a.querySelectorAll('input')].some(i=>(i.value||'').indexOf(code)===0));
+              if(t)t.click();
+            }""", code)
             pg.wait_for_timeout(4500)
             pg.evaluate(r"""(nen)=>{const re=new RegExp(nen);
               const s=document.querySelector('select[name=keisaiNen]');
@@ -78,7 +86,7 @@ def _fetch():
             for _ in range(18):
                 pg.wait_for_timeout(1500)
                 if pg.evaluate("()=>document.querySelectorAll('tr').length") > 3 or \
-                   pg.evaluate("()=>/該当|0件/.test(document.body.innerText)"):
+                   pg.evaluate("()=>/該当|0件/.test((document.body&&document.body.innerText)||'')"):
                     break
             hdr = None
             rows = []

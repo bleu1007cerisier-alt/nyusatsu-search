@@ -28,23 +28,20 @@ _ORG = [(re.compile(p), t) for p, t in ORG_TAG_RULES]
 
 TENDERS = os.path.join(ROOT, "dataset", "tenders.csv")
 TOP = "https://ppi.ebid-kouji-gyoumu.pref.nara.jp/DENCHO/PPJ/PPJ0020_0010/"
+# 検索フォームの直URL。トップのナビ「案件情報→案件情報検索」はサイト改修で
+# headless環境からメニューが不可視になり遷移不能(45秒タイムアウト→0件)になったため、
+# 検索フォーム(PPJ0050_0010)へ直接遷移してメニュー操作を丸ごとバイパスする。
+SEARCH = "https://ppi.ebid-kouji-gyoumu.pref.nara.jp/DENCHO/PPJ/PPJ0050_0010/"
 BASE_URL = TOP  # 詳細はSPAでURL化できないため、案件キー付きのトップURLを合成キーに使う
 NENDO_LABEL = "令和8"  # 現年度。年度替わりで更新すること。
 
 
 def _fetch_tab(pg, consul):
     """検索フォームに到達し、（コンサルなら切替）年度を選び検索→CSVダウンロードのパスを返す。"""
-    pg.goto(TOP, wait_until="networkidle", timeout=60000)
-    pg.wait_for_timeout(2500)
-    # メニュー「案件情報」が描画されるまで明示的に待つ（GitHub IPからは描画が遅く、
-    # 即clickだと30秒でLocator.clickタイムアウト→0件になっていた）。
-    anken = pg.get_by_text("案件情報", exact=True).first
-    anken.wait_for(state="visible", timeout=45000)
-    anken.click()
-    pg.wait_for_timeout(1200)
-    pg.get_by_text("案件情報検索").first.click()
-    pg.wait_for_selector("select", timeout=15000)
-    pg.wait_for_timeout(2500)
+    pg.goto(SEARCH, wait_until="networkidle", timeout=60000)
+    # 年度セレクト(searchJyokenNendo)が描画されるまで待つ＝検索フォーム到達の判定。
+    pg.wait_for_selector("select[name=searchJyokenNendo]", timeout=30000)
+    pg.wait_for_timeout(1500)
     if consul:
         pg.get_by_text("コンサル", exact=True).first.click()
         pg.wait_for_timeout(2500)
