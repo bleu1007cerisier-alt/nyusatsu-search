@@ -117,7 +117,7 @@
         /(https?:\/\/[^\s<>"'（）「」【】]+)/g,
         '<a href="$1" target="_blank" rel="noopener" class="text-blue-600 hover:underline break-all">$1</a>');
     }
-    const SOURCE_LABEL = { 'PORTAL': '調達ポータル', 'NEDO': 'NEDO', 'JST': 'JST', 'JOGMEC': 'JOGMEC', 'AICHI': '愛知県', 'TOKYO': '東京都', 'OSAKA': '大阪府', 'FUKUOKA': '福岡県', 'MIE': '三重県', 'GIFU': '岐阜県', 'YAMANASHI': '山梨県', 'TOYAMA': '富山県', 'NAGANO': '長野県', 'SHIZUOKA': '静岡県', 'FUKUI': '福井県', 'NIIGATA': '新潟県', 'ISHIKAWA': '石川県', 'TOCHIGI': '栃木県', 'CHIBA': '千葉県', 'KYOTO': '京都府', 'HYOGO': '兵庫県', 'SHIGA': '滋賀県', 'WAKAYAMA': '和歌山県', 'HIROSHIMA': '広島県', 'OKAYAMA': '岡山県', 'EHIME': '愛媛県', 'KOCHI': '高知県', 'SAGA': '佐賀県', 'MIYAZAKI': '宮崎県', 'SHIMANE': '島根県', 'KUMAMOTO': '熊本県', 'HOKKAIDO': '北海道', 'TOKUSHIMA': '徳島県', 'NAGASAKI': '長崎県', 'OKINAWA': '沖縄県', 'OITA': '大分県', 'AKITA': '秋田県', 'FUKUSHIMA': '福島県', 'TOTTORI': '鳥取県', 'GUNMA': '群馬県', 'SAITAMA': '埼玉県', 'IWATE': '岩手県', 'KAGOSHIMA': '鹿児島県', 'KAGAWA': '香川県', 'AOMORI': '青森県', 'YAMAGATA': '山形県', 'YAMAGUCHI': '山口県', 'NARA': '奈良県', 'MIYAGI': '宮城県', 'KANAGAWA': '神奈川県', 'IBARAKI': '茨城県' };
+    const SOURCE_LABEL = { 'PORTAL': '調達ポータル', 'NEDO': 'NEDO', 'JST': 'JST', 'JOGMEC': 'JOGMEC', 'AICHI': '愛知県', 'TOKYO': '東京都', 'OSAKA': '大阪府', 'FUKUOKA': '福岡県', 'MIE': '三重県', 'GIFU': '岐阜県', 'YAMANASHI': '山梨県', 'TOYAMA': '富山県', 'NAGANO': '長野県', 'SHIZUOKA': '静岡県', 'FUKUI': '福井県', 'NIIGATA': '新潟県', 'ISHIKAWA': '石川県', 'TOCHIGI': '栃木県', 'CHIBA': '千葉県', 'KYOTO': '京都府', 'HYOGO': '兵庫県', 'SHIGA': '滋賀県', 'WAKAYAMA': '和歌山県', 'HIROSHIMA': '広島県', 'OKAYAMA': '岡山県', 'EHIME': '愛媛県', 'KOCHI': '高知県', 'SAGA': '佐賀県', 'MIYAZAKI': '宮崎県', 'SHIMANE': '島根県', 'KUMAMOTO': '熊本県', 'HOKKAIDO': '北海道', 'TOKUSHIMA': '徳島県', 'NAGASAKI': '長崎県', 'OKINAWA': '沖縄県', 'OITA': '大分県', 'AKITA': '秋田県', 'FUKUSHIMA': '福島県', 'TOTTORI': '鳥取県', 'GUNMA': '群馬県', 'SAITAMA': '埼玉県', 'IWATE': '岩手県', 'KAGOSHIMA': '鹿児島県', 'KAGAWA': '香川県', 'AOMORI': '青森県', 'YAMAGATA': '山形県', 'YAMAGUCHI': '山口県', 'NARA': '奈良県', 'MIYAGI': '宮城県', 'KANAGAWA': '神奈川県', 'IBARAKI': '茨城県', 'KYOTO_EBID': '京都府（電子入札）', 'KAGAWA_EBID': '香川県（電子入札）', 'SHIGA_EBID': '滋賀県（電子入札）', 'SHIMANE_EBID': '島根県（電子入札）', 'YAMAGATA_EBID': '山形県（電子入札）', 'TOCHIGI_EBID': '栃木県（電子入札）' };
     function srcLabel(s) { return SOURCE_LABEL[s] || s || ''; }
     function deadlineStatus(deadline) {
       if (!deadline) return { text: '未定', cls: 'text-gray-500', badge: '' };
@@ -271,7 +271,7 @@
       // ※政府調達ポータル(p-portal.go.jp)とMy TOKYO(my.metro.tokyo)は個別URLで正常に
       //   深リンクできる（＝除外。実機確認済み）。
       const origLink = document.getElementById('orig-link');
-      const isEbid = /ebidPPIG?Publish|EbController|GPPI_MENU|ebid-joho\.e-kanagawa|ebid-kouji-gyoumu|cals-ibaraki|efftis\.jp|pub\.pref\.aomori|buppin\.e-aichi/i.test(t.url || '');
+      const isEbid = /ebidPPIG?Publish|EbController|GPPI_MENU|ebid-joho\.e-kanagawa|ebid-kouji-gyoumu|cals-ibaraki|efftis\.jp|pub\.pref\.aomori|buppin\.e-aichi|dennyu\.pref\.kagawa|choutatsuweb\.pref\.shimane|ppi\.cals\.pref\.yamagata|\/PPI_P\//i.test(t.url || '');
       if (isEbid) {
         // セッション付き個別URLは無効化されるため、確実に開けて検索できるページへ誘導。
         // ホスト別に「検索できる着地URL」を指定（実機確認済）。未指定はシステム入口(オリジン)。
@@ -282,6 +282,13 @@
           'ppi.cals-ibaraki.lg.jp': 'https://www.pref.ibaraki.jp/doboku/kensa/kanri/ebid/denshinyusatu-top.html',
           // 大阪: ログイン前トップではなく「入札公告情報」の一覧ページへ
           'www.e-nyusatsu.pref.osaka.jp': 'https://www.e-nyusatsu.pref.osaka.jp/CALS/Publish/EbController?Shori=KokokuInfo',
+          // 香川/島根(NEC OME PPI): 断片付き個別URLは開けない → 一般公開の検索入口(/PPI_P/)へ
+          'dennyu.pref.kagawa.lg.jp': 'https://dennyu.pref.kagawa.lg.jp/PPI_P/',
+          'choutatsuweb.pref.shimane.lg.jp': 'https://choutatsuweb.pref.shimane.lg.jp/SMN/PPI_P/',
+          // 山形(富士通PPI): 案件個別はセッション制 → 入札情報公開の検索画面へ
+          'ppi.cals.pref.yamagata.jp': 'https://ppi.cals.pref.yamagata.jp/PPI/JS05-01-01.shtml',
+          // 京都(efftis旧JSP): 断片付きは開けない → 入札情報公開の入口へ
+          'kyoto.efftis.jp': 'https://kyoto.efftis.jp/26000/CALS/PPI_P/',
         };
         const host = ((t.url || '').match(/^https?:\/\/([^/]+)/) || [])[1] || '';
         const origin = (t.url || '').match(/^https?:\/\/[^/]+/);
