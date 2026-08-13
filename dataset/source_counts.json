@@ -2,9 +2,9 @@
  "sources": {
   "NEDO": 300,
   "JST": 17,
-  "PORTAL": 7700,
+  "PORTAL": 7723,
   "JOGMEC": 102,
-  "AICHI": 1150,
+  "AICHI": 1151,
   "TOKYO": 189,
   "OSAKA": 2276,
   "FUKUOKA": 268,
@@ -16,7 +16,7 @@
   "SHIZUOKA": 526,
   "FUKUI": 452,
   "NIIGATA": 566,
-  "ISHIKAWA": 1304,
+  "ISHIKAWA": 1305,
   "TOCHIGI": 125,
   "CHIBA": 1259,
   "KYOTO": 57,
@@ -25,7 +25,7 @@
   "WAKAYAMA": 262,
   "HIROSHIMA": 274,
   "OKAYAMA": 281,
-  "EHIME": 294,
+  "EHIME": 295,
   "KOCHI": 114,
   "SAGA": 165,
   "SHIMANE": 41,
@@ -37,7 +37,7 @@
   "OITA": 68,
   "AKITA": 247,
   "FUKUSHIMA": 266,
-  "TOTTORI": 114,
+  "TOTTORI": 115,
   "GUNMA": 190,
   "SAITAMA": 26,
   "MIYAZAKI": 403,
@@ -54,9 +54,9 @@
   "SHIGA_EBID": 65,
   "SHIMANE_EBID": 313,
   "YAMAGATA_EBID": 225,
-  "TOCHIGI_EBID": 305,
+  "TOCHIGI_EBID": 307,
   "KANAGAWA": 270,
   "IBARAKI": 273
  },
- "total": 28002
+ "total": 28031
 }
