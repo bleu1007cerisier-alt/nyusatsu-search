@@ -13,10 +13,10 @@
   "YAMANASHI": 234,
   "TOYAMA": 497,
   "NAGANO": 784,
-  "SHIZUOKA": 526,
+  "SHIZUOKA": 527,
   "FUKUI": 452,
   "NIIGATA": 570,
-  "ISHIKAWA": 1324,
+  "ISHIKAWA": 1322,
   "TOCHIGI": 125,
   "CHIBA": 1269,
   "KYOTO": 57,
@@ -28,7 +28,7 @@
   "EHIME": 296,
   "KOCHI": 114,
   "SAGA": 168,
-  "SHIMANE": 41,
+  "SHIMANE": 43,
   "KUMAMOTO": 51,
   "HOKKAIDO": 144,
   "TOKUSHIMA": 178,
@@ -58,5 +58,5 @@
   "KANAGAWA": 269,
   "IBARAKI": 279
  },
- "total": 28223
+ "total": 28224
 }
