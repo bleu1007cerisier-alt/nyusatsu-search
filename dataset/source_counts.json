@@ -47,7 +47,7 @@
   "AOMORI": 623,
   "YAMAGATA": 94,
   "YAMAGUCHI": 7,
-  "MIYAGI": 200,
+  "MIYAGI": 212,
   "NARA": 799,
   "KYOTO_EBID": 140,
   "KAGAWA_EBID": 294,
@@ -55,8 +55,8 @@
   "SHIMANE_EBID": 329,
   "YAMAGATA_EBID": 240,
   "TOCHIGI_EBID": 309,
-  "KANAGAWA": 269,
-  "IBARAKI": 279
+  "KANAGAWA": 253,
+  "IBARAKI": 329
  },
- "total": 28715
+ "total": 28761
 }
