@@ -37,10 +37,10 @@
   "OITA": 73,
   "AKITA": 257,
   "FUKUSHIMA": 272,
-  "TOTTORI": 116,
+  "TOTTORI": 117,
   "GUNMA": 215,
   "SAITAMA": 31,
-  "MIYAZAKI": 581,
+  "MIYAZAKI": 577,
   "IWATE": 113,
   "KAGOSHIMA": 725,
   "KAGAWA": 110,
@@ -58,5 +58,5 @@
   "KANAGAWA": 335,
   "IBARAKI": 341
  },
- "total": 31537
+ "total": 31534
 }
