@@ -12,8 +12,8 @@
   "GIFU": 865,
   "YAMANASHI": 246,
   "TOYAMA": 648,
-  "NAGANO": 928,
-  "SHIZUOKA": 962,
+  "NAGANO": 929,
+  "SHIZUOKA": 963,
   "FUKUI": 541,
   "NIIGATA": 853,
   "ISHIKAWA": 1798,
@@ -23,7 +23,7 @@
   "HYOGO": 167,
   "SHIGA": 92,
   "WAKAYAMA": 269,
-  "HIROSHIMA": 301,
+  "HIROSHIMA": 302,
   "OKAYAMA": 312,
   "EHIME": 324,
   "KOCHI": 144,
@@ -40,7 +40,7 @@
   "TOTTORI": 119,
   "GUNMA": 225,
   "SAITAMA": 33,
-  "MIYAZAKI": 688,
+  "MIYAZAKI": 687,
   "IWATE": 132,
   "KAGOSHIMA": 894,
   "KAGAWA": 118,
@@ -58,5 +58,5 @@
   "KANAGAWA": 298,
   "IBARAKI": 372
  },
- "total": 34065
+ "total": 34067
 }
