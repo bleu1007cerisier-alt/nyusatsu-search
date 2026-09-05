@@ -13,10 +13,10 @@
   "YAMANASHI": 254,
   "TOYAMA": 721,
   "NAGANO": 994,
-  "SHIZUOKA": 1182,
+  "SHIZUOKA": 1183,
   "FUKUI": 574,
   "NIIGATA": 1002,
-  "ISHIKAWA": 1973,
+  "ISHIKAWA": 1965,
   "TOCHIGI": 158,
   "CHIBA": 1910,
   "KYOTO": 64,
@@ -40,7 +40,7 @@
   "TOTTORI": 124,
   "GUNMA": 237,
   "SAITAMA": 33,
-  "MIYAZAKI": 810,
+  "MIYAZAKI": 811,
   "IWATE": 150,
   "KAGOSHIMA": 1060,
   "KAGAWA": 142,
@@ -58,5 +58,5 @@
   "KANAGAWA": 303,
   "IBARAKI": 381
  },
- "total": 37037
+ "total": 37031
 }
