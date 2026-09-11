@@ -1,19 +1,6 @@
 {
   "runs": [
     {
-      "at": "2026-08-17T13:34:42+00:00",
-      "scraped": 11259,
-      "new": 117,
-      "updated": 11142,
-      "total": 28715,
-      "portal_retry": 0,
-      "repaired": 0,
-      "ai_calls": 33,
-      "ai_input_tokens": 5068,
-      "ai_output_tokens": 835,
-      "ai_cost_usd": 0.0092
-    },
-    {
       "at": "2026-08-18T04:39:31+00:00",
       "scraped": 11250,
       "new": 452,
@@ -649,8 +636,21 @@
       "ai_input_tokens": 0,
       "ai_output_tokens": 0,
       "ai_cost_usd": 0.0
+    },
+    {
+      "at": "2026-09-11T17:30:59+00:00",
+      "scraped": 10543,
+      "new": 148,
+      "updated": 10395,
+      "total": 39900,
+      "portal_retry": 0,
+      "repaired": 0,
+      "ai_calls": 0,
+      "ai_input_tokens": 0,
+      "ai_output_tokens": 0,
+      "ai_cost_usd": 0.0
     }
   ],
-  "cumulative_cost_usd_recent": 17.8642,
+  "cumulative_cost_usd_recent": 17.855,
   "cumulative_cost_usd_alltime": 36.5876
 }
