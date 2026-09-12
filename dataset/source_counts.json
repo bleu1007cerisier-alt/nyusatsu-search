@@ -31,8 +31,8 @@
   "SHIMANE": 58,
   "KUMAMOTO": 60,
   "HOKKAIDO": 200,
-  "TOKUSHIMA": 320,
-  "NAGASAKI": 414,
+  "TOKUSHIMA": 321,
+  "NAGASAKI": 415,
   "OKINAWA": 420,
   "OITA": 87,
   "AKITA": 287,
@@ -40,7 +40,7 @@
   "TOTTORI": 129,
   "GUNMA": 246,
   "SAITAMA": 33,
-  "MIYAZAKI": 919,
+  "MIYAZAKI": 908,
   "IWATE": 159,
   "KAGOSHIMA": 1139,
   "KAGAWA": 164,
@@ -58,5 +58,5 @@
   "KANAGAWA": 270,
   "IBARAKI": 326
  },
- "total": 39925
+ "total": 39916
 }
