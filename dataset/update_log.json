@@ -638,11 +638,11 @@
       "ai_cost_usd": 0.0
     },
     {
-      "at": "2026-09-18T03:22:35+00:00",
-      "scraped": 10679,
-      "new": 253,
-      "updated": 10426,
-      "total": 41993,
+      "at": "2026-09-18T05:04:44+00:00",
+      "scraped": 10580,
+      "new": 323,
+      "updated": 10257,
+      "total": 42063,
       "portal_retry": 0,
       "repaired": 0,
       "ai_calls": 0,
