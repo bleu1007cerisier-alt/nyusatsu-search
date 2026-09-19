@@ -16,7 +16,7 @@
   "SHIZUOKA": 1719,
   "FUKUI": 736,
   "NIIGATA": 1346,
-  "ISHIKAWA": 2298,
+  "ISHIKAWA": 2292,
   "TOCHIGI": 178,
   "CHIBA": 2311,
   "KYOTO": 67,
@@ -28,7 +28,7 @@
   "EHIME": 350,
   "KOCHI": 165,
   "SAGA": 202,
-  "SHIMANE": 58,
+  "SHIMANE": 63,
   "KUMAMOTO": 68,
   "HOKKAIDO": 213,
   "TOKUSHIMA": 347,
@@ -40,7 +40,7 @@
   "TOTTORI": 135,
   "GUNMA": 265,
   "SAITAMA": 34,
-  "MIYAZAKI": 1047,
+  "MIYAZAKI": 1045,
   "IWATE": 173,
   "KAGOSHIMA": 1228,
   "KAGAWA": 179,
@@ -58,5 +58,5 @@
   "KANAGAWA": 286,
   "IBARAKI": 227
  },
- "total": 42349
+ "total": 42346
 }
