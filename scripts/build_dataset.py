@@ -531,13 +531,17 @@ def _row_key(row: dict) -> str:
     ただしSuperCALS系(ebidPPIPublish等)は個別URLが無く `?KikanNO=...#<md5>` の
     フラグメントで一意化しており、そのハッシュ元(予定価格や行位置)が再スクレイプで
     変わると別URL扱い＝重複が蓄積する。そこで **# を含むURLは内容キーで識別** して
-    同一案件を確実に集約する。URL無しの行も内容キー。"""
+    同一案件を確実に集約する。URL無しの行も内容キー。
+    内容キーはタイトルを使わず source・URL(#前)・published_at・deadline の組み合わせに
+    固定する（タイトルが空→非空に変化するとキーが変わって重複除去で件数が減るのを防ぐ）。"""
     url = (row.get("url") or "").strip()
     if url and "#" not in url:
         return "u:" + _normalize_url(url)
+    # #を含むURL: #より前のベースURLをキーの一部に使う（ハッシュ部分は不安定なため除外）
+    url_base = url.split("#")[0] if url else ""
     return "k:" + "|".join([
-        row.get("source", ""), row.get("title", ""), row.get("published_at", ""),
-        row.get("deadline", ""), row.get("result_date", ""),
+        row.get("source", ""), url_base,
+        row.get("published_at", ""), row.get("deadline", ""),
     ])
 
 
