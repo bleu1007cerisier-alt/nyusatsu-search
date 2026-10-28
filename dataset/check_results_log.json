@@ -221,6 +221,12 @@
       "checked": 50,
       "updated": 7,
       "expired": 18
+    },
+    {
+      "at": "2026-10-28T15:27:36+00:00",
+      "checked": 50,
+      "updated": 1,
+      "expired": 15
     }
   ]
 }
